@@ -1,0 +1,73 @@
+# Fictional release workflow, with independent branches and valid returns.
+tracker: jira
+states: [intake, triage, discovery, ready, doing, blocked, review, qa, security, release, done, cancelled]
+
+transitions:
+  intake:
+    to: [triage]
+  triage:
+    routes:
+      discovery: []
+      cancelled: []
+  discovery:
+    to: [ready]
+  ready:
+    to: [doing]
+    requires: [refinement]
+  doing:
+    routes:
+      review: [linked_pull_requests, risk_assessment]
+      blocked: []
+  blocked:
+    routes:
+      doing: []
+  review:
+    routes:
+      qa: [code_review]
+      security: [threat_model]
+      release: [code_review, release_waiver]
+      doing: [rework_note]
+  qa:
+    routes:
+      release: [qa_signoff]
+      doing: [rework_note]
+  security:
+    routes:
+      release: [security_signoff]
+      doing: [rework_note]
+  release:
+    routes:
+      done: [merged]
+      qa: []
+  done:
+    end: true
+  cancelled:
+    end: true
+
+gates:
+  refinement:
+    - if: jira.headings matches "*acceptance criteria*"
+      message: "Add an Acceptance Criteria heading to {ticket}."
+  linked_pull_requests:
+    - if: github.prs >= 1
+  risk_assessment:
+    - if: github.labels matches "*-risk"
+  code_review:
+    - if: github.approvals >= 1
+      by: [alice]
+  threat_model:
+    - if: jira.headings matches "*threat model*"
+      message: "Add a Threat Model heading to {ticket}."
+  release_waiver:
+    - if: jira.labels contains release-waiver
+      by: [alice]
+  rework_note:
+    - if: jira.headings matches "*rework*"
+      message: "Add a Rework heading explaining the return to {ticket}."
+  qa_signoff:
+    - if: jira.labels contains qa-approved
+  security_signoff:
+    - if: jira.labels contains security-approved
+  merged:
+    - if: github.state == merged
+      message: "Merge {record}."

@@ -1,0 +1,25 @@
+jira:
+  site: example-team.atlassian.net
+  scope: project = APP
+  auth:
+    email: ${EXAMPLE_JIRA_EMAIL}
+    token: ${EXAMPLE_JIRA_TOKEN}
+  statuses:
+    intake: Intake
+    triage: Triage
+    discovery: Discovery
+    ready: Ready
+    doing: In Progress
+    blocked: Blocked
+    review: In Review
+    qa: QA
+    security: Security Review
+    release: Ready for Release
+    done: Done
+    cancelled: Cancelled
+
+github:
+  org: example-team
+  lookback: 90d
+  auth:
+    token: ${EXAMPLE_GITHUB_TOKEN}

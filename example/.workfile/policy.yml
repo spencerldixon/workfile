@@ -1,0 +1,34 @@
+# A fictional team's workflow. Gates describe what must be true before moving on.
+tracker: jira
+states: [todo, doing, review, done]
+
+transitions:
+  todo:
+    to: [doing]
+    requires: [refinement]
+  doing:
+    to: [review]
+    requires: [pull_request]
+  review:
+    to: [done, todo]
+    requires: [code_review]
+  done:
+    end: true
+
+gates:
+  refinement:
+    - if: jira.description.length >= 100
+    - if: jira.labels excludes needs-more-information
+    - if: jira.headings matches "*acceptance criteria*"
+      when: jira.type == Story
+      message: "{ticket} needs an Acceptance Criteria heading"
+
+  pull_request:
+    - if: github.prs >= 1
+
+  code_review:
+    - if: github.approvals >= 1
+    - if: github.labels matches "*-risk"
+    - if: github.approvals >= 1
+      by: [alice]
+      when: github.labels contains_any [medium-risk, high-risk]

@@ -1,0 +1,19 @@
+# A smaller policy for a team that only needs ticket refinement and sign-off.
+tracker: jira
+states: [todo, doing, done]
+transitions:
+  todo:
+    to: [doing]
+    requires: [ready_to_start]
+  doing:
+    to: [done]
+    requires: [sign_off]
+  done:
+    end: true
+gates:
+  ready_to_start:
+    - if: jira.description.length >= 80
+    - if: jira.labels contains_any [bug, feature, chore]
+  sign_off:
+    - if: jira.labels contains accepted
+      by: [alice]

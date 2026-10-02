@@ -1,0 +1,10 @@
+jira:
+  site: example-team.atlassian.net
+  scope: project = OPS AND (statusCategory != Done OR resolved >= -14d)
+  statuses:
+    todo: To Do
+    doing: In Progress
+    done: Done
+  auth:
+    email: ${EXAMPLE_JIRA_EMAIL}
+    token: ${EXAMPLE_JIRA_TOKEN}

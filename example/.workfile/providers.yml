@@ -1,0 +1,22 @@
+# Replace the fictional site, project, and organisation with your own.
+# These references name secrets; secret values belong outside the repository.
+jira:
+  provider: jira
+  site: example-team.atlassian.net
+  scope: >-
+    project = APP AND (statusCategory != Done OR resolved >= -14d)
+  statuses:
+    todo: To Do
+    doing: In Progress
+    review: [In Review, Review]
+    done: Done
+  auth:
+    email: ${EXAMPLE_JIRA_EMAIL}
+    token: ${EXAMPLE_JIRA_TOKEN}
+
+github:
+  provider: github
+  org: example-team
+  lookback: 90d
+  auth:
+    token: ${EXAMPLE_GITHUB_TOKEN}

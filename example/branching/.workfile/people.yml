@@ -1,0 +1,15 @@
+# Fictional identities. Replace these with your team's actual account IDs and logins.
+alice:
+  name: Alice
+  jira: example-alice-account-id
+  github: example-alice
+
+bob:
+  name: Bob
+  jira: example-bob-account-id
+  github: example-bob
+
+charlie:
+  name: Charlie
+  jira: example-charlie-account-id
+  github: example-charlie
