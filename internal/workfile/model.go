@@ -11,10 +11,11 @@ type Policy struct {
 }
 
 type Transition struct {
-	To       []string            `yaml:"to"`
-	Requires []string            `yaml:"requires"`
-	Routes   map[string][]string `yaml:"routes"`
-	End      bool                `yaml:"end"`
+	To                    []string            `yaml:"to"`
+	Requires              []string            `yaml:"requires"`
+	RequiresByDestination map[string][]string `yaml:"-" json:"RequiresByDestination,omitempty"`
+	Routes                map[string][]string `yaml:"routes"`
+	End                   bool                `yaml:"end"`
 }
 
 type Route struct {
@@ -24,7 +25,7 @@ type Route struct {
 }
 
 // Routes keeps the shorthand for linear policies and makes each branch explicit.
-// Legacy backward moves are ungated; routes can put requirements on returns too.
+// Shared legacy gates skip returns; explicit destination gates apply to returns too.
 func (p Policy) Routes(state string) []Route {
 	t := p.Transitions[state]
 	targets := t.To
@@ -43,6 +44,7 @@ func (p Policy) Routes(state string) []Route {
 		if !back || t.Routes != nil {
 			gates = append(gates, t.Requires...)
 		}
+		gates = append(gates, t.RequiresByDestination[target]...)
 		gates = append(gates, t.Routes[target]...)
 		routes = append(routes, Route{To: target, Backward: back, Requires: unique(gates)})
 	}
@@ -60,6 +62,7 @@ func unique(values []string) []string {
 }
 
 type Rule struct {
+	ID        string      `yaml:"id"`
 	If        string      `yaml:"if"`
 	When      string      `yaml:"when"`
 	By        []string    `yaml:"by"`
@@ -98,6 +101,7 @@ type Ticket struct {
 	Key, Title, URL, State, Summary, Error string
 	Assignee                               string
 	Facts                                  Facts
+	Unavailable                            map[string]string
 	Records                                map[string][]Record
 }
 
@@ -106,25 +110,39 @@ type Record struct {
 	Repository              string
 	People                  []string
 	Facts                   Facts
+	Unavailable             map[string]string
 }
 
 type Reason struct {
-	Text, Action, Provider, Record, URL string
-	OnTicket                            bool
+	Text     string `json:"text"`
+	Action   string `json:"action"`
+	Provider string `json:"provider"`
+	Record   string `json:"record"`
+	URL      string `json:"url"`
+	OnTicket bool   `json:"on_ticket"`
 }
 
 // RuleResult keeps each PR's evidence, including passes and skips. The aggregate
 // outcome alone cannot tell an engineer which of several PRs needs attention.
 type RuleResult struct {
-	Provider, Record, URL string
-	Outcome, Observed     string
+	Provider string `json:"provider"`
+	Record   string `json:"record"`
+	URL      string `json:"url"`
+	Outcome  string `json:"outcome"`
+	Observed string `json:"observed"`
+	Value    any    `json:"observed_value,omitempty"`
 }
 
 type Check struct {
-	Gate, Outcome string // pass, fail, or skip
-	Requirement   string
-	Results       []RuleResult
-	Reasons       []Reason
+	ID          string       `json:"id"`
+	Gate        string       `json:"gate"`
+	Outcome     string       `json:"outcome"` // pass, fail, skip, or unknown
+	Requirement string       `json:"requirement"`
+	Condition   Expression   `json:"condition"`
+	When        *Expression  `json:"when,omitempty"`
+	By          []string     `json:"by"`
+	Results     []RuleResult `json:"results"`
+	Reasons     []Reason     `json:"reasons"`
 }
 
 type Assessment struct {
@@ -141,11 +159,13 @@ type RouteAssessment struct {
 	Checks   []Check
 }
 
-func (r RouteAssessment) Available() bool { return !failed(r.Checks) }
+func (r RouteAssessment) Available() bool {
+	return !failed(r.Checks) && !slices.ContainsFunc(r.Checks, func(c Check) bool { return c.Outcome == "unknown" })
+}
 
 func (a Assessment) Violation() bool { return failed(a.Earlier) }
 func (a Assessment) Blocked() bool {
-	if a.Violation() || len(a.Routes) == 0 {
+	if a.Ticket.Error != "" || a.Violation() || len(a.Routes) == 0 {
 		return false
 	}
 	forward := slices.ContainsFunc(a.Routes, func(r RouteAssessment) bool { return !r.Backward })

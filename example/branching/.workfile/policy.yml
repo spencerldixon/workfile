@@ -55,6 +55,7 @@ gates:
   code_review:
     - if: github.approvals >= 1
       by: [alice]
+    - if: github.checks == success
   threat_model:
     - if: jira.headings matches "*threat model*"
       message: "Add a Threat Model heading to {ticket}."

@@ -5,11 +5,14 @@ account IDs. The files hold the names of credentials, never the credentials
 themselves.
 
 - [`.workfile/`](.workfile/): Jira tickets with GitHub PRs. Work needs a good
-  description, a PR, and reviews. High-risk PRs also need a named reviewer's
+  description, a PR, passing CI (continuous integration: automated checks for a
+  change), and reviews. High-risk PRs also need a named reviewer's
   approval.
 - [`branching/.workfile/`](branching/.workfile/): twelve stages with QA and
   security branches, a shortcut to release, different gates for each
-  destination, cancelling, and valid returns.
+  destination, cancelling, and valid returns. Code review also needs passing CI.
+- [`destination-requires/.workfile/`](destination-requires/.workfile/): a small
+  Jira workflow where `todo → ready` needs refinement, but `todo → done` does not.
 - [`jira-only/.workfile/`](jira-only/.workfile/): a smaller workflow that uses
   only Jira labels to sort and sign off work.
 

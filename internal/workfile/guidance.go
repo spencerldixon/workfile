@@ -15,13 +15,19 @@ func factName(fact string) string {
 		return "ticket type"
 	case "prs":
 		return "linked PRs"
+	case "draft":
+		return "draft status"
+	case "checks":
+		return "check status"
+	case "fresh_approvals":
+		return "approvals of the current commit"
 	default:
 		return strings.ReplaceAll(fact, "_", " ")
 	}
 }
 
 func textFact(fact string) bool {
-	return slices.Contains([]string{"summary", "description", "type", "project", "assignee", "state", "author"}, fact)
+	return slices.Contains([]string{"summary", "description", "type", "project", "assignee", "state", "author", "draft", "checks"}, fact)
 }
 
 func singular(fact string) string {
@@ -53,6 +59,9 @@ func (w *Workspace) reviewers(rule Rule) string {
 
 func (w *Workspace) requirement(rule Rule) string {
 	e := rule.Condition
+	if passingCI(e) {
+		return "Passing CI on the current commit"
+	}
 	noun := factName(e.Fact)
 	var text string
 	if number, ok := e.Value.(int); ok {
@@ -95,6 +104,9 @@ func (w *Workspace) nextAction(rule Rule, ticket Ticket, record Record) string {
 		return strings.NewReplacer("{record}", id, "{ticket}", ticket.Key).Replace(rule.Message)
 	}
 	e := rule.Condition
+	if passingCI(e) {
+		return ciNextAction(w.subject(e, ticket, record, rule.By))
+	}
 	noun := factName(e.Fact)
 	var action string
 	if number, ok := e.Value.(int); ok {
@@ -109,7 +121,7 @@ func (w *Workspace) nextAction(rule Rule, ticket Ticket, record Record) string {
 				verb = "Shorten"
 			}
 			action = fmt.Sprintf("%s the %s to %s characters", verb, noun, amount)
-		case (e.Fact == "approvals" || e.Fact == "prs") && (e.Op == ">=" || e.Op == ">" || e.Op == "==" && number > 0):
+		case (e.Fact == "approvals" || e.Fact == "fresh_approvals" || e.Fact == "prs") && (e.Op == ">=" || e.Op == ">" || e.Op == "==" && number > 0):
 			if number == 1 {
 				noun = singular(e.Fact)
 			}
@@ -138,12 +150,18 @@ func (w *Workspace) nextAction(rule Rule, ticket Ticket, record Record) string {
 			}
 		case "==":
 			action = fmt.Sprintf("Set the %s to %q", noun, e.Value)
+			if e.Fact == "checks" {
+				action = fmt.Sprintf("Wait for or repair the checks until their status is %q", e.Value)
+			}
+			if e.Fact == "draft" && e.Value == "false" {
+				action = "Mark the PR ready for review"
+			}
 		case "!=":
 			action = fmt.Sprintf("Use a %s other than %q", noun, e.Value)
 		}
 	}
 	if len(rule.By) > 0 {
-		if e.Fact == "approvals" {
+		if e.Fact == "approvals" || e.Fact == "fresh_approvals" {
 			action += " from " + w.reviewers(rule)
 		} else {
 			action = "Ask " + w.reviewers(rule) + " to " + strings.ToLower(action[:1]) + action[1:]
@@ -157,6 +175,9 @@ func (w *Workspace) nextAction(rule Rule, ticket Ticket, record Record) string {
 
 func (w *Workspace) observation(rule Rule, ticket Ticket, record Record, value any) string {
 	e := rule.Condition
+	if passingCI(e) {
+		return ciEvidence(value)
+	}
 	if textFact(e.Fact) {
 		if _, number := e.Value.(int); number {
 			return fmt.Sprintf("Currently %d characters", size(value))
@@ -174,7 +195,7 @@ func (w *Workspace) observation(rule Rule, ticket Ticket, record Record, value a
 		return "No " + factName(e.Fact)
 	}
 	text := strings.Join(values, ", ")
-	if e.Fact == "approvals" {
+	if e.Fact == "approvals" || e.Fact == "fresh_approvals" {
 		text = "Approved by " + text
 		if len(rule.By) > 0 {
 			noun := "approvals"

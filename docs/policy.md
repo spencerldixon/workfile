@@ -47,20 +47,49 @@ gates:
     - if: github.prs >= 1
   code_review:
     - if: github.approvals >= 1
+    - if: github.checks == success
 ```
 
 - `tracker` is the name of the Jira connection that supplies tickets.
 - `states` puts the stages in order. The order decides which moves go forward
   and which are returns. It also sets the order of `wf health` and `wf status`.
-- `to` lists where a ticket can go next. `requires` lists the gates it must pass
-  to get there.
+- `to` lists where a ticket can go next. A `requires` list shares the same gates
+  across forward destinations. A `requires` map assigns gates to individual
+  destinations.
 - A move back to an earlier stage, written with `to`, adds no gates of its own.
   The earlier stage's own entry gates still apply.
 - A stage marked `end: true` has no moves out.
 
+The code review gate needs both an approval and passing CI (continuous
+integration: automated checks for a change) on every linked PR's current
+commit. Pending, failed and absent checks do not satisfy it. Unavailable
+required evidence is unknown, not a pass. This is an explicit policy rule,
+not a built-in requirement attached to the name `code_review`.
+
 ## Different gates for different places
 
-Use `routes` instead of `to` when each destination needs its own gates:
+Keep `to` and use a destination-specific `requires` map when only some moves
+need a gate:
+
+```yaml
+todo:
+  to: [ready, done]
+  requires:
+    ready: [refinement]
+    done: []
+```
+
+Refinement applies to `todo → ready`, not `todo → done`. A destination omitted
+from the map also adds no gates. Its existing entry requirements still apply.
+The shared form, `requires: [refinement]`, continues to apply refinement to
+both forward moves. It does not change existing policies.
+
+Names in a `requires` map must be destinations listed in `to`. Each value must
+be a gate list; use `[]` for no additional gates. Explicit destination gates
+also apply to returns. A shared list retains the existing shorthand behaviour:
+it adds gates to forward moves, not returns.
+
+You can also use the existing `routes` shorthand:
 
 ```yaml
 review:
@@ -88,11 +117,16 @@ gates.
 Some rules to remember:
 
 - A stage uses either `to` or `routes`, never both.
+- A destination-specific `requires` map is used with `to`, not with `routes`.
+  With `routes`, requirements are already written against each destination.
 - An `end: true` stage cannot have moves out.
 - A stage cannot move to itself, and a destination cannot be listed twice.
 - A stage may have only moves back, such as a blocked stage that returns to doing.
 - Every stage must be reachable going forward from the first stage.
 - Returns can loop, but they must not add new entry gates to earlier stages.
+
+The [destination-requires example](../example/destination-requires/.workfile/policy.yml)
+shows refinement on one branch and an ungated shortcut to done.
 
 The [twelve-stage example](../example/branching/.workfile/policy.yml) has
 different review paths, a release shortcut, cancelling, and return loops.
@@ -127,10 +161,16 @@ gates:
       message: "{record} needs two approvals from the named reviewers"
 ```
 
+- `id` is an optional, unique rule identifier for scripts and agents. Use a short,
+  stable name, such as `current-commit-reviewed`. IDs start with an ASCII letter
+  or digit and use letters, digits, `.`, `_`, `:`, `/` or `-`, up to 128 characters.
+  Without it, Workfile derives
+  an ID from the gate, condition, `when` and `by`. Reordering rules or changing
+  their messages does not change derived IDs; changing conditions does.
 - `if` is the condition that must be true.
 - `when` makes the rule optional. If it is false, the rule is skipped.
 - `by` counts only evidence from the people you name. It works on Jira labels
-  and GitHub approvals, because both remember who did them.
+  and GitHub approvals (including `fresh_approvals`), because both remember who did them.
 - `message` replaces the built-in explanation. `{record}` is the PR ID, or the
   ticket key for a ticket rule. `{ticket}` is always the ticket key.
 
@@ -153,7 +193,9 @@ or a list of text.
 
 Text length counts characters. List size counts items. If you compare with a
 number, the size is used. So `github.approvals >= 1` means the same as
-`github.approvals.count >= 1`. A missing value counts as zero.
+`github.approvals.count >= 1`. A known empty value counts as zero. Evidence that was not returned is unknown,
+not an empty value. Workfile does not claim a move is ready when its required
+evidence is unknown.
 
 | Operator | What it means | Example |
 | --- | --- | --- |

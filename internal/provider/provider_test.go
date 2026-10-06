@@ -164,11 +164,14 @@ func TestGitHubPaginationLinkingAndApprovals(t *testing.T) {
 			return 200, `{"data":{"organization":{"repositories":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}`
 		case strings.Contains(query, "search(query"):
 			searchCalls++
+			if strings.Contains(query, "labels(") || strings.Contains(query, "latestOpinionatedReviews(") || strings.Contains(query, "reviewRequests(") {
+				t.Error("discovery fetched expensive PR facts")
+			}
 			if !strings.Contains(variables["q"].(string), "repo:example-team/api is:pr updated:>=2026-07-03") {
 				t.Errorf("wrong search %v", variables)
 			}
 			if searchCalls == 1 {
-				return 200, `{"data":{"search":{"issueCount":3,"pageInfo":{"hasNextPage":true,"endCursor":"prs2"},"nodes":[{"id":"pr1","number":1,"title":"APP-12 Improve login","headRefName":"feature/app-12","state":"OPEN","url":"https://github.com/example-team/api/pull/1","repository":{"name":"api"},"author":{"login":"bob"},"labels":{"nodes":[{"name":"high-risk"}]},"latestOpinionatedReviews":{"nodes":[{"state":"CHANGES_REQUESTED","author":{"login":"bob"}}],"pageInfo":{"hasNextPage":true,"endCursor":"reviews2"}},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"alice"}}]}}]}}}`
+				return 200, `{"data":{"search":{"issueCount":3,"pageInfo":{"hasNextPage":true,"endCursor":"prs2"},"nodes":[{"id":"pr1","title":"APP-12 Improve login","headRefName":"feature/app-12","state":"OPEN"}]}}}`
 			}
 			if variables["after"] != "prs2" {
 				t.Error("missing PR cursor")
@@ -176,6 +179,12 @@ func TestGitHubPaginationLinkingAndApprovals(t *testing.T) {
 			return 200, `{"data":{"search":{"issueCount":3,"pageInfo":{"hasNextPage":false},"nodes":[{"number":2,"title":"APP-123 not APP-12x","state":"MERGED","repository":{"name":"api"}},{"number":3,"title":"APP-12 closed","state":"CLOSED","repository":{"name":"api"}}]}}}`
 		case strings.Contains(query, "node(id"):
 			detailCalls++
+			if variables["id"] != "pr1" {
+				t.Error("fetched an unrelated PR")
+			}
+			if detailCalls == 1 {
+				return 200, `{"data":{"node":{"id":"pr1","number":1,"title":"APP-12 Improve login","headRefName":"feature/app-12","state":"OPEN","url":"https://github.com/example-team/api/pull/1","repository":{"name":"api"},"author":{"login":"bob"},"labels":{"nodes":[{"name":"high-risk"}]},"latestOpinionatedReviews":{"nodes":[{"state":"CHANGES_REQUESTED","author":{"login":"bob"}}],"pageInfo":{"hasNextPage":true,"endCursor":"reviews2"}},"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"alice"}}]}}}}`
+			}
 			if variables["reviews"] != "reviews2" {
 				t.Error("missing nested review cursor")
 			}
@@ -189,7 +198,7 @@ func TestGitHubPaginationLinkingAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := items[0].Records["github"]
-	if repoCalls != 2 || searchCalls != 2 || detailCalls != 1 || len(notes) != 0 || len(records) != 1 {
+	if repoCalls != 2 || searchCalls != 2 || detailCalls != 2 || len(notes) != 0 || len(records) != 1 {
 		t.Fatalf("calls %d/%d/%d, records %+v, notes %v", repoCalls, searchCalls, detailCalls, records, notes)
 	}
 	if records[0].Repository != "example-team/api" {

@@ -217,6 +217,12 @@ func (c *Client) Records(ctx context.Context, tickets []workfile.Ticket) ([]work
 				tickets[i].Records = map[string][]workfile.Record{}
 			}
 			tickets[i].Records[name] = linked[strings.ToUpper(tickets[i].Key)]
+			if len(notes) > 0 {
+				if tickets[i].Unavailable == nil {
+					tickets[i].Unavailable = map[string]string{}
+				}
+				tickets[i].Unavailable[name+".prs"] = "No visible active repositories; PR evidence cannot be checked"
+			}
 		}
 	}
 	return tickets, warnings, nil

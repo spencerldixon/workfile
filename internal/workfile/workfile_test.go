@@ -19,7 +19,7 @@ func example(t *testing.T) *Workspace {
 }
 
 func TestExamplesAndParentDiscovery(t *testing.T) {
-	for _, dir := range []string{"../../example", "../../example/jira-only"} {
+	for _, dir := range []string{"../../example", "../../example/jira-only", "../../example/destination-requires"} {
 		if _, err := Load(dir); err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,7 @@ func pr(id, reviewer, risk string) Record {
 	if reviewer != "" {
 		approvals = append(approvals, Actor{ID: reviewer, Value: reviewer})
 	}
-	return Record{ID: id, URL: "https://github.com/example-team/api/pull/1", Facts: Facts{"approvals": approvals, "labels": []string{risk}}}
+	return Record{ID: id, URL: "https://github.com/example-team/api/pull/1", Facts: Facts{"approvals": approvals, "labels": []string{risk}, "checks": "success"}}
 }
 
 func TestAssessmentSeparatesHealthFromNextGate(t *testing.T) {
@@ -140,7 +140,7 @@ func TestTrackerGuardsAndCustomMessages(t *testing.T) {
 		t.Fatal("heading rule should not apply to bugs")
 	}
 	gate := w.Policy.Gates["code_review"]
-	gate[2].When = `jira.labels contains security`
+	gate[len(gate)-1].When = `jira.labels contains security`
 	w.Policy.Gates["code_review"] = gate
 	if err := w.validate(); err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ func TestRuleResultsPreservePassingFailingAndSkippedPRs(t *testing.T) {
 		pr("api#1", "example-alice", "high-risk"),
 		pr("web#2", "example-bob", "high-risk"),
 		pr("docs#3", "example-bob", "low-risk")))
-	check := a.Current[2]
+	check := a.Current[len(a.Current)-1]
 	if check.Outcome != "fail" || len(check.Results) != 3 {
 		t.Fatalf("missing per-PR results: %+v", check)
 	}

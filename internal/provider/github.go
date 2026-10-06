@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -26,11 +27,18 @@ type label struct{ Name string }
 type review struct {
 	State  string
 	Author login
+	Commit *struct{ OID string }
 }
 type reviewRequest struct{ RequestedReviewer login }
+type commitStatus struct{ StatusCheckRollup json.RawMessage }
+type commitNode struct{ Commit *commitStatus }
 type pullRequest struct {
 	ID, Title, URL, HeadRefName, State string
 	Number                             int
+	Body                               string
+	IsDraft                            *bool
+	HeadRefOID                         string
+	Commits                            *connection[commitNode]
 	Repository                         struct{ Name string }
 	Author                             login
 	Labels                             connection[label]
@@ -48,19 +56,24 @@ const repositoryQuery = `query($org: String!, $after: String) {
 }`
 
 const prFields = `
-  id number title url headRefName state
+  id number title url headRefName headRefOid state isDraft
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
   repository { name }
   author { login }
   labels(first: 100) { nodes { name } pageInfo { hasNextPage endCursor } }
-  latestOpinionatedReviews(first: 100) { nodes { state author { login } } pageInfo { hasNextPage endCursor } }
+  latestOpinionatedReviews(first: 100) { nodes { state author { login } commit { oid } } pageInfo { hasNextPage endCursor } }
   reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } pageInfo { hasNextPage endCursor } }
 `
+
+// Discovery only needs the fields used to link a PR to a ticket. Fetch expensive
+// label and review connections only for PRs that appear in the report.
+const discoveryFields = `id title headRefName state body`
 
 const searchQuery = `query($q: String!, $after: String, $first: Int!) {
   search(query: $q, type: ISSUE, first: $first, after: $after) {
     issueCount
     pageInfo { hasNextPage endCursor }
-    nodes { ... on PullRequest { ` + prFields + ` } }
+    nodes { ... on PullRequest { ` + discoveryFields + ` } }
   }
 }`
 
@@ -133,10 +146,13 @@ func (c *Client) repositoryPRs(ctx context.Context, p workfile.Provider, token, 
 			}
 		}
 		first := 100
+		search := searchQuery
 		if probe {
 			first = 1
+			// Connection tests still exercise permissions for all PR facts.
+			search = strings.Replace(search, discoveryFields, prFields, 1)
 		}
-		if err := c.graph(ctx, token, searchQuery, map[string]any{"q": query, "after": after, "first": first}, &response); err != nil {
+		if err := c.graph(ctx, token, search, map[string]any{"q": query, "after": after, "first": first}, &response); err != nil {
 			return nil, 0, err
 		}
 		if response.Search == nil || response.Search.Nodes == nil {
@@ -241,36 +257,54 @@ func (c *Client) githubRecords(ctx context.Context, name string, tickets []workf
 	for _, t := range tickets {
 		wanted[strings.ToUpper(t.Key)] = true
 	}
-	results, err := parallel(ctx, len(repos), func(ctx context.Context, i int) (map[string][]workfile.Record, error) {
+	type linkedPR struct {
+		pr   pullRequest
+		keys []string
+	}
+	results, err := parallel(ctx, len(repos), func(ctx context.Context, i int) ([]linkedPR, error) {
 		prs, _, err := c.repositoryPRs(ctx, p, token, repos[i], false)
 		if err != nil {
 			return nil, err
 		}
-		linked := map[string][]workfile.Record{}
+		var linked []linkedPR
 		for _, pr := range prs {
 			keys := linkedKeys(pr.Title + " " + pr.HeadRefName)
+			keys = append(keys, explicitKeys(pr.Body, c.Workspace.Providers[c.Workspace.Policy.Tracker].Site)...)
+			slices.Sort(keys)
+			keys = slices.Compact(keys)
 			keys = slices.DeleteFunc(keys, func(key string) bool { return !wanted[key] })
 			if len(keys) == 0 {
 				continue
 			}
-			if err := c.completePR(ctx, token, &pr); err != nil {
-				return nil, err
-			}
-			record := pr.record()
-			record.Repository = p.Org + "/" + pr.Repository.Name
-			for _, key := range keys {
-				linked[key] = append(linked[key], record)
-			}
+			linked = append(linked, linkedPR{pr: pr, keys: keys})
 		}
 		return linked, nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	linked := map[string][]workfile.Record{}
+	var matched []linkedPR
 	for _, result := range results {
-		for key, records := range result {
-			linked[key] = append(linked[key], records...)
+		matched = append(matched, result...)
+	}
+	// Use a single worker pool across repositories, including when every linked
+	// PR belongs to the same repository. Keep result order independent of timing.
+	records, err := parallel(ctx, len(matched), func(ctx context.Context, i int) (workfile.Record, error) {
+		pr, err := c.readPR(ctx, token, matched[i].pr.ID)
+		if err != nil {
+			return workfile.Record{}, err
+		}
+		record := pr.record()
+		record.Repository = p.Org + "/" + pr.Repository.Name
+		return record, nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	linked := map[string][]workfile.Record{}
+	for i, record := range records {
+		for _, key := range matched[i].keys {
+			linked[key] = append(linked[key], record)
 		}
 	}
 	var warnings []string
@@ -278,6 +312,26 @@ func (c *Client) githubRecords(ctx context.Context, name string, tickets []workf
 		warnings = append(warnings, name+": no visible active repositories; check organisation access")
 	}
 	return linked, warnings, nil
+}
+
+func (c *Client) readPR(ctx context.Context, token, id string) (pullRequest, error) {
+	if id == "" {
+		return pullRequest{}, errors.New("GitHub returned a linked PR without an ID")
+	}
+	const query = `query($id: ID!) {
+	  node(id: $id) { ... on PullRequest { ` + prFields + ` } }
+	}`
+	var response struct{ Node *pullRequest }
+	if err := c.graph(ctx, token, query, map[string]any{"id": id}, &response); err != nil {
+		return pullRequest{}, err
+	}
+	if response.Node == nil || response.Node.ID != id || response.Node.Repository.Name == "" || response.Node.Number == 0 {
+		return pullRequest{}, errors.New("GitHub could not read a linked PR")
+	}
+	if err := c.completePR(ctx, token, response.Node); err != nil {
+		return pullRequest{}, err
+	}
+	return *response.Node, nil
 }
 
 func (c *Client) completePR(ctx context.Context, token string, pr *pullRequest) error {
@@ -288,7 +342,7 @@ func (c *Client) completePR(ctx context.Context, token string, pr *pullRequest) 
 	const query = `query($id: ID!, $labels: String, $reviews: String, $requests: String) {
       node(id: $id) { ... on PullRequest {
         labels(first: 100, after: $labels) { nodes { name } pageInfo { hasNextPage endCursor } }
-        latestOpinionatedReviews(first: 100, after: $reviews) { nodes { state author { login } } pageInfo { hasNextPage endCursor } }
+        latestOpinionatedReviews(first: 100, after: $reviews) { nodes { state author { login } commit { oid } } pageInfo { hasNextPage endCursor } }
         reviewRequests(first: 100, after: $requests) { nodes { requestedReviewer { ... on User { login } } } pageInfo { hasNextPage endCursor } }
       } }
     }`
@@ -335,13 +389,25 @@ func (c *Client) completePR(ctx context.Context, token string, pr *pullRequest) 
 func (p pullRequest) record() workfile.Record {
 	labels, approvers, reviewers := []string{}, []string{}, []string{}
 	approvals := []workfile.Actor{}
+	fresh := []workfile.Actor{}
+	unavailable := map[string]string{}
+	freshKnown := p.HeadRefOID != ""
 	for _, l := range p.Labels.Nodes {
 		labels = append(labels, l.Name)
 	}
 	for _, r := range p.LatestOpinionatedReviews.Nodes {
+		if !slices.Contains([]string{"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED", "PENDING"}, r.State) || r.State == "APPROVED" && r.Author.Login == "" {
+			unavailable["approvals"] = "GitHub did not return complete reviewer evidence"
+			freshKnown = false
+		}
 		if r.State == "APPROVED" && r.Author.Login != "" && !slices.Contains(approvers, r.Author.Login) {
 			approvers = append(approvers, r.Author.Login)
 			approvals = append(approvals, workfile.Actor{Value: r.Author.Login, ID: r.Author.Login})
+			if r.Commit == nil || r.Commit.OID == "" {
+				freshKnown = false
+			} else if r.Commit.OID == p.HeadRefOID {
+				fresh = append(fresh, workfile.Actor{Value: r.Author.Login, ID: r.Author.Login})
+			}
 		}
 	}
 	for _, r := range p.ReviewRequests.Nodes {
@@ -362,9 +428,31 @@ func (p pullRequest) record() workfile.Record {
 	if len(reviewers) > 0 {
 		parts = append(parts, "waiting on "+strings.Join(reviewers, ", "))
 	}
+	facts := workfile.Facts{"labels": labels, "approvals": approvals, "state": state, "author": p.Author.Login, "review_requests": reviewers}
+	if p.Author.Login == "" {
+		unavailable["author"] = "GitHub did not return a visible PR author"
+	}
+	if state != "open" && state != "merged" {
+		unavailable["state"] = "GitHub did not return a supported PR state"
+	}
+	if p.IsDraft == nil {
+		unavailable["draft"] = "GitHub did not return draft status"
+	} else {
+		facts["draft"] = strconv.FormatBool(*p.IsDraft)
+	}
+	if freshKnown {
+		facts["fresh_approvals"] = fresh
+	} else {
+		unavailable["fresh_approvals"] = "GitHub did not return the commits needed to check approval freshness"
+	}
+	if status, reason := p.checkStatus(); reason != "" {
+		unavailable["checks"] = reason
+	} else {
+		facts["checks"] = status
+	}
 	return workfile.Record{
 		ID: fmt.Sprintf("%s#%d", p.Repository.Name, p.Number), URL: p.URL, Title: p.Title, Summary: strings.Join(parts, " · "),
 		People: append([]string{p.Author.Login}, reviewers...),
-		Facts:  workfile.Facts{"labels": labels, "approvals": approvals, "state": state, "author": p.Author.Login, "review_requests": reviewers},
+		Facts:  facts, Unavailable: unavailable,
 	}
 }

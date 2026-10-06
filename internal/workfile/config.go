@@ -16,6 +16,7 @@ import (
 )
 
 var namePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+var ruleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]*$`)
 var credentialPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 var lookbackPattern = regexp.MustCompile(`^[1-9][0-9]{0,4}d$`)
 var orgPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
@@ -125,11 +126,19 @@ func (w *Workspace) validate() error {
 			add("policy.yml: missing transition for %s", state)
 			continue
 		}
-		if t.End && (len(t.To) > 0 || len(t.Requires) > 0 || t.Routes != nil) {
+		if t.End && (len(t.To) > 0 || len(t.Requires) > 0 || t.RequiresByDestination != nil || t.Routes != nil) {
 			add("policy.yml: terminal state %s cannot have to, routes or requires", state)
 		}
 		if t.Routes != nil && len(t.To) > 0 {
 			add("policy.yml: %s must use either to or routes", state)
+		}
+		if t.RequiresByDestination != nil && t.Routes != nil {
+			add("policy.yml: %s must use destination-specific requires with to, not routes", state)
+		}
+		for _, destination := range SortedKeys(t.RequiresByDestination) {
+			if !slices.Contains(t.To, destination) {
+				add("policy.yml: %s.requires refers to %s, which is not in to", state, destination)
+			}
 		}
 		targets := append(slices.Clone(t.To), SortedKeys(t.Routes)...)
 		if !t.End && len(targets) == 0 {
@@ -144,6 +153,9 @@ func (w *Workspace) validate() error {
 			}
 		}
 		gates := slices.Clone(t.Requires)
+		for _, requirements := range t.RequiresByDestination {
+			gates = append(gates, requirements...)
+		}
 		for _, requirements := range t.Routes {
 			gates = append(gates, requirements...)
 		}
@@ -260,6 +272,7 @@ func (w *Workspace) validate() error {
 			}
 		}
 	}
+	ruleIDs := map[string]bool{}
 	for _, gate := range SortedKeys(p.Gates) {
 		rules := p.Gates[gate]
 		if gate == "" || len(rules) == 0 {
@@ -268,6 +281,14 @@ func (w *Workspace) validate() error {
 		for i := range rules {
 			r := &rules[i]
 			at := fmt.Sprintf("policy.yml: gates.%s rule %d", gate, i+1)
+			if r.ID != "" && (!ruleIDPattern.MatchString(r.ID) || len(r.ID) > 128) {
+				add("%s: id must be at most 128 ASCII letters, digits, dots, underscores, colons, slashes or hyphens, starting with a letter or digit", at)
+			}
+			id := ruleID(gate, *r)
+			if ruleIDs[id] {
+				add("%s: duplicate rule ID %s; give distinct rules explicit id values", at, id)
+			}
+			ruleIDs[id] = true
 			expr, err := w.parseExpression(r.If)
 			if err != nil {
 				add("%s: %s", at, err)
@@ -287,7 +308,7 @@ func (w *Workspace) validate() error {
 			}
 			if len(r.By) > 0 {
 				kind := w.Providers[expr.Provider].Kind
-				if !(kind == "jira" && expr.Fact == "labels" || kind == "github" && expr.Fact == "approvals") {
+				if !(kind == "jira" && expr.Fact == "labels" || kind == "github" && (expr.Fact == "approvals" || expr.Fact == "fresh_approvals")) {
 					add("%s: by is supported only for Jira labels and GitHub approvals", at)
 				}
 				for _, person := range r.By {

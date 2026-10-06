@@ -73,12 +73,7 @@ func (v view) healthList(w *workfile.Workspace, all []workfile.Assessment, o opt
 		v.line("")
 		return
 	}
-	shown := slices.DeleteFunc(slices.Clone(all), func(a workfile.Assessment) bool {
-		if a.Ticket.Error != "" {
-			return o.gate != "" || o.stage != ""
-		}
-		return !a.Violation() || o.gate != "" && !a.FailsGate(o.gate) || o.stage != "" && a.Ticket.State != o.stage
-	})
+	shown := slices.DeleteFunc(slices.Clone(all), func(a workfile.Assessment) bool { return !selected(a, o) })
 	if o.gate != "" {
 		v.gateBoxes(w, all, o.gate)
 	} else {

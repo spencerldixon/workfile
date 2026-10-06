@@ -18,6 +18,7 @@ import (
 type view struct {
 	out   io.Writer
 	color bool
+	links bool // Terminal hyperlinks do not depend on colour.
 	width int
 	bg    string // SGR background kept alive across styled text, set inside a lane
 	tint  *tintCache
@@ -27,7 +28,8 @@ func newView(out io.Writer) view {
 	v := view{out: out, width: 100, tint: &tintCache{}}
 	if f, ok := out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		_, noColor := os.LookupEnv("NO_COLOR")
-		v.color = !noColor && os.Getenv("TERM") != "dumb"
+		v.links = os.Getenv("TERM") != "dumb"
+		v.color = !noColor && v.links
 		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
 			v.width = width
 		}
@@ -62,11 +64,13 @@ func (v view) paint(code, text string) string {
 func (v view) link(text, target string) string {
 	text = clean(text)
 	u, err := url.Parse(target)
-	if !v.color || err != nil || u.Scheme != "https" || u.Host == "" || clean(target) != target {
+	if !v.hyperlinks() || err != nil || u.Scheme != "https" || u.Host == "" || clean(target) != target {
 		return text
 	}
 	return "\x1b]8;;" + target + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 }
+
+func (v view) hyperlinks() bool { return v.links || v.color }
 
 func (v view) line(text string) { fmt.Fprintln(v.out, text) }
 

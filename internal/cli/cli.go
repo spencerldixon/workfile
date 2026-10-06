@@ -1,4 +1,4 @@
-// Package cli provides the three wf commands and their terminal presentation.
+// Package cli provides wf commands and their terminal presentation.
 package cli
 
 import (
@@ -19,6 +19,7 @@ const help = `workfile — clear expectations for how work moves
 
 Usage: wf <command> [options]
 
+  setup                 Connect providers and create a starter .workfile/
   health [KEY ...]       Summarise policy health by gate and stage
   status [KEY ...]       Show all stages, or the full picture for named tickets
   test [PROVIDER ...]    Test all provider connections, or named instances
@@ -35,6 +36,8 @@ Filters for health only (list the failing tickets):
   --stage NAME          Tickets in this stage that are out of policy
 
 Options:
+  --json                Emit a versioned machine-readable report (health/status)
+  --evidence            Show observed evidence for each requirement (health/status)
   --dir DIR             Find .workfile/ from DIR or its parents (default .)
   --version             Print the installed version
   -h, --help            Show this help
@@ -46,7 +49,8 @@ Examples:
   wf status APP-42
   wf test github
 
-Output is always for people. Set NO_COLOR to disable colour.
+Output is for people by default. Use --json for scripts and agents.
+Set NO_COLOR to disable colour.
 `
 
 type options struct {
@@ -54,6 +58,7 @@ type options struct {
 	keys                            []string
 	limit                           int
 	all, me, failing, help, version bool
+	json, evidence                  bool
 	limitSet                        bool
 }
 
@@ -78,7 +83,12 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 
 func run(ctx context.Context, args []string, out, errOut io.Writer, version string, connect func(*workfile.Workspace) source) int {
 	view := newView(out)
+	jsonOutput := slices.Contains(args, "--json") || slices.Contains(args, "--json=true")
 	fail := func(err error) int {
+		if jsonOutput {
+			writeJSONError(out, err)
+			return 2
+		}
 		for i, line := range strings.Split(err.Error(), "\n") {
 			prefix := "wf: "
 			if i > 0 {
@@ -92,12 +102,19 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 	if err != nil {
 		return fail(fmt.Errorf("%w; run wf --help", err))
 	}
+	jsonOutput = o.json
 	if o.version {
 		fmt.Fprintln(out, "wf "+version)
 		return 0
 	}
 	if o.help || o.command == "" {
 		fmt.Fprint(out, help)
+		return 0
+	}
+	if o.command == "setup" {
+		if err := setup(ctx, view, o); err != nil {
+			return fail(err)
+		}
 		return 0
 	}
 	w, err := workfile.Load(o.dir)
@@ -160,10 +177,12 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 		return fail(err)
 	}
 	missing := false
+	missingKeys := []string{}
 	for _, key := range o.keys {
 		if !slices.ContainsFunc(tickets, func(t workfile.Ticket) bool { return t.Key == key }) {
 			fmt.Fprintf(errOut, "wf: %s is not visible in the configured Jira scope\n", key)
 			missing = true
+			missingKeys = append(missingKeys, key)
 		}
 	}
 	tickets, warnings, err := client.Records(ctx, tickets)
@@ -191,9 +210,17 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 			code = 2
 		}
 	}
-	view.report(w, assessments, o, who)
 	if missing {
-		return 2
+		code = 2
+	}
+	if o.json {
+		if err := writeReport(out, w, assessments, o, warnings, missingKeys, code); err != nil {
+			return fail(err)
+		}
+	} else {
+		view.report(w, assessments, o, who)
+		view.coverage(w, o)
+		view.evidenceReport(assessments, o)
 	}
 	return code
 }
@@ -236,6 +263,8 @@ func parse(args []string) (options, error) {
 	fs.IntVar(&o.limit, "limit", 25, "")
 	fs.StringVar(&o.gate, "gate", "", "")
 	fs.StringVar(&o.stage, "stage", "", "")
+	fs.BoolVar(&o.json, "json", false, "")
+	fs.BoolVar(&o.evidence, "evidence", false, "")
 	fs.BoolVar(&o.all, "all", false, "")
 	fs.BoolVar(&o.me, "me", false, "")
 	fs.BoolVar(&o.failing, "failing", false, "")
@@ -291,10 +320,13 @@ func parse(args []string) (options, error) {
 	if o.command == "" {
 		return o, nil
 	}
-	if !slices.Contains([]string{"health", "status", "test"}, o.command) {
+	if !slices.Contains([]string{"health", "status", "test", "setup"}, o.command) {
 		return o, fmt.Errorf("unknown command %s", o.command)
 	}
-	if o.command == "test" {
+	if o.command == "setup" && len(o.keys) > 0 {
+		return o, errors.New("setup takes no positional arguments; use --dir to choose a folder")
+	}
+	if o.command == "test" || o.command == "setup" {
 		var invalid string
 		fs.Visit(func(f *flag.Flag) {
 			if f.Name != "dir" {

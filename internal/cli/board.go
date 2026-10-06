@@ -31,7 +31,7 @@ func (v view) ticketHead(lead, icon, color string, a workfile.Assessment, tag ce
 		room -= runewidth.StringWidth(tag.text) + 2
 	}
 	if title := runewidth.Truncate(clean(a.Ticket.Title), max(0, room), "…"); title != "" {
-		left = append(left, plain("  "+title))
+		left = append(left, plain("  "), cell{title, "", a.Ticket.URL})
 	}
 	return leftRight(left, tag, width)
 }

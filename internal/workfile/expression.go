@@ -14,9 +14,12 @@ import (
 )
 
 type Expression struct {
-	Provider, Fact, Measure, Op string
-	Value                       any
-	kind                        string
+	Provider string `json:"provider"`
+	Fact     string `json:"fact"`
+	Measure  string `json:"measure,omitempty"`
+	Op       string `json:"operator"`
+	Value    any    `json:"value"`
+	kind     string
 }
 
 var expressionPattern = regexp.MustCompile(`^\s*([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)(?:\.(length|count))?\s+(>=|<=|==|!=|>|<|contains_any|contains|excludes|matches)\s+(.+?)\s*$`)
@@ -125,7 +128,7 @@ func (w *Workspace) parseExpression(source string) (Expression, error) {
 	e.kind = provider.Kind
 	facts := []string{"summary", "description", "type", "project", "headings", "assignee", "labels"}
 	if provider.Kind == "github" {
-		facts = []string{"prs", "labels", "approvals", "state", "author", "review_requests"}
+		facts = []string{"prs", "labels", "approvals", "state", "author", "review_requests", "draft", "checks", "fresh_approvals"}
 	}
 	if !slices.Contains(facts, e.Fact) {
 		return e, fmt.Errorf("%s has no attribute %s", e.Provider, e.Fact)

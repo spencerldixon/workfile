@@ -1,0 +1,12 @@
+# Replace the fictional site, project and statuses with your own.
+jira:
+  provider: jira
+  site: example-team.atlassian.net
+  scope: project = APP
+  statuses:
+    todo: To Do
+    ready: Ready
+    done: Done
+  auth:
+    email: ${EXAMPLE_JIRA_EMAIL}
+    token: ${EXAMPLE_JIRA_TOKEN}

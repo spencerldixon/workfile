@@ -43,8 +43,9 @@ func (c *Client) jira(ctx context.Context, name string) (string, string, error) 
 }
 
 type jiraIssue struct {
-	ID, Key string
-	Fields  struct {
+	ID, Key     string
+	Unavailable map[string]string `json:"-"`
+	Fields      struct {
 		Summary     string
 		Description json.RawMessage
 		Labels      []string
@@ -183,6 +184,14 @@ func (c *Client) Tickets(ctx context.Context, keys []string, limit int) ([]workf
 		}
 		text, headings := description(f.Description)
 		t.Facts = workfile.Facts{"summary": f.Summary, "description": text, "headings": headings, "labels": labels, "assignee": f.Assignee.DisplayName, "type": f.IssueType.Name, "project": strings.SplitN(issue.Key, "-", 2)[0]}
+		t.Unavailable = issue.Unavailable
+		if len(f.Description) == 0 {
+			t.Unavailable["description"] = "Jira did not return the description"
+			t.Unavailable["headings"] = "Jira did not return the description headings"
+		}
+		if f.Labels == nil {
+			t.Unavailable["labels"] = "Jira did not return labels"
+		}
 		items = append(items, t)
 	}
 	return items, nil

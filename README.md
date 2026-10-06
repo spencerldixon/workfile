@@ -15,13 +15,40 @@ request.
 the main ideas (providers, stages, transitions, gates and policies) in plain
 English before you install anything.
 
-## The three commands
+## The commands
 
 | Command | What it tells you |
 | --- | --- |
+| `wf setup` | Connect Jira and optional GitHub, and create a starter `.workfile/` folder. |
 | `wf health` | How your board compares to your policy. Which gates and stages are failing, and how many tickets are affected. |
 | `wf status` | Where each ticket is, and what it needs before it can move on. |
 | `wf test` | Whether your connections to Jira and GitHub work. |
+
+Start from scratch with `wf setup`. It opens token-creation pages in your browser,
+asks for tokens with hidden input, tests the connections, and lets you choose a
+folder and Jira project. It imports visible project people and suggests a stage
+order from Jira statuses. Choose only the statuses you want to include; the
+others are excluded from the Jira search. You confirm a simple starter pipeline
+before saving. The generated policy sections and people entries have blank lines
+between them for easy editing.
+Existing `.workfile/` folders are never overwritten, and tokens stay in your
+private credentials file. Invalid entries let you try again without restarting.
+
+The welcome screen looks like this:
+
+```text
+  workfile / setup
+
+  ▌  From zero to your first report
+  ▌
+  ▌  1 Connect  →  2 Discover  →  3 Save
+  ▌  Read-only access. Your secrets stay on this computer.
+```
+
+Setup does not import Jira's full workflow graph or invent gates. Its confirmed
+starter moves connect each stage to the next. Edit `policy.yml` to add the team's
+checks and branches; without gates, ready does not mean your team approved the
+work. See [setup details](docs/usage.md#setup-start-from-scratch).
 
 Here is `wf health`:
 
@@ -56,6 +83,12 @@ Here is `wf health`:
   ▌  4. release waiver   3×  Labels include "release-waiver"
 
   Drill down: wf health --gate refinement · wf health --stage todo
+
+  ▌  COVERAGE · current facts, not history
+  ▌
+  ▌  Search: project = APP AND (statusCategory != Done OR resolved >= -14d)
+  ▌  Only data visible to your tokens is checked; permissions can hide tickets and repositories.
+  ▌  github: active repositories in example-team · open/merged PRs updated within 90d
 ```
 
 And here is `wf status`. It shows the board stage by stage, in workflow order:
@@ -90,6 +123,13 @@ And here is `wf status`. It shows the board stage by stage, in workflow order:
   ▌  ‼ APP-42  Improve account settings               OUT OF POLICY
   ▌      refinement: description is 38 characters; needs at least 100
   ▌      pull request: needs at least 1 linked PR; has 0
+
+  ▌  COVERAGE · current facts, not history
+  ▌
+  ▌  Search: project = APP AND (statusCategory != Done OR resolved >= -14d)
+  ▌  Selection: sample of up to 25 tickets; not the whole search.
+  ▌  Only data visible to your tokens is checked; permissions can hide tickets and repositories.
+  ▌  github: active repositories in example-team · open/merged PRs updated within 90d
 ```
 
 `wf status --me` is a kanban board of your unfinished work. Each stage gets a
@@ -98,9 +138,18 @@ have to meet to move it forward. Pull requests you wrote or were asked to review
 get a smaller lane of their own.
 
 Output is drawn in blocks with a coloured edge and a soft background tint, and uses your terminal's own red and green, so it matches your theme. Ticket
-and PR names are clickable links in most terminals. The output fits your
+keys, ticket titles, repository names and PR numbers are clickable links in most terminals. The output fits your
 terminal width. When you pipe it to a file or another program, it is plain
-text. Set `NO_COLOR=1` to turn colour off. There is no JSON output.
+text, with web addresses shown in every ticket and PR list. Set `NO_COLOR=1`
+to turn colour off without turning terminal hyperlinks off.
+
+Every report shows its coverage. Missing required evidence is **cannot check**,
+not a pass or a policy violation. Use `--evidence` to see observed values and why
+rules passed, failed, or were skipped. Unknown checks are shown automatically.
+Use `--json` for scripts and AI agents. It includes schema version 1, a policy
+hash, an observation time, coverage, stable rule IDs, evidence, available moves,
+and deduplicated unmet requirements. See [JSON reports](docs/json.md).
+A readiness assessment does not grant permission to merge or move work.
 
 ## Install
 
@@ -205,6 +254,8 @@ wf health --user bob            # only tickets involving Bob
 wf status                       # tickets at every stage, including done
 wf status --me                  # your work, with every problem explained
 wf status APP-42 APP-57         # the full picture for certain tickets
+wf status APP-42 --evidence     # observed evidence for every requirement
+wf status APP-42 --json         # the same assessment for an agent or script
 wf test github                  # test just the connection named github
 ```
 
@@ -218,14 +269,54 @@ A gate is a set of conditions that must be true before work moves forward:
 gates:
   code_review:
     - if: github.approvals >= 1
+    - if: github.checks == success
     - if: github.approvals >= 1
       by: [alice]
       when: github.labels contains high-risk
 ```
 
-This says every linked PR needs an approval. A high-risk PR also needs an
-approval from `alice`. Her GitHub login lives in `people.yml`. The
-[policy guide](docs/policy.md) has more examples.
+This says every linked PR needs an approval and passing CI (continuous
+integration: automated checks run for a change) on its current commit. Pending,
+failed or absent checks do not pass. Unavailable CI evidence is "cannot check",
+not a pass. A high-risk PR also needs an approval from `alice`. Her GitHub login
+lives in `people.yml`. Both GitHub example policies include this CI requirement;
+add `github.checks == success` to existing policies to enable it there.
+
+Gates can also require a non-draft PR (`github.draft == false`) or approvals of
+the current commit (`github.fresh_approvals >= 1`). Those rules remain opt-in.
+The [policy guide](docs/policy.md) has more examples.
+
+### Different requirements for each destination
+
+A shared `requires` list applies to every forward destination. Use a map when
+only one move needs a gate:
+
+```yaml
+todo:
+  to: [ready, done]
+  requires:
+    ready: [refinement]
+    done: []
+```
+
+Here, refinement blocks `todo → ready`, not `todo → done`. See the
+[complete example](example/destination-requires/.workfile/).
+
+The named-ticket view runs left to right and shows each stage once. Shortcuts
+connect above the chain; returns connect below it with arrows pointing back.
+Here is the pipeline portion of that example with the ticket in todo:
+
+```text
+  ▌    ┌────────→─────────┐
+  ▌    │                  ↓
+  ▌  todo* ──→ ready ──→ done
+  ▌  * current stage
+```
+
+The star marks the current stage; it is also underlined when colour is on.
+Only configured moves get arrows. If the chain is too wide, Workfile first
+shortens the arrows, then uses horizontal strips with numbered links between
+them. Stage names still appear once, and all moves remain visible.
 
 ## Distribution
 
@@ -267,6 +358,8 @@ make build
 
 The code has three small packages. `workfile` loads and checks policies.
 `provider` reads Jira and GitHub. `cli` runs the commands and draws the output.
+GitHub scans read titles, branch names and explicit Jira links in descriptions
+first, then fetch labels, reviews and readiness evidence only for linked PRs. Up to six linked PRs are read at once.
 Besides the Go standard library, it uses a YAML reader, terminal detection and
 text-width libraries. It has no server, database, plugins or cache.
 

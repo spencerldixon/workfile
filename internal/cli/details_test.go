@@ -24,8 +24,8 @@ func detailFixture(t *testing.T) (*workfile.Workspace, workfile.Ticket) {
 	ticket.Facts["assignee"] = "Bob"
 	ticket.Facts["labels"] = []workfile.Actor{{Value: "needs-more-information"}}
 	ticket.Records = map[string][]workfile.Record{"github": {
-		{ID: "web#18", Repository: "example-team/web", URL: "https://github.com/example-team/web/pull/18", Facts: workfile.Facts{"state": "open", "labels": []string{"high-risk"}, "approvals": []workfile.Actor{{ID: "example-bob", Value: "example-bob"}}}},
-		{ID: "api#31", Repository: "example-team/api", URL: "https://github.com/example-team/api/pull/31", Facts: workfile.Facts{"state": "merged", "labels": []string{"low-risk"}, "approvals": []workfile.Actor{{ID: "example-alice", Value: "example-alice"}}}},
+		{ID: "web#18", Repository: "example-team/web", URL: "https://github.com/example-team/web/pull/18", Facts: workfile.Facts{"checks": "success", "state": "open", "labels": []string{"high-risk"}, "approvals": []workfile.Actor{{ID: "example-bob", Value: "example-bob"}}}},
+		{ID: "api#31", Repository: "example-team/api", URL: "https://github.com/example-team/api/pull/31", Facts: workfile.Facts{"checks": "success", "state": "merged", "labels": []string{"low-risk"}, "approvals": []workfile.Actor{{ID: "example-alice", Value: "example-alice"}}}},
 	}}
 	return w, ticket
 }
@@ -183,8 +183,8 @@ func TestPipelineOnlyDrawsConfiguredEdgesAndTerminatesCycles(t *testing.T) {
 	if !strings.Contains(text, "intake") || !strings.Contains(text, "triage") {
 		t.Errorf("missing forward states:\n%s", text)
 	}
-	if strings.Contains(text, "↩") || strings.Contains(text, "return") {
-		t.Fatalf("returns are implied, not drawn:\n%s", text)
+	if !strings.Contains(text, "↩") && !strings.Contains(text, "↑") {
+		t.Fatalf("configured returns disappeared:\n%s", text)
 	}
 	if strings.Contains(text, "done → cancelled") {
 		t.Fatal("states order invented an edge")
@@ -198,11 +198,11 @@ func TestTerminalPreview(t *testing.T) {
 	newView(os.Stdout).details(w, w.Assess(ticket))
 }
 
-func TestTicketViewListsEachPROnceAndNeverDrawsReturns(t *testing.T) {
+func TestTicketViewListsEachPROnceAndNeverRepeatsStates(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	pr := func(id string, n int) workfile.Record {
 		return workfile.Record{ID: id, Repository: "example-team/api", URL: fmt.Sprintf("https://github.com/example-team/api/pull/%d", n),
-			Facts: workfile.Facts{"state": "open", "author": "x", "review_requests": []string{}, "approvals": []workfile.Actor{}, "labels": []string{}}}
+			Facts: workfile.Facts{"checks": "success", "state": "open", "author": "x", "review_requests": []string{}, "approvals": []workfile.Actor{}, "labels": []string{}}}
 	}
 	tk := fixtureTicket("APP-42", "review", "short")
 	tk.Records = map[string][]workfile.Record{"github": {pr("api#31", 31), pr("web#18", 18)}}
@@ -218,8 +218,8 @@ func TestTicketViewListsEachPROnceAndNeverDrawsReturns(t *testing.T) {
 			}
 		}
 		pipeline := text[:strings.Index(text, "PULL REQUESTS")]
-		if strings.Contains(pipeline, "↩") || strings.Contains(pipeline, "(return)") || strings.Count(pipeline, "doing") > 2 {
-			t.Fatalf("%s: pipeline must show forward moves only, once each\n%s", dir, pipeline)
+		if strings.Count(pipeline, "doing") != 1 {
+			t.Fatalf("%s: pipeline must show each state once\n%s", dir, pipeline)
 		}
 	}
 }

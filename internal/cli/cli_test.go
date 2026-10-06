@@ -45,7 +45,7 @@ func (f *fakeSource) Test(_ context.Context, name string) (string, error) {
 
 func fixtureTicket(key, state, description string) workfile.Ticket {
 	return workfile.Ticket{Key: key, Title: "A clear account settings page", State: state, Summary: "In progress · assigned to Bob", URL: "https://example-team.atlassian.net/browse/" + key,
-		Facts: workfile.Facts{"description": description, "type": "Bug", "labels": []workfile.Actor{}},
+		Facts: workfile.Facts{"description": description, "type": "Bug", "labels": []workfile.Actor{}, "headings": []string{}},
 	}
 }
 
@@ -59,8 +59,8 @@ func invoke(t *testing.T, f *fakeSource, args ...string) (int, string, string) {
 	return code, out.String(), errOut.String()
 }
 
-func TestOnlyThreeCommandsAndNoJSON(t *testing.T) {
-	for _, args := range [][]string{{"validate"}, {"providers"}, {"status", "--json"}, {"status", "--why"}, {"status", "--limit", "0"}, {"status", "--me", "--user", "bob"}, {"test", "--all"}, {"status", "../secret"}} {
+func TestOnlyThreeCommandsAndInvalidOptions(t *testing.T) {
+	for _, args := range [][]string{{"validate"}, {"providers"}, {"status", "--why"}, {"status", "--limit", "0"}, {"status", "--me", "--user", "bob"}, {"test", "--all"}, {"status", "../secret"}} {
 		code, _, err := invoke(t, &fakeSource{}, args...)
 		if code != 2 || err == "" {
 			t.Fatalf("%v: %d %q", args, code, err)
@@ -177,7 +177,7 @@ func TestMeMatchesPRAuthorsAndRequestedReviewers(t *testing.T) {
 	for _, role := range []string{"author", "review_requests"} {
 		t.Run(role, func(t *testing.T) {
 			tk := fixtureTicket("APP-42", "review", strings.Repeat("x", 120))
-			facts := workfile.Facts{"approvals": []workfile.Actor{}, "labels": []string{}, "author": "someone-else", "review_requests": []string{}}
+			facts := workfile.Facts{"checks": "success", "approvals": []workfile.Actor{}, "labels": []string{}, "author": "someone-else", "review_requests": []string{}}
 			if role == "author" {
 				facts["author"] = "example-bob"
 			} else {
@@ -249,7 +249,7 @@ func boardFixture() *fakeSource {
 	review := fixtureTicket("APP-42", "review", long)
 	review.Title = "Improve account settings"
 	review.Records = map[string][]workfile.Record{"github": {{ID: "api#31", Repository: "example-team/api", URL: "https://github.com/example-team/api/pull/31",
-		People: []string{"example-bob"}, Facts: workfile.Facts{"state": "open", "author": "example-alice", "review_requests": []string{"example-bob"}, "approvals": []workfile.Actor{}, "labels": []string{}}}}}
+		People: []string{"example-bob"}, Facts: workfile.Facts{"checks": "success", "state": "open", "author": "example-alice", "review_requests": []string{"example-bob"}, "approvals": []workfile.Actor{}, "labels": []string{}}}}}
 	return &fakeSource{tickets: []workfile.Ticket{fixtureTicket("APP-61", "todo", long), doing, review, fixtureTicket("APP-70", "done", "short")}}
 }
 
@@ -381,7 +381,7 @@ func TestMeGroupsFixesByPRLikeTheTicketView(t *testing.T) {
 	t.Setenv("WORKFILE_CONFIG_FILE", t.TempDir()+"/absent.yml")
 	pr := func(id string, n int) workfile.Record {
 		return workfile.Record{ID: id, Repository: "example-team/api", URL: fmt.Sprintf("https://github.com/example-team/api/pull/%d", n), People: []string{"example-bob"},
-			Facts: workfile.Facts{"state": "open", "author": "example-bob", "review_requests": []string{}, "approvals": []workfile.Actor{}, "labels": []string{}}}
+			Facts: workfile.Facts{"checks": "success", "state": "open", "author": "example-bob", "review_requests": []string{}, "approvals": []workfile.Actor{}, "labels": []string{}}}
 	}
 	tk := fixtureTicket("APP-57", "review", "short")
 	tk.Title, tk.Assignee = "Improve account settings", "example-bob-account-id"

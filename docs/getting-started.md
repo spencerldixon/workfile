@@ -10,7 +10,7 @@ Your team probably has rules for how work should move. For example:
 
 - "A ticket needs a proper description before anyone starts it."
 - "A ticket needs a pull request before it goes to review."
-- "A pull request needs an approval before the ticket is done."
+- "A pull request needs an approval and passing automated checks before the ticket is done."
 
 These rules often live in people's heads. Workfile lets you write them down in a
 few small files. Then it checks your real Jira tickets and GitHub pull requests
@@ -29,7 +29,8 @@ A **provider** is a tool Workfile reads from. Today there are two:
 - **GitHub** holds your pull requests (PRs).
 
 Workfile links the two. A PR belongs to a ticket when the PR's title or branch
-name contains the ticket's key, like `APP-42`.
+name contains the ticket's key, like `APP-42`. An explicit link to that ticket
+on your configured Jira site in the PR description also links them.
 
 ### Connection
 
@@ -58,7 +59,9 @@ might match the statuses "In Review" and "Code Review". That match lives in
 A **transition** is a move from one stage to another. A move forward goes toward
 the end of the workflow. A move back, such as sending a ticket from review to
 doing, is called a **return**. A stage can have several moves out, which makes a
-branch. A stage with `end: true` is the finish line and has no moves out.
+branch. Different moves can need different gates. A `requires` list shares
+requirements across forward moves; a `requires` map assigns them to individual
+destinations. A stage with `end: true` is the finish line and has no moves out.
 
 ### Gate
 
@@ -119,11 +122,13 @@ gates:
     - if: github.prs >= 1
   code_review:
     - if: github.approvals >= 1
+    - if: github.checks == success
 ```
 
 Read it like a story. A ticket starts in `todo`. To move to `doing` it needs a
 description of at least 100 characters. To move to `review` it needs a linked PR.
-To move to `done` its PR needs an approval.
+To move to `done` its PR needs an approval and passing CI (continuous
+integration: automated checks run for a change) on the current commit.
 
 ## Health and status
 
@@ -151,12 +156,16 @@ It does not need the gates from every branch.
 ## What you will do
 
 1. **Install** `wf`. See the [README](../README.md#install).
-2. **Copy an example** from [`example/`](../example/) into your project as
-   `.workfile/`.
-3. **Edit** `providers.yml` to match your Jira and GitHub, and `people.yml` to
-   list your people.
-4. **Add your credentials** to a private file on your own computer. Credentials
-   never go in the project files.
+2. **Run `wf setup`**. Choose a folder, connect Jira and optional GitHub in
+   your browser, and paste your tokens into hidden prompts. Choose a Jira project
+   and confirm a starter stage order. Setup writes `.workfile/` and saves tokens
+   privately. See [setup details](usage.md#setup-start-from-scratch).
+3. **Review the starter policy**. Its simple stage-to-stage moves are suggestions,
+   not imported Jira workflow moves. Add your team's gates and branches.
+   `people.yml` contains visible project users; add GitHub identities if needed.
+4. **Prefer manual setup?** Copy an example from [`example/`](../example/), edit
+   the providers and people, and add credentials to your private credentials file.
+   Credentials never go in the project files.
 5. **Run `wf test`** to check the connections work.
 6. **Run `wf health` and `wf status`** to see how your work compares with your
    policy.

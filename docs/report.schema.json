@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workfile report version 1",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["schema_version", "exit_code", "error"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "exit_code": {"const": 2},
+        "error": {"type": "string"}
+      }
+    },
+    {
+      "type": "object",
+      "required": ["schema_version", "command", "policy_hash", "observed_at", "exit_code", "coverage", "summary", "warnings", "tickets"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "command": {"enum": ["health", "status"]},
+        "policy_hash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "observed_at": {"type": "string", "format": "date-time"},
+        "exit_code": {"enum": [0, 1, 2]},
+        "coverage": {"$ref": "#/$defs/coverage"},
+        "summary": {
+          "type": "object",
+          "required": ["total", "checked", "in_policy", "cannot_check", "out_of_policy", "needs_work", "ready", "done"],
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "warnings": {"$ref": "#/$defs/strings"},
+        "tickets": {"type": "array", "items": {"$ref": "#/$defs/ticket"}}
+      }
+    }
+  ],
+  "$defs": {
+    "strings": {"type": "array", "items": {"type": "string"}},
+    "outcome": {"enum": ["pass", "fail", "skip", "unknown"]},
+    "coverage": {
+      "type": "object",
+      "required": ["jira_scope", "sample", "requested_keys", "missing_keys", "providers", "boundary"],
+      "properties": {
+        "jira_scope": {"type": "string"},
+        "sample": {"type": "boolean"},
+        "user": {"type": "string"},
+        "me": {"type": "boolean"},
+        "gate": {"type": "string"},
+        "stage": {"type": "string"},
+        "failing": {"type": "boolean"},
+        "limit": {"type": "integer", "minimum": 1},
+        "requested_keys": {"$ref": "#/$defs/strings"},
+        "missing_keys": {"$ref": "#/$defs/strings"},
+        "boundary": {"type": "string"},
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "kind"],
+            "properties": {
+              "name": {"type": "string"},
+              "kind": {"enum": ["jira", "github"]},
+              "organization": {"type": "string"},
+              "lookback": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "expression": {
+      "type": "object",
+      "required": ["provider", "fact", "operator", "value"],
+      "properties": {
+        "provider": {"type": "string"},
+        "fact": {"type": "string"},
+        "measure": {"enum": ["length", "count"]},
+        "operator": {"enum": [">", ">=", "<", "<=", "==", "!=", "contains", "contains_any", "excludes", "matches"]},
+        "value": {"oneOf": [{"type": "integer"}, {"type": "string"}, {"$ref": "#/$defs/strings"}]}
+      }
+    },
+    "reason": {
+      "type": "object",
+      "required": ["text", "action", "provider", "record", "url", "on_ticket"],
+      "properties": {
+        "text": {"type": "string"},
+        "action": {"type": "string"},
+        "provider": {"type": "string"},
+        "record": {"type": "string"},
+        "url": {"type": "string"},
+        "on_ticket": {"type": "boolean"}
+      }
+    },
+    "checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    "check": {
+      "type": "object",
+      "required": ["id", "gate", "outcome", "requirement", "condition", "by", "results", "reasons"],
+      "properties": {
+        "id": {"type": "string"},
+        "gate": {"type": "string"},
+        "outcome": {"$ref": "#/$defs/outcome"},
+        "requirement": {"type": "string"},
+        "condition": {"$ref": "#/$defs/expression"},
+        "when": {"$ref": "#/$defs/expression"},
+        "by": {"$ref": "#/$defs/strings"},
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["provider", "record", "url", "outcome", "observed"],
+            "properties": {
+              "provider": {"type": "string"},
+              "record": {"type": "string"},
+              "url": {"type": "string"},
+              "outcome": {"$ref": "#/$defs/outcome"},
+              "observed": {"type": "string"},
+              "observed_value": {"oneOf": [{"type": "integer"}, {"type": "string"}, {"$ref": "#/$defs/strings"}]}
+            }
+          }
+        },
+        "reasons": {"type": "array", "items": {"$ref": "#/$defs/reason"}}
+      }
+    },
+    "ticket": {
+      "type": "object",
+      "required": ["key", "title", "url", "state", "status", "records", "entry_checks", "routes", "unmet_requirements"],
+      "properties": {
+        "key": {"type": "string"},
+        "title": {"type": "string"},
+        "url": {"type": "string"},
+        "state": {"type": "string"},
+        "status": {"enum": ["cannot_check", "out_of_policy", "needs_work", "ready", "done"]},
+        "error": {"type": "string"},
+        "entry_checks": {"$ref": "#/$defs/checks"},
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "url", "title", "repository", "provider"],
+            "properties": {
+              "id": {"type": "string"},
+              "url": {"type": "string"},
+              "title": {"type": "string"},
+              "repository": {"type": "string"},
+              "provider": {"type": "string"}
+            }
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["to", "backward", "available", "checks"],
+            "properties": {
+              "to": {"type": "string"},
+              "backward": {"type": "boolean"},
+              "available": {"type": "boolean"},
+              "checks": {"$ref": "#/$defs/checks"}
+            }
+          }
+        },
+        "unmet_requirements": {"type": "array", "items": {"$ref": "#/$defs/reason"}}
+      }
+    }
+  }
+}

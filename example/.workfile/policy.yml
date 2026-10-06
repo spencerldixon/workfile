@@ -28,6 +28,7 @@ gates:
 
   code_review:
     - if: github.approvals >= 1
+    - if: github.checks == success
     - if: github.labels matches "*-risk"
     - if: github.approvals >= 1
       by: [alice]

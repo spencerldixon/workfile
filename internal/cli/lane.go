@@ -31,12 +31,29 @@ func (v view) lane(accent string, title cell, rows []row, bg string) {
 		line(blank)
 	}
 	title.text = runewidth.Truncate(clean(title.text), inner, "…")
+	seenURLs := map[string]bool{}
+	showURLs := func(r row) {
+		if v.hyperlinks() {
+			return
+		}
+		for _, c := range r {
+			if c.url == "" || seenURLs[c.url] {
+				continue
+			}
+			seenURLs[c.url] = true
+			for _, urlRow := range textRows(c.url, "", muted, "", inner) {
+				line(urlRow)
+			}
+		}
+	}
 	line(row{title})
+	showURLs(row{title})
 	line(blank)
 	for _, r := range rows {
 		for _, wrapped := range splitRow(r, inner) {
 			line(wrapped)
 		}
+		showURLs(r)
 	}
 	if bg != "" {
 		line(blank)

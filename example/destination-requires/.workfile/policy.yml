@@ -1,0 +1,18 @@
+# Fictional workflow: starting work needs refinement; closing it directly does not.
+tracker: jira
+states: [todo, ready, done]
+
+transitions:
+  todo:
+    to: [ready, done]
+    requires:
+      ready: [refinement]
+      done: []
+  ready:
+    to: [done]
+  done:
+    end: true
+
+gates:
+  refinement:
+    - if: jira.description.length >= 100

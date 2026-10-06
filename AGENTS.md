@@ -52,9 +52,10 @@ consistent with each other.
   named once**. Number fixes through the whole view, and under each fix say which
   destinations it unblocks (`unblocks → qa · → release`) when there is more than
   one blocked destination. Never repeat a fix or a PR under every destination.
-- Draw forward moves only. Returns are implied; list the ones that apply in text.
-  Show each stage once. If a branching workflow does not fit as a tree, fall back
-  to one line per stage naming its forward destinations.
+- Draw the pipeline horizontally, left to right, with each stage named once.
+  Connect shortcuts and joins above the chain and returns below it. Draw only
+  configured moves. Narrow views shorten arrows first, then use horizontal
+  strips with numbered links; never repeat state names to show a destination.
 - One convention across commands. `status TICKET`, `status --me` and
   `health --gate` should word and group the same fix the same way. Reuse the
   shared helpers (`groupedSteps`, `nextSteps`, `ticketHead`, `stageBoxes`,

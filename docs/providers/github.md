@@ -24,8 +24,8 @@ Use a GitHub personal access token that can read the repositories you care
 about. A classic token with the `repo` and `read:org` scopes works. If your
 organisation uses single sign-on, authorise the token for it. If you use a
 fine-grained token, choose your organisation and repositories. Give it read
-access to pull requests, issue labels, repository details, and the organisation
-data the search needs. `wf test github` checks the fields that Workfile reads.
+access to pull requests, issue labels, repository details, commit statuses,
+checks, and the organisation data the search needs. `wf test github` checks the fields that Workfile reads.
 These guides help:
 [GitHub's GraphQL guide](https://docs.github.com/en/graphql/guides/forming-calls-with-graphql)
 and [token setup](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
@@ -39,12 +39,17 @@ and [token setup](https://docs.github.com/en/authentication/keeping-your-account
 Workfile lists the repositories you can see that are not archived, and searches
 their PRs. It works on up to six repositories at once. It includes open PRs and
 merged PRs that were updated within the lookback. PRs closed without merging are
-left out.
+left out. Searches read titles, branch names and descriptions first. Workfile
+then reads labels, reviews, draft status and current-commit check status only
+for linked PRs, with up to six PRs read at once.
 
 A PR is linked to a ticket when the PR **title or branch name** contains the
 ticket key. Case does not matter, and the whole key must match, so `APP-12` does
-not match `APP-123`. PR descriptions, commit messages and Jira's development
-panel are not used. One PR can link to several tickets.
+not match `APP-123`. An explicit `https://example-team.atlassian.net/browse/APP-42` link in
+the PR description also links the ticket, but only when the host is your
+configured Jira site. Bare ticket mentions in descriptions do not link work.
+Commit messages and Jira's development panel are not used. One PR can link to
+several tickets, and repeated links do not duplicate it.
 
 ### PR attributes
 
@@ -53,6 +58,9 @@ panel are not used. One PR can link to several tickets.
 | `github.prs` | How many PRs are linked to the ticket. |
 | `github.labels` | The label names on each PR. |
 | `github.approvals` | Reviewers whose latest opinion is an approval. Works with `by`. |
+| `github.fresh_approvals` | Those approvers whose review commit matches the PR's current head commit. Works with `by`. |
+| `github.draft` | Text `true` or `false`: whether the PR is a draft. |
+| `github.checks` | Current commit's combined check and status result: `success`, `pending`, `failure`, or `none`. |
 | `github.state` | `open` or `merged`. |
 | `github.author` | The login of the person who wrote the PR. |
 | `github.review_requests` | The logins of people asked by name to review. |
@@ -61,6 +69,60 @@ Approvals count each reviewer once. If a reviewer's latest opinion asks for
 changes or was dismissed, it is not an approval. A comment-only review does not
 cancel an earlier approval. With `by`, the names must be people whose account
 for this connection is their GitHub login.
+
+### CI in the code review gate
+
+CI means continuous integration: automated checks run for a change. Require
+GitHub's combined check/status result to pass on each PR's current commit:
+
+```yaml
+gates:
+  code_review:
+    - if: github.approvals >= 1
+    - if: github.checks == success
+```
+
+Both conditions must pass on **every** linked PR. Keep a separate
+`github.prs >= 1` rule before review if a PR must exist; per-PR rules are skipped
+when there are none. GitHub's example policies now include the CI rule, but
+Workfile does not silently add it to existing policies.
+
+When CI is pending, Workfile says to wait for it to finish successfully. When
+it fails, it says to fix and rerun the failing checks. With no reported checks,
+it says to run CI for the current commit. Unavailable evidence remains unknown.
+
+### Readiness rules
+
+```yaml
+gates:
+  release_ready:
+    - id: linked-pr
+      if: github.prs >= 1
+    - id: ready-for-review
+      if: github.draft == false
+    - id: automated-checks
+      if: github.checks == success
+    - id: current-commit-reviewed
+      if: github.fresh_approvals >= 1
+```
+
+`checks` uses GitHub's combined result for the latest commit, including check
+runs and commit statuses. It is not limited to GitHub Actions. It does not check
+which jobs your team expected to run, or reproduce branch protection. `none`
+means GitHub returned no check result. It does not pass a `success` rule.
+Pending checks are known evidence and fail a `success` rule until they finish.
+Missing or unrecognised check data is unknown, not `none` or a pass.
+
+Fresh approvals compare commit IDs, not dates. A new commit makes earlier
+approvals stale even if they still count under `approvals`. If GitHub does not
+provide the commits needed for the comparison, freshness is unknown. Draft
+status is unknown when it was not returned. Unknown evidence on a required path
+can make the ticket "cannot check" and exit with code 2. A known passing
+alternative remains available. A provider request failure stops the report;
+Workfile never treats a failed read as an empty list.
+
+These rules are opt-in. GitHub's own merge restrictions still apply. Workfile
+never merges a PR or moves a ticket.
 
 Repository lists, searches, labels, reviews and review requests all come in
 pages, and Workfile reads every page. GitHub stops a search at 1,000 results. If

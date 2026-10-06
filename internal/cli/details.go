@@ -24,7 +24,10 @@ func outcome(checks []workfile.Check) string {
 		if check.Outcome == "fail" {
 			return "fail"
 		}
-		if check.Outcome == "pass" {
+		if check.Outcome == "unknown" {
+			result = "unknown"
+		}
+		if check.Outcome == "pass" && result != "unknown" {
 			result = "pass"
 		}
 	}
@@ -36,6 +39,8 @@ func checkCell(result string) cell {
 		return styled("✓", green)
 	case "fail":
 		return styled("✗", red)
+	case "unknown":
+		return styled("!", red)
 	default:
 		return styled("—", muted)
 	}
@@ -69,7 +74,7 @@ func routes(a workfile.Assessment) []workfile.RouteAssessment {
 func (v view) details(w *workfile.Workspace, a workfile.Assessment) {
 	width := v.innerWidth()
 	v.line("")
-	header := textRows(a.Ticket.Title, "", "1", "", width)
+	header := textRows(a.Ticket.Title, "", "1", a.Ticket.URL, width)
 	name, _ := a.Ticket.Facts["assignee"].(string)
 	if name == "" && a.Ticket.Assignee != "" {
 		for _, person := range workfile.SortedKeys(w.People) {
@@ -87,9 +92,6 @@ func (v view) details(w *workfile.Workspace, a workfile.Assessment) {
 		assigned = "Assigned to " + name
 	}
 	header = append(header, textRows(assigned, "", muted, "", width)...)
-	if !v.color && a.Ticket.URL != "" {
-		header = append(header, textRows(a.Ticket.URL, "", muted, "", width)...)
-	}
 	header = append(header, row{})
 	if a.Ticket.Error == "" {
 		header = append(header, v.pipeline(w.Policy, a)...)
@@ -105,7 +107,11 @@ func (v view) details(w *workfile.Workspace, a workfile.Assessment) {
 	var transitions []row
 	switch {
 	case a.Ticket.Error != "":
-		transitions = textRows("Map this ticket's Jira status in providers.yml before checking transitions.", "", red, "", width)
+		message := "Map this ticket's Jira status in providers.yml before checking transitions."
+		if strings.Contains(a.Ticket.Error, "evidence") {
+			message = "Restore access to the missing evidence, then run wf again. Unknown checks are listed below."
+		}
+		transitions = textRows(message, "", red, "", width)
 	case len(a.Routes) == 0:
 		if a.Violation() {
 			transitions = append(transitions, styledRow("Repair the unmet policy gates", red))
@@ -208,6 +214,25 @@ func (v view) matrix(a workfile.Assessment) []row {
 	return rows
 }
 
+// repositoryURL keeps the host and repository path from this PR's URL.
+func repositoryURL(prURL string) string {
+	u, err := url.Parse(prURL)
+	if err != nil {
+		return ""
+	}
+	at := strings.LastIndex(u.Path, "/pull/")
+	if at < 0 {
+		return ""
+	}
+	u.Path = u.Path[:at]
+	u.RawPath, u.RawQuery, u.Fragment = "", "", ""
+	return u.String()
+}
+
+func prHeading(repo, number, prURL string) row {
+	return row{{repo, "1", repositoryURL(prURL)}, plain(" "), {number, "1", prURL}}
+}
+
 func recordIdentity(record workfile.Record) (string, string) {
 	repo, number, _ := strings.Cut(record.ID, "#")
 	if record.Repository != "" {
@@ -250,6 +275,8 @@ func (v view) pullRequests(w *workfile.Workspace, a workfile.Assessment) []row {
 			e := entry{record: record, repo: repo, number: number, status: "Not assessed", color: muted, rank: 2}
 			state, _ := record.Facts["state"].(string)
 			switch {
+			case outcome(checks) == "unknown":
+				e.status, e.color, e.rank = "Cannot check", red, 0
 			case outcome(checks) == "fail":
 				e.status, e.color, e.rank = "Gate failed", red, 0
 				if slices.ContainsFunc(checks, func(c workfile.Check) bool {
@@ -299,7 +326,7 @@ func (v view) pullRequests(w *workfile.Workspace, a workfile.Assessment) []row {
 	}
 	for i, e := range entries {
 		if table {
-			line := padded(plain(e.repo), repoWidth)
+			line := padded(cell{e.repo, "", repositoryURL(e.record.URL)}, repoWidth)
 			line = append(line, padded(cell{e.number, "1", e.record.URL}, 8)...)
 			line = append(line, padded(styled(e.status, e.color), statusWidth)...)
 			rows = append(rows, append(line, styled(e.next, e.color)))
@@ -307,11 +334,8 @@ func (v view) pullRequests(w *workfile.Workspace, a workfile.Assessment) []row {
 			if i > 0 {
 				rows = append(rows, row{})
 			}
-			rows = append(rows, textRows(e.repo+" "+e.number, "", "1", e.record.URL, v.innerWidth())...)
+			rows = append(rows, prHeading(e.repo, e.number, e.record.URL))
 			rows = append(rows, textRows(strings.TrimSpace(e.status+"  "+e.next), "  ", e.color, "", v.innerWidth())...)
-		}
-		if !v.color && e.record.URL != "" {
-			rows = append(rows, textRows(e.record.URL, "", muted, "", v.innerWidth())...)
 		}
 	}
 	return rows

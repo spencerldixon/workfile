@@ -30,10 +30,11 @@ func (w *Workspace) Assess(ticket Ticket) Assessment {
 		}
 		return result
 	}
-	// Forward edges are acyclic in states order. Keep a valid path when one
-	// exists; otherwise show the path with the fewest failed rule evaluations.
+	// Prefer a proven path, then a path that could pass if unknown evidence
+	// becomes available, then a path with the fewest known failures.
+	type pathCost struct{ failed, unknown int }
 	paths := map[string][]string{p.States[0]: {}}
-	costs := map[string]int{p.States[0]: 0}
+	costs := map[string]pathCost{p.States[0]: {}}
 	firstFailure := map[string]string{}
 	for _, state := range p.States {
 		cost, reached := costs[state]
@@ -46,16 +47,19 @@ func (w *Workspace) Assess(ticket Ticket) Assessment {
 			}
 			nextCost := cost
 			for _, check := range checks(route.Requires) {
-				if check.Outcome == "fail" {
-					nextCost++
+				switch check.Outcome {
+				case "fail":
+					nextCost.failed++
+				case "unknown":
+					nextCost.unknown++
 				}
 			}
 			previous, seen := costs[route.To]
-			if !seen || nextCost < previous {
+			if !seen || nextCost.failed < previous.failed || nextCost.failed == previous.failed && nextCost.unknown < previous.unknown {
 				costs[route.To] = nextCost
 				paths[route.To] = unique(append(slices.Clone(paths[state]), route.Requires...))
 				firstFailure[route.To] = firstFailure[state]
-				if cost == 0 && nextCost > 0 {
+				if cost.failed == 0 && cost.unknown == 0 && (nextCost.failed > 0 || nextCost.unknown > 0) {
 					firstFailure[route.To] = state
 				}
 			}
@@ -80,6 +84,24 @@ func (w *Workspace) Assess(ticket Ticket) Assessment {
 	}
 	a.Current = checks(current)
 	a.Fallback = firstFailure[ticket.State]
+	// An unknown alternative must not hide a destination whose requirements
+	// are all known to pass. Unknown entry evidence always prevents assessment.
+	unknown := func(checks []Check) bool {
+		return slices.ContainsFunc(checks, func(c Check) bool { return c.Outcome == "unknown" })
+	}
+	cannotCheck := unknown(a.Earlier)
+	forward := slices.ContainsFunc(a.Routes, func(r RouteAssessment) bool { return !r.Backward })
+	available, uncertain := false, false
+	for _, route := range a.Routes {
+		if forward && route.Backward {
+			continue
+		}
+		available = available || route.Available()
+		uncertain = uncertain || unknown(route.Checks)
+	}
+	if cannotCheck || uncertain && !available {
+		a.Ticket.Error = "Required evidence is unavailable; inspect the unknown checks before moving this ticket."
+	}
 	return a
 }
 
@@ -87,7 +109,7 @@ func (w *Workspace) checkGates(gates []string, ticket Ticket) []Check {
 	var checks []Check
 	for _, gate := range gates {
 		for _, rule := range w.Policy.Gates[gate] {
-			check := Check{Gate: gate, Outcome: "skip", Requirement: w.requirement(rule)}
+			check := Check{ID: ruleID(gate, rule), Gate: gate, Outcome: "skip", Requirement: w.requirement(rule), Condition: rule.Condition, When: rule.Guard, By: append([]string{}, rule.By...), Results: []RuleResult{}, Reasons: []Reason{}}
 			instance := ""
 			if rule.Condition.Record() {
 				instance = rule.Condition.Provider
@@ -98,16 +120,58 @@ func (w *Workspace) checkGates(gates []string, ticket Ticket) []Check {
 			records := []Record{{}}
 			if instance != "" {
 				records = ticket.Records[instance]
+				if len(records) == 0 {
+					status, observed := "skip", "No linked PRs; per-PR requirements do not apply. Require a PR count separately."
+					if reason := ticket.Unavailable[instance+".prs"]; reason != "" {
+						status, observed = "unknown", reason
+						check.Outcome = "unknown"
+					}
+					check.Results = append(check.Results, RuleResult{Provider: instance, Record: ticket.Key, URL: ticket.URL, Outcome: status, Observed: observed})
+				}
 			}
 			for _, record := range records {
-				result := RuleResult{Provider: instance, Record: record.ID, URL: record.URL, Outcome: "skip"}
+				result := RuleResult{Provider: rule.Condition.Provider, Record: record.ID, URL: record.URL, Outcome: "skip"}
+				if instance != "" {
+					result.Provider = instance
+				}
+				if record.ID == "" {
+					result.Record, result.URL = ticket.Key, ticket.URL
+				}
+				unknown := ""
+				if rule.Guard != nil {
+					unknown = w.unavailable(*rule.Guard, ticket, record)
+				}
+				if unknown != "" {
+					result.Outcome, result.Observed = "unknown", unknown
+					if check.Outcome != "fail" {
+						check.Outcome = "unknown"
+					}
+					check.Results = append(check.Results, result)
+					continue
+				}
 				if rule.Guard != nil && !rule.Guard.Evaluate(w.subject(*rule.Guard, ticket, record, nil)) {
 					result.Observed = "Only required when " + conditionText(*rule.Guard)
 					check.Results = append(check.Results, result)
 					continue
 				}
+				if unknown = w.unavailable(rule.Condition, ticket, record); unknown != "" {
+					result.Outcome, result.Observed = "unknown", unknown
+					if check.Outcome != "fail" {
+						check.Outcome = "unknown"
+					}
+					check.Results = append(check.Results, result)
+					continue
+				}
 				value := w.subject(rule.Condition, ticket, record, rule.By)
 				result.Observed = w.observation(rule, ticket, record, value)
+				if _, numeric := rule.Condition.Value.(int); numeric {
+					result.Value = size(value)
+				} else if rule.Condition.Fact != "description" {
+					result.Value = value
+					if values, ok := value.([]string); ok {
+						result.Value = append([]string{}, values...)
+					}
+				}
 				if rule.Guard != nil {
 					result.Observed += " · " + conditionEvidence(*rule.Guard, w.subject(*rule.Guard, ticket, record, nil))
 				}
@@ -124,6 +188,11 @@ func (w *Workspace) checkGates(gates []string, ticket Ticket) []Check {
 					check.Outcome = "pass"
 				}
 				check.Results = append(check.Results, result)
+			}
+			for _, result := range check.Results {
+				if result.Outcome == "unknown" {
+					check.Reasons = append(check.Reasons, Reason{Text: result.Observed, Action: "Restore access to the required evidence, then check again.", Provider: result.Provider, Record: result.Record, URL: result.URL, OnTicket: result.Record == ticket.Key})
+				}
 			}
 			checks = append(checks, check)
 		}
@@ -201,6 +270,9 @@ func (w *Workspace) explain(r Rule, ticket Ticket, record Record, value any) str
 		case "!=":
 			message = fmt.Sprintf("%s must not be %s", noun, e.Value)
 		}
+	}
+	if passingCI(e) {
+		message = ciEvidence(value)
 	}
 	if len(r.By) > 0 {
 		names := make([]string, len(r.By))

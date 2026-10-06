@@ -80,7 +80,9 @@ func (v view) groupedSteps(a workfile.Assessment, sources []stepSource, ticketHe
 			rows = append(rows, row{})
 		}
 		if t.target == a.Ticket.Key && !ticketHeading {
-			rows = append(rows, row{plain("  "), styled("On the ticket", "1")})
+			rows = append(rows, row{plain("  "), {"On the ticket", "1", a.Ticket.URL}})
+		} else if at := strings.LastIndex(t.target, " #"); at >= 0 {
+			rows = append(rows, append(row{plain("  ")}, prHeading(t.target[:at], t.target[at+1:], t.link)...))
 		} else {
 			rows = append(rows, row{plain("  "), {t.target, "1", t.link}})
 		}
