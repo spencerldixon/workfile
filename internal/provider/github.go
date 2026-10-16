@@ -37,6 +37,7 @@ type pullRequest struct {
 	Number                             int
 	Body                               string
 	IsDraft                            *bool
+	MergeQueueEntry                    json.RawMessage
 	HeadRefOID                         string
 	Commits                            *connection[commitNode]
 	Repository                         struct{ Name string }
@@ -57,6 +58,7 @@ const repositoryQuery = `query($org: String!, $after: String) {
 
 const prFields = `
   id number title url headRefName headRefOid state isDraft
+  mergeQueueEntry { id }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
   repository { name }
   author { login }
@@ -129,13 +131,11 @@ func (c *Client) repositories(ctx context.Context, p workfile.Provider, token st
 	return slices.Compact(names), nil
 }
 
-func (c *Client) repositoryPRs(ctx context.Context, p workfile.Provider, token, repo string, probe bool) ([]pullRequest, int, error) {
-	days, _ := strconv.Atoi(strings.TrimSuffix(p.Lookback, "d"))
-	since := c.Now().AddDate(0, 0, -days).Format("2006-01-02")
-	query := fmt.Sprintf("repo:%s/%s is:pr updated:>=%s", p.Org, repo, since)
+// searchPRs follows the pages of one PR search. A probe reads one PR with all
+// its facts, so a connection check exercises every permission a report needs.
+func (c *Client) searchPRs(ctx context.Context, token, query string, probe bool) ([]pullRequest, error) {
 	var after any
 	var prs []pullRequest
-	count := 0
 	seen := map[string]bool{}
 	for {
 		var response struct {
@@ -149,19 +149,17 @@ func (c *Client) repositoryPRs(ctx context.Context, p workfile.Provider, token, 
 		search := searchQuery
 		if probe {
 			first = 1
-			// Connection tests still exercise permissions for all PR facts.
 			search = strings.Replace(search, discoveryFields, prFields, 1)
 		}
 		if err := c.graph(ctx, token, search, map[string]any{"q": query, "after": after, "first": first}, &response); err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		if response.Search == nil || response.Search.Nodes == nil {
-			return nil, 0, errors.New("GitHub returned no PR search results")
+			return nil, errors.New("GitHub returned no PR search results")
 		}
 		page := response.Search
-		count = page.IssueCount
-		if count > 1000 && !probe {
-			return nil, count, fmt.Errorf("%s/%s has %d PRs in the lookback; GitHub search stops at 1000, so shorten lookback", p.Org, repo, count)
+		if page.IssueCount > 1000 && !probe {
+			return nil, fmt.Errorf("GitHub found %d PRs for one search and stops at 1000", page.IssueCount)
 		}
 		for _, pr := range page.Nodes {
 			if pr != nil && (pr.State == "OPEN" || pr.State == "MERGED") {
@@ -173,14 +171,31 @@ func (c *Client) repositoryPRs(ctx context.Context, p workfile.Provider, token, 
 		}
 		cursor, err := nextCursor(page.PageInfo, seen)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		if cursor == "" {
 			break
 		}
 		after = cursor
 	}
-	return prs, count, nil
+	return prs, nil
+}
+
+// keysPerSearch keeps a search within GitHub's limit of five OR operators.
+const keysPerSearch = 6
+
+// keySearches asks GitHub for the PRs that mention the tickets, a few tickets
+// per search, so the cost follows the tickets checked, not the repositories.
+func keySearches(org string, keys []string) []string {
+	var queries []string
+	for batch := range slices.Chunk(keys, keysPerSearch) {
+		terms := make([]string, len(batch))
+		for i, key := range batch {
+			terms[i] = strconv.Quote(key)
+		}
+		queries = append(queries, fmt.Sprintf("org:%s is:pr archived:false in:title,body %s", org, strings.Join(terms, " OR ")))
+	}
+	return queries
 }
 
 // Each job owns one result slot. Workers share only immutable configuration and the HTTP client.
@@ -243,52 +258,53 @@ func linkedKeys(text string) []string {
 	return keys
 }
 
-func (c *Client) githubRecords(ctx context.Context, name string, tickets []workfile.Ticket) (map[string][]workfile.Record, []string, error) {
+func (c *Client) githubRecords(ctx context.Context, name string, tickets []workfile.Ticket) (map[string][]workfile.Record, error) {
 	p := c.Workspace.Providers[name]
 	token, err := c.Credentials.Get(p.Auth["token"])
 	if err != nil {
-		return nil, nil, err
-	}
-	repos, err := c.repositories(ctx, p, token)
-	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	wanted := map[string]bool{}
+	var keys []string
 	for _, t := range tickets {
-		wanted[strings.ToUpper(t.Key)] = true
+		key := strings.ToUpper(t.Key)
+		if !wanted[key] {
+			wanted[key] = true
+			keys = append(keys, key)
+		}
 	}
 	type linkedPR struct {
 		pr   pullRequest
 		keys []string
 	}
-	results, err := parallel(ctx, len(repos), func(ctx context.Context, i int) ([]linkedPR, error) {
-		prs, _, err := c.repositoryPRs(ctx, p, token, repos[i], false)
-		if err != nil {
-			return nil, err
-		}
-		var linked []linkedPR
+	queries := keySearches(p.Org, keys)
+	results, err := parallel(ctx, len(queries), func(ctx context.Context, i int) ([]pullRequest, error) {
+		return c.searchPRs(ctx, token, queries[i], false)
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Search matches loosely and a PR can mention tickets from two searches.
+	// Link only keys in the title or branch, or explicit Jira links in the body.
+	var matched []linkedPR
+	seen := map[string]bool{}
+	for _, prs := range results {
 		for _, pr := range prs {
+			if seen[pr.ID] {
+				continue
+			}
+			seen[pr.ID] = true
 			keys := linkedKeys(pr.Title + " " + pr.HeadRefName)
 			keys = append(keys, explicitKeys(pr.Body, c.Workspace.Providers[c.Workspace.Policy.Tracker].Site)...)
 			slices.Sort(keys)
 			keys = slices.Compact(keys)
 			keys = slices.DeleteFunc(keys, func(key string) bool { return !wanted[key] })
-			if len(keys) == 0 {
-				continue
+			if len(keys) > 0 {
+				matched = append(matched, linkedPR{pr: pr, keys: keys})
 			}
-			linked = append(linked, linkedPR{pr: pr, keys: keys})
 		}
-		return linked, nil
-	})
-	if err != nil {
-		return nil, nil, err
 	}
-	var matched []linkedPR
-	for _, result := range results {
-		matched = append(matched, result...)
-	}
-	// Use a single worker pool across repositories, including when every linked
-	// PR belongs to the same repository. Keep result order independent of timing.
+	// Read details in one bounded pool. Keep result order independent of timing.
 	records, err := parallel(ctx, len(matched), func(ctx context.Context, i int) (workfile.Record, error) {
 		pr, err := c.readPR(ctx, token, matched[i].pr.ID)
 		if err != nil {
@@ -299,7 +315,7 @@ func (c *Client) githubRecords(ctx context.Context, name string, tickets []workf
 		return record, nil
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	linked := map[string][]workfile.Record{}
 	for i, record := range records {
@@ -307,11 +323,7 @@ func (c *Client) githubRecords(ctx context.Context, name string, tickets []workf
 			linked[key] = append(linked[key], record)
 		}
 	}
-	var warnings []string
-	if len(repos) == 0 {
-		warnings = append(warnings, name+": no visible active repositories; check organisation access")
-	}
-	return linked, warnings, nil
+	return linked, nil
 }
 
 func (c *Client) readPR(ctx context.Context, token, id string) (pullRequest, error) {
@@ -417,6 +429,10 @@ func (p pullRequest) record() workfile.Record {
 	}
 	state := strings.ToLower(p.State)
 	parts := []string{state, "by " + p.Author.Login}
+	queue, queueReason := p.mergeQueueStatus()
+	if state == "open" && queue == "queued" {
+		parts = append(parts, "queued for merge")
+	}
 	if len(labels) > 0 {
 		parts = append(parts, strings.Join(labels, ", "))
 	}
@@ -429,6 +445,11 @@ func (p pullRequest) record() workfile.Record {
 		parts = append(parts, "waiting on "+strings.Join(reviewers, ", "))
 	}
 	facts := workfile.Facts{"labels": labels, "approvals": approvals, "state": state, "author": p.Author.Login, "review_requests": reviewers}
+	if queueReason != "" {
+		unavailable["merge_queue"] = queueReason
+	} else {
+		facts["merge_queue"] = queue
+	}
 	if p.Author.Login == "" {
 		unavailable["author"] = "GitHub did not return a visible PR author"
 	}
@@ -451,7 +472,7 @@ func (p pullRequest) record() workfile.Record {
 		facts["checks"] = status
 	}
 	return workfile.Record{
-		ID: fmt.Sprintf("%s#%d", p.Repository.Name, p.Number), URL: p.URL, Title: p.Title, Summary: strings.Join(parts, " · "),
+		ID: fmt.Sprintf("%s#%d", p.Repository.Name, p.Number), URL: p.URL, Title: p.Title, Summary: strings.Join(parts, " · "), Head: p.HeadRefOID,
 		People: append([]string{p.Author.Login}, reviewers...),
 		Facts:  facts, Unavailable: unavailable,
 	}

@@ -6,10 +6,13 @@ Workfile reads your Jira tickets and their GitHub pull requests. It checks them
 against your team's workflow and shows you what needs attention.
 
 You write your workflow in a `.workfile/` folder. Then you run `wf` from any
-folder inside your project.
+folder inside your project. That folder becomes the source of truth for how
+work moves, and you can put it to work: **automations** say "when this happens
+to my work, do that", and only fire when your policy allows.
 
-Workfile only reads. It never moves a ticket, adds a label, or changes a pull
-request.
+Workfile's checks only read. They never move a ticket, add a label, or change a
+pull request. Automations run commands and agents you choose, on your own
+computer, with your permission.
 
 **New here?** Read [Getting started](docs/getting-started.md) first. It explains
 the main ideas (providers, stages, transitions, gates and policies) in plain
@@ -22,27 +25,46 @@ English before you install anything.
 | `wf setup` | Connect Jira and optional GitHub, and create a starter `.workfile/` folder. |
 | `wf health` | How your board compares to your policy. Which gates and stages are failing, and how many tickets are affected. |
 | `wf status` | Where each ticket is, and what it needs before it can move on. |
+| `wf check` | Whether one ticket may move to a stage right now. Agents ask it before they move work. |
+| `wf automations` | Your automations, and anything stopping them. |
+| `wf watch` | Checks your work every 2 minutes and fires your automations. |
 | `wf test` | Whether your connections to Jira and GitHub work. |
 
-Start from scratch with `wf setup`. It opens token-creation pages in your browser,
-asks for tokens with hidden input, tests the connections, and lets you choose a
-folder and Jira project. It imports visible project people and suggests a stage
-order from Jira statuses. Choose only the statuses you want to include; the
-others are excluded from the Jira search. You confirm a simple starter pipeline
-before saving. The generated policy sections and people entries have blank lines
-between them for easy editing.
-Existing `.workfile/` folders are never overwritten, and tokens stay in your
-private credentials file. Invalid entries let you try again without restarting.
+Start from scratch with `wf setup`. It is a short, guided screen-by-screen setup
+with a small welcome animation. It opens token pages in your browser, shows `*`
+as you paste a token so you can see it landed, tests each connection, and lets you
+choose a folder and a Jira project. It imports visible project people, then shows
+the project's Jira statuses as a checklist: all are ticked, and you untick any your
+team rarely uses. Those are left out of the Jira search. You confirm a simple
+starter pipeline before saving. Existing `.workfile/` folders are never
+overwritten, and tokens stay in your private credentials file. A wrong entry shows
+a message on the same screen, and `esc` goes back.
 
 The welcome screen looks like this:
 
 ```text
-  workfile / setup
+ workfile setup
 
-  ▌  From zero to your first report
-  ▌
-  ▌  1 Connect  →  2 Discover  →  3 Save
-  ▌  Read-only access. Your secrets stay on this computer.
+  ╭────────────────╮
+  │   ^   ^        │
+  │      ◡         │
+  │                │
+  │  ▬▬▬▬▬▬▬▬ ✓    │
+  │  ▬▬▬▬▬▬   ✓    │
+  │  ▬▬▬▬▬▬▬  ✓    │
+  ╰────────────────╯
+
+   w o r k f i l e  ✦
+
+  Welcome to workfile
+
+  Let's connect your tickets and pull requests, then check
+  them against a written workflow. Workfile only reads. It
+  never changes a ticket, a label or a pull request.
+
+  It takes about two minutes.
+
+ enter begin · ctrl+c quit
 ```
 
 Setup does not import Jira's full workflow graph or invent gates. Its confirmed
@@ -50,104 +72,100 @@ starter moves connect each stage to the next. Edit `policy.yml` to add the team'
 checks and branches; without gates, ready does not mean your team approved the
 work. See [setup details](docs/usage.md#setup-start-from-scratch).
 
-Here is `wf health`:
+Here is `wf health`. In a terminal it opens an interactive screen: gates and
+stages on the left, and a panel on the right with the chosen gate's rules and
+how many tickets fail each one. Press enter to list the tickets, grouped by the
+rule they fail. When you pipe it, or set `NO_COLOR`, it prints this instead:
 
 ```text
-  workfile / health
+  workfile health                                                168 tickets
 
-  ▌  SUMMARY
-  ▌
-  ▌  168 tickets checked
-  ▌  ✓ in policy       121   72%  █████████████████░░░░░░░
-  ▌  ✗ out of policy    47   28%  ███████░░░░░░░░░░░░░░░░░
+  40 of 168 tickets are out of policy (24%).
+  ███████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-  ▌  GATES · failing of tickets that must pass
-  ▌
-  ▌  1. refinement      ██░░░░░░░░░░   24 / 168   14%
-  ▌  2. pull request    █░░░░░░░░░░░    7 / 145    5%
-  ▌  3. code review     ██░░░░░░░░░░   13 / 101   13%
-  ▌  4. release waiver  █░░░░░░░░░░░    3 / 70     4%
+  Gates                                    failing of tickets that must pass
 
-  ▌  STAGES · failing of tickets in stage
-  ▌
-  ▌  1. todo            ██░░░░░░░░░░    4 / 23    17%
-  ▌  2. doing           ████░░░░░░░░   13 / 44    30%
-  ▌  3. review          ███████░░░░░   18 / 31    58%
-  ▌  4. done            ██░░░░░░░░░░   12 / 70    17%
+  refinement    ██░░░░░░░░░░  20 / 145   14%
+    20  Description: at least 100 characters
 
-  ▌  MOST COMMON REASONS
-  ▌
-  ▌  1. refinement      24×  Description: at least 100 characters
-  ▌  2. pull request     7×  At least 1 linked PR
-  ▌  3. code review     13×  At least 1 approval
-  ▌  4. release waiver   3×  Labels include "release-waiver"
+  pull request  █░░░░░░░░░░░   7 / 101    7%
+     7  At least 1 linked PR
 
-  Drill down: wf health --gate refinement · wf health --stage todo
+  code review   ██░░░░░░░░░░   13 / 66   20%
+     9  At least 1 approval
+     4  Passing CI on the current commit
 
-  ▌  COVERAGE · current facts, not history
-  ▌
-  ▌  Search: project = APP AND (statusCategory != Done OR resolved >= -14d)
-  ▌  Only data visible to your tokens is checked; permissions can hide tickets and repositories.
-  ▌  github: active repositories in example-team · open/merged PRs updated within 90d
+  Under each gate: tickets failing each rule. A ticket can fail more than
+  one.
+
+  Stages                                   out of policy of tickets in stage
+
+  todo    ░░░░░░░░░░░░   0 / 23    0%
+  doing   ██░░░░░░░░░░   9 / 44   20%
+  review  ███░░░░░░░░░   8 / 31   26%
+  done    ████░░░░░░░░  23 / 70   33%
+
+  Next  wf health --gate code_review
 ```
 
-And here is `wf status`. It shows the board stage by stage, in workflow order:
+And here is `wf status`. In a terminal it opens an interactive screen: the
+tickets on the left, grouped by what to do, and the chosen ticket on the right.
+Press m to see only your work. Piped, it prints the same groups:
 
 ```text
-  workfile / status
+  workfile status                                                  4 tickets
 
-  ▌  SUMMARY
-  ▌
-  ▌  25 tickets checked · limit 25
-  ▌  ‼ out of policy   4   16%  ███░░░░░░░░░░░░░░░░░
-  ▌  ✗ needs work      9   36%  ███████░░░░░░░░░░░░░
-  ▌  ✓ ready to move   8   32%  ██████░░░░░░░░░░░░░░
-  ▌  · done            4   16%  ███░░░░░░░░░░░░░░░░░
+  1 ticket can move on, 2 need work and 1 is out of policy.
+  ‼ 1 out of policy   ✗ 2 need work   ✓ 1 ready   · 0 done
 
-  ▌  PIPELINE
-  ▌
-  ▌  1. todo    ✓ 3  ✗ 1  ███░░░░░░░░░   4 tickets
-  ▌  2. doing   ✓ 2  ✗ 6  █████████░░░  10 tickets
-  ▌  3. review  ✓ 3  ✗ 4  ███████░░░░░   7 tickets
-  ▌  4. done    ✓ 4  ✗ 0  ░░░░░░░░░░░░   4 tickets
+  Ready to move                                                     1 ticket
 
-  ▌  DOING · 10 tickets
-  ▌
-  ▌  ✗ APP-57  Add a delivery estimate
-  ▌      pull request: needs at least 1 linked PR; has 0
-  ▌
-  ▌  ✓ APP-71  Explain notification preferences              → review
+  ✓ APP-61  Show stock levels on product pages                  todo → doing
 
-  ▌  REVIEW · 7 tickets
-  ▌
-  ▌  ‼ APP-42  Improve account settings               OUT OF POLICY
-  ▌      refinement: description is 38 characters; needs at least 100
-  ▌      pull request: needs at least 1 linked PR; has 0
+  Needs work                                      2 tickets · grouped by fix
 
-  ▌  COVERAGE · current facts, not history
-  ▌
-  ▌  Search: project = APP AND (statusCategory != Done OR resolved >= -14d)
-  ▌  Selection: sample of up to 25 tickets; not the whole search.
-  ▌  Only data visible to your tokens is checked; permissions can hide tickets and repositories.
-  ▌  github: active repositories in example-team · open/merged PRs updated within 90d
+  Link at least 1 PR                                                       1
+  pull request
+    ✗ APP-57  Add a delivery estimate                                  doing
+
+  Get at least 1 approval                                                  1
+  code review
+    ✗ APP-42  Improve account settings         example-team/api #31 · review
+
+  Add a label matching "*-risk"                                            1
+  code review
+    ✗ APP-42  Improve account settings         example-team/api #31 · review
+
+  Out of policy                                        past a gate they fail
+
+  ‼ APP-70  Rename loyalty tiers                                        done
+      Expand the description to at least 100 characters · refinement
+      Link at least 1 PR; include APP-70 in the PR title · pull request
 ```
 
-`wf status --me` is a kanban board of your unfinished work. Each stage gets a
-lane. Under each ticket assigned to you, it lists the requirements you still
-have to meet to move it forward. Pull requests you wrote or were asked to review
-get a smaller lane of their own.
+Where your terminal cannot show links, such as in a pipe, each ticket's and
+PR's web address is written out under it.
 
-Output is drawn in blocks with a coloured edge and a soft background tint, and uses your terminal's own red and green, so it matches your theme. Ticket
+`wf status TICKET` also reads GitHub merge queue membership. Queued PRs show
+**Queued for merge** and **Wait for merge**, rather than asking you to merge
+again. Queue membership does not hide failing gates or count as merged. See the
+[queued PR example](docs/usage.md#one-ticket) and
+[merge queue facts](docs/providers/github.md#merge-queues).
+
+`wf status --me` is the same, with only your work: tickets assigned to you, and
+tickets with a pull request you wrote or were asked to review.
+
+Output is drawn in panels with a soft background tint, and uses your terminal's own red and green, so it matches your theme. Ticket
 keys, ticket titles, repository names and PR numbers are clickable links in most terminals. The output fits your
 terminal width. When you pipe it to a file or another program, it is plain
 text, with web addresses shown in every ticket and PR list. Set `NO_COLOR=1`
 to turn colour off without turning terminal hyperlinks off.
 
-Every report shows its coverage. Missing required evidence is **cannot check**,
+Missing required evidence is **cannot check**,
 not a pass or a policy violation. Use `--evidence` to see observed values and why
 rules passed, failed, or were skipped. Unknown checks are shown automatically.
 Use `--json` for scripts and AI agents. It includes schema version 1, a policy
-hash, an observation time, coverage, stable rule IDs, evidence, available moves,
+hash, an observation time, stable rule IDs, evidence, available moves,
 and deduplicated unmet requirements. See [JSON reports](docs/json.md).
 A readiness assessment does not grant permission to merge or move work.
 
@@ -254,8 +272,10 @@ wf health --user bob            # only tickets involving Bob
 wf status                       # tickets at every stage, including done
 wf status --me                  # your work, with every problem explained
 wf status APP-42 APP-57         # the full picture for certain tickets
+wf status 42                    # the same, by number (needs default_project)
 wf status APP-42 --evidence     # observed evidence for every requirement
 wf status APP-42 --json         # the same assessment for an agent or script
+wf check APP-42 --to done       # may it move to done now? exit 0 yes, 1 no
 wf test github                  # test just the connection named github
 ```
 
@@ -302,21 +322,53 @@ todo:
 Here, refinement blocks `todo → ready`, not `todo → done`. See the
 [complete example](example/destination-requires/.workfile/).
 
-The named-ticket view runs left to right and shows each stage once. Shortcuts
-connect above the chain; returns connect below it with arrows pointing back.
-Here is the pipeline portion of that example with the ticket in todo:
+The named-ticket view shows one forward path through the workflow, left to
+right, with each stage once. With the ticket in todo, `todo → done` is ready but
+`todo → ready` still needs refinement:
 
 ```text
-  ▌    ┌────────→─────────┐
-  ▌    │                  ↓
-  ▌  todo* ──→ ready ──→ done
-  ▌  * current stage
+  WHERE IT IS
+  ◉╌╌╌╌╌╌╌○────────○
+  todo    ready    done
+  Ready to move to done.
 ```
 
-The star marks the current stage; it is also underlined when colour is on.
-Only configured moves get arrows. If the chain is too wide, Workfile first
-shortens the arrows, then uses horizontal strips with numbered links between
-them. Stage names still appear once, and all moves remain visible.
+`◉` is the current stage, `●` a stage behind it and `○` a stage ahead. The link
+out of the current stage is solid and green when the next move is ready, and
+dashed and red when it is blocked. Earlier stages are not ticked: Workfile
+cannot prove the path a ticket took. The path goes through the current stage.
+Where the workflow branches, such as qa or security after review, it shows the
+nearest branch unless the ticket is in another one. Detours such as blocked and
+extra end stages such as cancelled are left out; if the ticket is in one, the
+screen says so. **Next moves** lists every place the ticket can go from here. On
+a narrow terminal the gaps get smaller, then the path wraps onto more lines.
+
+## Automations
+
+Automations put your policy to work. Each person writes their own, shared with
+the team in `.workfile/automations/<you>.yml` or private in
+`~/.config/workfile/<workspace>/automations.yml`:
+
+```yaml
+automations:
+  - id: announce-done
+    on:
+      ready: done          # every gate for done now passes
+    run: [./scripts/announce.sh, "{ticket}", "{url}"]
+    mode: auto             # observe (the default), ask, or auto
+```
+
+```sh
+wf automations          # what will run for you here, and what stops it
+wf automations init     # start a private file for this workspace
+wf watch --dry-run      # see what would fire, run nothing
+wf watch                # check every 2 minutes and fire
+```
+
+A trigger is a change between two checks, so nothing fires for what was already
+true. Commands run without a shell, a shared file runs only after you approve
+it, and a private file runs only in the repositories it lists. Read
+[Automations](docs/automations.md).
 
 ## Distribution
 
@@ -358,8 +410,9 @@ make build
 
 The code has three small packages. `workfile` loads and checks policies.
 `provider` reads Jira and GitHub. `cli` runs the commands and draws the output.
-GitHub scans read titles, branch names and explicit Jira links in descriptions
-first, then fetch labels, reviews and readiness evidence only for linked PRs. Up to six linked PRs are read at once.
+GitHub searches look for the checked tickets' keys in PR titles and
+descriptions, six tickets per search, then fetch labels, reviews and readiness
+evidence only for linked PRs. Up to six linked PRs are read at once.
 Besides the Go standard library, it uses a YAML reader, terminal detection and
 text-width libraries. It has no server, database, plugins or cache.
 

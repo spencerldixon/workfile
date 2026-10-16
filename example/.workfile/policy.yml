@@ -1,4 +1,7 @@
 # A fictional team's workflow. Gates describe what must be true before moving on.
+# name keeps the workspace's name the same in every clone. Private automations
+# are kept under it, in ~/.config/workfile/example-web/.
+name: example-web
 tracker: jira
 states: [todo, doing, review, done]
 

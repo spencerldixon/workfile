@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"workfile/internal/provider"
 	"workfile/internal/workfile"
@@ -22,7 +23,21 @@ Usage: wf <command> [options]
   setup                 Connect providers and create a starter .workfile/
   health [KEY ...]       Summarise policy health by gate and stage
   status [KEY ...]       Show all stages, or the full picture for named tickets
+  check KEY --to STAGE   Ask whether a ticket may move to a stage now (exit 0 yes, 1 no)
   test [PROVIDER ...]    Test all provider connections, or named instances
+
+Automations ("when this happens to my work, do that"):
+  automations           List your automations and anything stopping them
+  automations init      Create your private automations file for this workspace
+  automations trust     Approve the actions in your shared automations file
+  watch                 Check your work every 2 minutes and fire automations
+
+Options for automations and watch:
+  --all                 automations: everyone's shared automations, read only
+  --log ID              automations: show the latest run log for an automation
+  --once                watch: check once, then exit (for cron or launchd)
+  --interval 5m         watch: time between checks (default 2m, at least 1m)
+  --dry-run             watch: show what would run; run nothing
 
 Filters for health and status:
   --limit N             Check up to N tickets (default 25; health checks every ticket unless set)
@@ -47,6 +62,8 @@ Examples:
   wf health --gate code_review --stage done
   wf status --me
   wf status APP-42
+  wf check APP-42 --to done
+  wf watch --dry-run
   wf test github
 
 Output is for people by default. Use --json for scripts and agents.
@@ -60,6 +77,10 @@ type options struct {
 	all, me, failing, help, version bool
 	json, evidence                  bool
 	limitSet                        bool
+	// check, automations and watch
+	to, log      string
+	once, dryRun bool
+	interval     time.Duration
 }
 
 // listing is true when health names tickets instead of summarising.
@@ -121,9 +142,21 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 	if err != nil {
 		return fail(err)
 	}
+	if o.command == "health" || o.command == "status" || o.command == "check" {
+		if o.keys, err = completeKeys(o.keys, w.Providers[w.Policy.Tracker].DefaultProject); err != nil {
+			return fail(err)
+		}
+	}
 	client := connect(w)
-	if o.command == "test" {
+	switch o.command {
+	case "test":
 		return testConnections(ctx, view, client, w, o.keys)
+	case "check", "automations", "watch":
+		code, err := commands[o.command](ctx, view, w, client, o, errOut)
+		if err != nil {
+			return fail(err)
+		}
+		return code
 	}
 	var who map[string]string
 	if o.user != "" {
@@ -141,23 +174,8 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 			return fail(errors.New("that person has no provider identities in people.yml"))
 		}
 	} else if o.me {
-		overrides, err := workfile.Me()
-		if err != nil {
+		if who, err = identity(ctx, w, client); err != nil {
 			return fail(err)
-		}
-		who = map[string]string{}
-		for _, name := range workfile.SortedKeys(w.Providers) {
-			id := overrides[name]
-			if id == "" {
-				id = overrides[w.Providers[name].Kind]
-			}
-			if id == "" {
-				id, err = client.Identity(ctx, name)
-				if err != nil {
-					return fail(fmt.Errorf("%s identity: %w", name, err))
-				}
-			}
-			who[name] = id
 		}
 	}
 	if o.gate != "" {
@@ -177,12 +195,10 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 		return fail(err)
 	}
 	missing := false
-	missingKeys := []string{}
 	for _, key := range o.keys {
 		if !slices.ContainsFunc(tickets, func(t workfile.Ticket) bool { return t.Key == key }) {
-			fmt.Fprintf(errOut, "wf: %s is not visible in the configured Jira scope\n", key)
+			fmt.Fprintf(errOut, "wf: %s is not visible to your Jira token: check the key, or ask for access\n", key)
 			missing = true
-			missingKeys = append(missingKeys, key)
 		}
 	}
 	tickets, warnings, err := client.Records(ctx, tickets)
@@ -214,15 +230,52 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 		code = 2
 	}
 	if o.json {
-		if err := writeReport(out, w, assessments, o, warnings, missingKeys, code); err != nil {
+		if err := writeReport(out, w, assessments, o, warnings, code); err != nil {
+			return fail(err)
+		}
+	} else if o.command == "health" && interactiveHealth(view, o, assessments) {
+		if err := exploreHealth(ctx, view, w, assessments, o); err != nil {
+			return fail(err)
+		}
+	} else if o.command == "status" && interactiveStatus(view, o, assessments) {
+		// m switches to the person's own work, so ask who they are, unless the
+		// list is already someone's. Without an answer the key is left out.
+		var me map[string]string
+		if who == nil {
+			me, _ = identity(ctx, w, client)
+		}
+		if err := exploreStatus(ctx, view, w, assessments, o, me); err != nil {
 			return fail(err)
 		}
 	} else {
-		view.report(w, assessments, o, who)
-		view.coverage(w, o)
+		view.report(w, assessments, o)
 		view.evidenceReport(assessments, o)
 	}
 	return code
+}
+
+// identity is who "me" is on each provider: the setting in config.yml, or
+// whoever owns the token.
+func identity(ctx context.Context, w *workfile.Workspace, client source) (map[string]string, error) {
+	overrides, err := workfile.Me()
+	if err != nil {
+		return nil, err
+	}
+	who := map[string]string{}
+	for _, name := range workfile.SortedKeys(w.Providers) {
+		id := overrides[name]
+		if id == "" {
+			id = overrides[w.Providers[name].Kind]
+		}
+		if id == "" {
+			id, err = client.Identity(ctx, name)
+			if err != nil {
+				return nil, fmt.Errorf("%s identity: %w", name, err)
+			}
+		}
+		who[name] = id
+	}
+	return who, nil
 }
 
 func testConnections(ctx context.Context, view view, client source, w *workfile.Workspace, names []string) int {
@@ -253,6 +306,77 @@ func testConnections(ctx context.Context, view view, client source, w *workfile.
 }
 
 var keyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*-[0-9]+$`)
+var numberPattern = regexp.MustCompile(`^[0-9]+$`)
+
+// completeKeys turns bare numbers into full keys using the tracker's
+// default_project, and drops repeats so a ticket is only fetched once.
+func completeKeys(keys []string, project string) ([]string, error) {
+	var result []string
+	for _, key := range keys {
+		if numberPattern.MatchString(key) {
+			if project == "" {
+				return nil, fmt.Errorf("%s is not a ticket key; use the full key (for example APP-%s) or set default_project in providers.yml", key, key)
+			}
+			number := strings.TrimLeft(key, "0")
+			if number == "" {
+				number = "0"
+			}
+			key = project + "-" + number
+		}
+		if !slices.Contains(result, key) {
+			result = append(result, key)
+		}
+	}
+	return result, nil
+}
+
+// command is a newer command. It returns an exit code, or an error to print.
+type command func(context.Context, view, *workfile.Workspace, source, options, io.Writer) (int, error)
+
+var commands = map[string]command{"check": checkMove, "automations": automations, "watch": watch}
+
+// commandFlags lists the options each newer command takes.
+var commandFlags = map[string][]string{
+	"check":       {"dir", "to", "json"},
+	"automations": {"dir", "all", "log"},
+	"watch":       {"dir", "once", "interval", "dry-run"},
+}
+
+// checkCommand checks the positional arguments of the newer commands.
+func checkCommand(o options) error {
+	switch o.command {
+	case "check":
+		if len(o.keys) != 1 {
+			return errors.New("check takes one ticket, such as wf check APP-42 --to done")
+		}
+		key := strings.ToUpper(o.keys[0])
+		if !keyPattern.MatchString(key) && !numberPattern.MatchString(key) {
+			return fmt.Errorf("%s is not a ticket key (expected APP-42 or a number)", key)
+		}
+		o.keys[0] = key
+		if o.to == "" {
+			return errors.New("check needs --to STAGE, the stage the ticket would move to")
+		}
+	case "automations":
+		if len(o.keys) > 1 || len(o.keys) == 1 && o.keys[0] != "init" && o.keys[0] != "trust" {
+			return errors.New("automations takes init, trust or nothing")
+		}
+		if len(o.keys) == 1 && (o.all || o.log != "") {
+			return fmt.Errorf("automations %s takes no options", o.keys[0])
+		}
+		if o.all && o.log != "" {
+			return errors.New("choose either --all or --log")
+		}
+	case "watch":
+		if len(o.keys) > 0 {
+			return errors.New("watch takes no positional arguments")
+		}
+		if o.interval < time.Minute {
+			return errors.New("--interval must be at least 1m")
+		}
+	}
+	return nil
+}
 
 func parse(args []string) (options, error) {
 	var o options
@@ -271,6 +395,11 @@ func parse(args []string) (options, error) {
 	fs.BoolVar(&o.help, "help", false, "")
 	fs.BoolVar(&o.help, "h", false, "")
 	fs.BoolVar(&o.version, "version", false, "")
+	fs.StringVar(&o.to, "to", "", "")
+	fs.StringVar(&o.log, "log", "", "")
+	fs.BoolVar(&o.once, "once", false, "")
+	fs.BoolVar(&o.dryRun, "dry-run", false, "")
+	fs.DurationVar(&o.interval, "interval", 2*time.Minute, "")
 	// The standard flag package stops at positional arguments; collect options first.
 	var flags, positionals []string
 	for i := 0; i < len(args); i++ {
@@ -320,8 +449,29 @@ func parse(args []string) (options, error) {
 	if o.command == "" {
 		return o, nil
 	}
-	if !slices.Contains([]string{"health", "status", "test", "setup"}, o.command) {
+	if !slices.Contains([]string{"health", "status", "check", "test", "setup", "automations", "watch"}, o.command) {
 		return o, fmt.Errorf("unknown command %s", o.command)
+	}
+	if allowed, ok := commandFlags[o.command]; ok {
+		var invalid string
+		fs.Visit(func(f *flag.Flag) {
+			if !slices.Contains(allowed, f.Name) {
+				invalid = f.Name
+			}
+		})
+		if invalid != "" {
+			return o, fmt.Errorf("--%s is not an option for wf %s", invalid, o.command)
+		}
+		return o, checkCommand(o)
+	}
+	var invalid string
+	fs.Visit(func(f *flag.Flag) {
+		if slices.Contains([]string{"to", "log", "once", "dry-run", "interval"}, f.Name) {
+			invalid = f.Name
+		}
+	})
+	if invalid != "" && o.command != "test" && o.command != "setup" {
+		return o, fmt.Errorf("--%s is not an option for wf %s", invalid, o.command)
 	}
 	if o.command == "setup" && len(o.keys) > 0 {
 		return o, errors.New("setup takes no positional arguments; use --dir to choose a folder")
@@ -342,8 +492,10 @@ func parse(args []string) (options, error) {
 		}
 		for i, key := range o.keys {
 			key = strings.ToUpper(key)
-			if !keyPattern.MatchString(key) {
-				return o, fmt.Errorf("%s is not a ticket key (expected APP-42)", key)
+			// A bare number such as 2713 is completed once the workspace is
+			// loaded, because the project comes from providers.yml.
+			if !keyPattern.MatchString(key) && !numberPattern.MatchString(key) {
+				return o, fmt.Errorf("%s is not a ticket key (expected APP-42 or a number)", key)
 			}
 			o.keys[i] = key
 		}

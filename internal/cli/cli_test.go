@@ -80,7 +80,7 @@ func TestOnlyThreeCommandsAndInvalidOptions(t *testing.T) {
 func TestStatusIncludesCompletedTicketsAndHealthOnlyViolations(t *testing.T) {
 	f := &fakeSource{tickets: []workfile.Ticket{fixtureTicket("APP-1", "todo", "short"), fixtureTicket("APP-2", "done", "short")}}
 	code, out, _ := invoke(t, f, "status")
-	if code != 1 || !strings.Contains(out, "APP-1") || !strings.Contains(out, "APP-2") || !strings.Contains(out, "needs work") || !strings.Contains(out, "OUT OF POLICY") {
+	if code != 1 || !strings.Contains(out, "APP-1") || !strings.Contains(out, "APP-2") || !strings.Contains(out, "Needs work") || !strings.Contains(out, "Out of policy") {
 		t.Fatalf("%d\n%s", code, out)
 	}
 	code, out, _ = invoke(t, f, "health", "--stage", "done")
@@ -89,7 +89,7 @@ func TestStatusIncludesCompletedTicketsAndHealthOnlyViolations(t *testing.T) {
 	}
 	f.tickets = f.tickets[:1]
 	code, out, _ = invoke(t, f, "health")
-	if code != 0 || !strings.Contains(out, "in policy") || strings.Contains(out, "GATES") {
+	if code != 0 || !strings.Contains(out, "in policy") || strings.Contains(out, "Gates") {
 		t.Fatalf("%d\n%s", code, out)
 	}
 }
@@ -107,7 +107,7 @@ func TestHealthSummaryIsInPipelineOrderWithPercentages(t *testing.T) {
 	if code != 1 || f.limit != 0 {
 		t.Fatalf("code %d, fetch limit %d (health checks everything by default)\n%s", code, f.limit, out)
 	}
-	for _, want := range []string{"SUMMARY", "34 tickets checked", "GATES", "STAGES", "MOST COMMON REASONS", "%", "wf health --gate"} {
+	for _, want := range []string{"2 of 34 tickets are out of policy", "34 tickets", "Gates", "Stages", "Description: at least 100 characters", "%", "wf health --gate"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q\n%s", want, out)
 		}
@@ -115,7 +115,7 @@ func TestHealthSummaryIsInPipelineOrderWithPercentages(t *testing.T) {
 	if strings.Contains(out, "APP-2") {
 		t.Fatalf("summary should not list tickets\n%s", out)
 	}
-	stages := out[strings.Index(out, "STAGES"):]
+	stages := out[strings.Index(out, "Stages"):]
 	last := -1
 	for _, name := range []string{"todo", "doing", "review", "done"} {
 		at := strings.Index(stages, name)
@@ -125,7 +125,7 @@ func TestHealthSummaryIsInPipelineOrderWithPercentages(t *testing.T) {
 		last = at
 	}
 	_, out, _ = invoke(t, f, "health", "--limit", "5")
-	if f.limit != 5 || !strings.Contains(out, "sampled") {
+	if f.limit != 5 || !strings.Contains(out, "sample") {
 		t.Fatalf("an explicit limit must be flagged as a sample (fetch limit %d)\n%s", f.limit, out)
 	}
 }
@@ -158,7 +158,7 @@ func TestNamedTicketsFiltersAndLimits(t *testing.T) {
 		t.Fatalf("code %d, fetch limit %d: %s %s", code, f.limit, out, err)
 	}
 	code, out, _ = invoke(t, f, "status", "app-30", "--limit=1")
-	if code != 0 || f.limit != 0 || !strings.Contains(out, "Move APP-30 to doing.") {
+	if code != 0 || f.limit != 0 || !strings.Contains(out, "Ready to move to doing.") {
 		t.Fatalf("%d %s", code, out)
 	}
 	code, _, err = invoke(t, f, "status", "APP-404")
@@ -186,7 +186,7 @@ func TestMeMatchesPRAuthorsAndRequestedReviewers(t *testing.T) {
 			tk.Records = map[string][]workfile.Record{"github": {{ID: "api#1", People: []string{"example-bob"}, Facts: facts}}}
 			f := &fakeSource{tickets: []workfile.Ticket{tk}}
 			code, out, _ := invoke(t, f, "status", "--me")
-			if code != 1 || !strings.Contains(out, "ALSO INVOLVES YOU") || !strings.Contains(out, "api #1") {
+			if code != 1 || !strings.Contains(out, "APP-42") || !strings.Contains(out, "Only tickets involving you.") {
 				t.Fatalf("%d %s", code, out)
 			}
 		})
@@ -210,7 +210,7 @@ func TestUnmappedTicketIsAnError(t *testing.T) {
 	tk := fixtureTicket("APP-42", "", "")
 	tk.Error = "Unmapped Jira status"
 	code, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "health")
-	if code != 2 || !strings.Contains(out, "CANNOT CHECK") {
+	if code != 2 || !strings.Contains(out, "1 more could not be checked") {
 		t.Fatalf("%d %s", code, out)
 	}
 }
@@ -253,21 +253,24 @@ func boardFixture() *fakeSource {
 	return &fakeSource{tickets: []workfile.Ticket{fixtureTicket("APP-61", "todo", long), doing, review, fixtureTicket("APP-70", "done", "short")}}
 }
 
-func TestStatusBoardIsInPipelineOrder(t *testing.T) {
+func TestStatusGroupsTicketsByWhatToDo(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	_, out, _ := invoke(t, boardFixture(), "status")
 	last := -1
-	for _, want := range []string{"SUMMARY", "PIPELINE", "TODO · 1 ticket", "DOING · 1 ticket", "REVIEW · 1 ticket", "DONE · 1 ticket"} {
+	for _, want := range []string{"1 ticket can move on, 2 need work and 1 is out of policy.", "Ready to move", "APP-61", "Needs work", "Link at least 1 PR", "APP-57", "Out of policy", "APP-70"} {
 		at := strings.Index(out, want)
 		if at < 0 || at < last {
 			t.Fatalf("%q missing or out of order\n%s", want, out)
 		}
 		last = at
 	}
-	for _, want := range []string{"25%", "OUT OF POLICY", "→ doing", "refinement: description is", "code review: api#31"} {
+	for _, want := range []string{"todo → doing", "example-team/api #31 · review", "Expand the description to at least 100 characters · refinement"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "include APP-57") {
+		t.Fatalf("a shared fix is worded for every ticket, not one\n%s", out)
 	}
 	_, out, _ = invoke(t, boardFixture(), "status", "--failing")
 	if strings.Contains(out, "APP-61") {
@@ -275,27 +278,25 @@ func TestStatusBoardIsInPipelineOrder(t *testing.T) {
 	}
 }
 
-func TestMeBoardIsAKanbanOfAssignedWork(t *testing.T) {
+func TestStatusForOnePersonListsOnlyTheirWork(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	t.Setenv("WORKFILE_CONFIG_FILE", t.TempDir()+"/absent.yml")
 	f := boardFixture()
 	finished := fixtureTicket("APP-99", "done", strings.Repeat("x", 120))
 	finished.Assignee = "example-bob-account-id"
-	finished.Title = "Already shipped"
+	finished.Records = map[string][]workfile.Record{"github": {{ID: "api#9", Repository: "example-team/api", URL: "https://github.com/example-team/api/pull/9",
+		Facts: workfile.Facts{"checks": "success", "state": "merged", "author": "example-alice", "review_requests": []string{}, "approvals": []workfile.Actor{{ID: "example-alice", Value: "example-alice"}}, "labels": []string{"low-risk"}}}}}
 	f.tickets = append(f.tickets, finished)
 	_, out, _ := invoke(t, f, "status", "--user", "bob")
-	for _, want := range []string{"involving Bob", "1 ticket assigned to Bob", "✗ 1 need work", "doing 1", "DOING · 1 ticket", "APP-57", "→ review", "On the ticket", "Link at least 1 PR", "ALSO INVOLVES YOU", "example-team/api #31", "asked to review"} {
+	for _, want := range []string{"Only tickets involving Bob.", "APP-57", "APP-42", "1 done ticket is not shown."} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q\n%s", want, out)
 		}
 	}
-	for _, unwanted := range []string{"APP-99", "DONE", "YOUR NEXT ACTIONS", "╭"} {
+	for _, unwanted := range []string{"APP-61", "APP-99"} {
 		if strings.Contains(out, unwanted) {
-			t.Fatalf("%q does not belong in the lane view\n%s", unwanted, out)
+			t.Fatalf("%q is not Bob's work in progress\n%s", unwanted, out)
 		}
-	}
-	if strings.Index(out, "DOING") > strings.Index(out, "ALSO INVOLVES YOU") {
-		t.Fatalf("assigned work comes before involvement\n%s", out)
 	}
 }
 
@@ -376,29 +377,26 @@ func TestBoardsFitNarrowTerminals(t *testing.T) {
 	}
 }
 
-func TestMeGroupsFixesByPRLikeTheTicketView(t *testing.T) {
+func TestStatusWordsFixesLikeTheTicketView(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	t.Setenv("WORKFILE_CONFIG_FILE", t.TempDir()+"/absent.yml")
 	pr := func(id string, n int) workfile.Record {
 		return workfile.Record{ID: id, Repository: "example-team/api", URL: fmt.Sprintf("https://github.com/example-team/api/pull/%d", n), People: []string{"example-bob"},
 			Facts: workfile.Facts{"checks": "success", "state": "open", "author": "example-bob", "review_requests": []string{}, "approvals": []workfile.Actor{}, "labels": []string{}}}
 	}
-	tk := fixtureTicket("APP-57", "review", "short")
+	tk := fixtureTicket("APP-57", "done", "short")
 	tk.Title, tk.Assignee = "Improve account settings", "example-bob-account-id"
 	tk.Records = map[string][]workfile.Record{"github": {pr("api#31", 31), pr("api#18", 18)}}
-	_, me, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status", "--user", "bob")
+	_, board, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status")
 	_, single, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status", "APP-57")
-	for _, heading := range []string{"On the ticket", "example-team/api #31", "example-team/api #18"} {
-		if strings.Count(me, "\n  ▌    "+heading+"\n") != 1 {
-			t.Fatalf("%q must head its fixes exactly once\n%s", heading, me)
+	for _, fix := range []string{"Expand the description to at least 100 characters", "Get at least 1 approval"} {
+		if !strings.Contains(board, fix) || !strings.Contains(single, fix) {
+			t.Fatalf("both views should word %q the same\nboard:\n%s\nsingle:\n%s", fix, board, single)
 		}
 	}
-	for _, fix := range []string{"Expand the description to at least 100 characters — refinement.", "Get at least 1 approval — code review."} {
-		if !strings.Contains(me, fix) || !strings.Contains(single, fix) {
-			t.Fatalf("both views should word %q the same\nme:\n%s\nsingle:\n%s", fix, me, single)
+	for _, pr := range []string{"example-team/api #31", "example-team/api #18"} {
+		if strings.Count(board, "Get at least 1 approval · "+pr+" · code review") != 1 {
+			t.Fatalf("%q needs its own approval, named once\n%s", pr, board)
 		}
-	}
-	if strings.Contains(me, "✗ refinement") || strings.Contains(me, "description is") {
-		t.Fatalf("fixes replace the old per-gate requirement list\n%s", me)
 	}
 }

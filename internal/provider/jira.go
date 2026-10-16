@@ -100,52 +100,35 @@ func (c *Client) Tickets(ctx context.Context, keys []string, limit int) ([]workf
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	condition, order := splitScope(p.Scope)
+	if c.Workspace.Settings.OnlyMine {
+		assignee, err := c.Workspace.MyJiraAssignee()
+		if err != nil {
+			return nil, err
+		}
+		condition = "(" + condition + ") AND assignee = " + assignee
+	}
 	jql := "(" + condition + ")"
 	if len(keys) > 0 {
-		quoted := make([]string, len(keys))
-		for i, key := range keys {
-			data, _ := json.Marshal(key)
-			quoted[i] = string(data)
-		}
-		jql += " AND key in (" + strings.Join(quoted, ", ") + ")"
+		// Asking for a ticket by key is an explicit request, so the board scope
+		// does not hide it. Listings below still use the scope.
+		jql = "key in (" + quotedKeys(keys) + ")"
 	}
-	jql += " ORDER BY " + order
-	var issues []jiraIssue
-	seen := map[string]bool{}
-	token := ""
-	for {
-		pageSize := 100
-		if limit > 0 {
-			pageSize = min(pageSize, limit-len(issues))
+	issues, err := c.search(ctx, name, base, auth, jql+" ORDER BY "+order, issueFields, limit)
+	if err != nil {
+		return nil, err
+	}
+	var inScope map[string]bool
+	if len(keys) > 0 && len(issues) > 0 {
+		// A second, scoped search tells us which named tickets the board would
+		// have hidden, so the report can say why they are shown.
+		scoped, err := c.search(ctx, name, base, auth, "("+condition+") AND key in ("+quotedKeys(keys)+")", []string{"summary"}, 0)
+		if err != nil {
+			return nil, err
 		}
-		body := map[string]any{"jql": jql, "fields": []string{"summary", "description", "labels", "status", "assignee", "issuetype"}, "maxResults": pageSize}
-		if token != "" {
-			body["nextPageToken"] = token
+		inScope = map[string]bool{}
+		for _, issue := range scoped {
+			inScope[issue.Key] = true
 		}
-		var page struct {
-			Issues        []jiraIssue
-			NextPageToken string
-			IsLast        bool
-		}
-		if err := c.request(ctx, "POST", base+"/rest/api/3/search/jql", auth, body, &page); err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
-		if page.Issues == nil {
-			return nil, errors.New("Jira search response is missing issues")
-		}
-		issues = append(issues, page.Issues...)
-		if limit > 0 && len(issues) >= limit {
-			issues = issues[:limit]
-			break
-		}
-		if page.IsLast || page.NextPageToken == "" {
-			break
-		}
-		token = page.NextPageToken
-		if seen[token] {
-			return nil, errors.New("Jira repeated a search page token")
-		}
-		seen[token] = true
 	}
 	var adders map[string]map[string]workfile.Actor
 	if c.needsLabelHistory() {
@@ -160,7 +143,7 @@ func (c *Client) Tickets(ctx context.Context, keys []string, limit int) ([]workf
 		if issue.Key == "" || issue.ID == "" {
 			return nil, errors.New("Jira returned a ticket without an ID or key")
 		}
-		t := workfile.Ticket{Key: issue.Key, Title: f.Summary, URL: "https://" + p.Site + "/browse/" + url.PathEscape(issue.Key), Assignee: f.Assignee.AccountID}
+		t := workfile.Ticket{Key: issue.Key, Title: f.Summary, URL: "https://" + p.Site + "/browse/" + url.PathEscape(issue.Key), Assignee: f.Assignee.AccountID, OutOfScope: inScope != nil && !inScope[issue.Key]}
 		for state, names := range p.Statuses {
 			for _, status := range names {
 				if strings.EqualFold(status, f.Status.Name) {
@@ -284,4 +267,57 @@ func (c *Client) labelAdders(ctx context.Context, base, auth string, issues []ji
 		}
 	}
 	return result, nil
+}
+
+var issueFields = []string{"summary", "description", "labels", "status", "assignee", "issuetype"}
+
+func quotedKeys(keys []string) string {
+	quoted := make([]string, len(keys))
+	for i, key := range keys {
+		data, _ := json.Marshal(key)
+		quoted[i] = string(data)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// search runs a JQL query and follows its pages, stopping at limit when set.
+func (c *Client) search(ctx context.Context, name, base, auth, jql string, fields []string, limit int) ([]jiraIssue, error) {
+	var issues []jiraIssue
+	seen := map[string]bool{}
+	token := ""
+	for {
+		pageSize := 100
+		if limit > 0 {
+			pageSize = min(pageSize, limit-len(issues))
+		}
+		body := map[string]any{"jql": jql, "fields": fields, "maxResults": pageSize}
+		if token != "" {
+			body["nextPageToken"] = token
+		}
+		var page struct {
+			Issues        []jiraIssue
+			NextPageToken string
+			IsLast        bool
+		}
+		if err := c.request(ctx, "POST", base+"/rest/api/3/search/jql", auth, body, &page); err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		if page.Issues == nil {
+			return nil, errors.New("Jira search response is missing issues")
+		}
+		issues = append(issues, page.Issues...)
+		if limit > 0 && len(issues) >= limit {
+			issues = issues[:limit]
+			break
+		}
+		if page.IsLast || page.NextPageToken == "" {
+			break
+		}
+		token = page.NextPageToken
+		if seen[token] {
+			return nil, errors.New("Jira repeated a search page token")
+		}
+		seen[token] = true
+	}
+	return issues, nil
 }

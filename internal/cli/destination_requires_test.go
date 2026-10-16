@@ -21,10 +21,10 @@ func TestDestinationRequirementsReachStatusJSONAndHealth(t *testing.T) {
 		t.Fatalf("wrong conditional gates: %+v", routes)
 	}
 	_, out, _ = invoke(t, f, "status", "APP-42", "--dir", "../../example/destination-requires")
-	if !strings.Contains(out, "Move APP-42 to done.") {
+	if !strings.Contains(out, "Ready to move to done.") {
 		t.Fatalf("shortcut not actionable: %s", out)
 	}
-	pipeline, _, _ := strings.Cut(out, "PULL REQUESTS")
+	pipeline, _, _ := strings.Cut(out[strings.Index(out, "WHERE IT IS"):], "Ready to move")
 	for _, state := range []string{"todo", "ready", "done"} {
 		if strings.Count(pipeline, state) != 1 {
 			t.Fatalf("%s repeated in pipeline: %s", state, pipeline)

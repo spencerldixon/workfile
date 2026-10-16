@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -19,12 +20,62 @@ func PersonalPath(file string) string {
 	if path := os.Getenv(key); path != "" {
 		return path
 	}
+	return filepath.Join(PersonalDir(), file)
+}
+
+// PersonalDir is the person's own Workfile folder, outside every repository.
+func PersonalDir() string {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".config")
 	}
-	return filepath.Join(dir, "workfile", file)
+	return filepath.Join(dir, "workfile")
+}
+
+// WorkspaceSettings are the person's own settings for one workspace, kept in
+// ~/.config/workfile/<workspace>/config.yml beside their private automations.
+type WorkspaceSettings struct {
+	// OnlyMine limits ticket listings to tickets assigned to the person.
+	OnlyMine bool `yaml:"only_mine"`
+}
+
+func WorkspaceSettingsPath(name string) string {
+	return filepath.Join(PersonalDir(), name, "config.yml")
+}
+
+// ReadWorkspaceSettings reads the settings for a named workspace. A workspace
+// without a name, or without the file, has the defaults.
+func ReadWorkspaceSettings(name string) (WorkspaceSettings, error) {
+	var s WorkspaceSettings
+	if name == "" {
+		return s, nil
+	}
+	err := ReadYAML(WorkspaceSettingsPath(name), &s, true)
+	return s, err
+}
+
+// MyJiraAssignee is the JQL value for the person's own Jira account: me.jira
+// from config.yml when set, otherwise whoever owns the token.
+func (w *Workspace) MyJiraAssignee() (string, error) {
+	me, err := Me()
+	if err != nil {
+		return "", err
+	}
+	id := me[w.Policy.Tracker]
+	if id == "" {
+		id = me["jira"]
+	}
+	if id == "" {
+		return "currentUser()", nil
+	}
+	return strconv.Quote(id), nil
+}
+
+// PrivateAutomationsPath is where a person keeps private automations for the
+// workspace with this name.
+func PrivateAutomationsPath(name string) string {
+	return filepath.Join(PersonalDir(), name, "automations.yml")
 }
 
 type Credentials struct {
@@ -101,12 +152,40 @@ func (c *Credentials) read() error {
 	return nil
 }
 
-func Me() (map[string]string, error) {
+// Personal holds the person's own settings from config.yml.
+type Personal struct {
+	// Me overrides the identity read from each token, by connection name or
+	// provider type.
+	Me map[string]string
+	// Person is the person's name in people.yml, which picks their shared
+	// automations file. Set as me.person.
+	Person string
+	// Agent is the command that receives an automation's prompt as its last
+	// argument, such as [claude, -p].
+	Agent []string
+}
+
+func ReadPersonal() (Personal, error) {
 	var config struct {
-		Me map[string]string `yaml:"me"`
+		Me    map[string]string `yaml:"me"`
+		Agent []string          `yaml:"agent"`
 	}
-	if err := ReadYAML(PersonalPath("config.yml"), &config, true); err != nil {
-		return nil, err
+	path := PersonalPath("config.yml")
+	if err := ReadYAML(path, &config, true); err != nil {
+		return Personal{}, err
 	}
-	return config.Me, nil
+	p := Personal{Me: config.Me, Agent: config.Agent}
+	if person, ok := p.Me["person"]; ok {
+		p.Person = person
+		delete(p.Me, "person")
+	}
+	if len(p.Agent) > 0 && strings.TrimSpace(p.Agent[0]) == "" {
+		return p, fmt.Errorf("%s: agent must start with a program, such as [claude, -p]", path)
+	}
+	return p, nil
+}
+
+func Me() (map[string]string, error) {
+	p, err := ReadPersonal()
+	return p.Me, err
 }

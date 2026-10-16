@@ -19,6 +19,8 @@ func factName(fact string) string {
 		return "draft status"
 	case "checks":
 		return "check status"
+	case "merge_queue":
+		return "merge queue membership"
 	case "fresh_approvals":
 		return "approvals of the current commit"
 	default:
@@ -27,7 +29,7 @@ func factName(fact string) string {
 }
 
 func textFact(fact string) bool {
-	return slices.Contains([]string{"summary", "description", "type", "project", "assignee", "state", "author", "draft", "checks"}, fact)
+	return slices.Contains([]string{"summary", "description", "type", "project", "assignee", "state", "author", "draft", "checks", "merge_queue"}, fact)
 }
 
 func singular(fact string) string {
@@ -168,7 +170,7 @@ func (w *Workspace) nextAction(rule Rule, ticket Ticket, record Record) string {
 		}
 	}
 	if e.Fact == "prs" && strings.HasPrefix(action, "Link ") {
-		action += "; include " + ticket.Key + " in the PR title or branch name"
+		action += "; include " + ticket.Key + " in the PR title"
 	}
 	return action + "."
 }

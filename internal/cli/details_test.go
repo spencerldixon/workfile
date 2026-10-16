@@ -143,7 +143,7 @@ func TestOverviewExplainsEveryUnmetRequirementWithoutFlags(t *testing.T) {
 	if code != 1 {
 		t.Fatal(code)
 	}
-	for _, reason := range []string{"description is", "must not include needs-more-information", "from Alice"} {
+	for _, reason := range []string{"Expand the description", "needs-more-information", "from Alice"} {
 		if !strings.Contains(out, reason) {
 			t.Errorf("hidden reason: %s", reason)
 		}
@@ -211,15 +211,15 @@ func TestTicketViewListsEachPROnceAndNeverRepeatsStates(t *testing.T) {
 		var out, errOut bytes.Buffer
 		run(context.Background(), []string{"status", "APP-42", "--dir", dir}, &out, &errOut, "t", func(*workfile.Workspace) source { return f })
 		text := out.String()
-		steps := text[strings.Index(text, "Next steps"):]
+		steps := text[strings.Index(text, "NEEDS ATTENTION"):strings.Index(text, "NEXT MOVES")]
 		for _, heading := range []string{"APP-42", "example-team/api #31", "example-team/api #18"} {
-			if strings.Count(steps, "\n  ▌    "+heading+"\n") != 1 {
+			if strings.Count(steps, "\n  "+heading+"\n") != 1 {
 				t.Fatalf("%s: %q must head its fixes exactly once\n%s", dir, heading, steps)
 			}
 		}
-		pipeline := text[:strings.Index(text, "PULL REQUESTS")]
-		if strings.Count(pipeline, "doing") != 1 {
-			t.Fatalf("%s: pipeline must show each state once\n%s", dir, pipeline)
+		track, _, _ := strings.Cut(text[strings.Index(text, "WHERE IT IS"):], "\n\n")
+		if strings.Count(track, "doing") != 1 {
+			t.Fatalf("%s: the track must show each state once\n%s", dir, track)
 		}
 	}
 }

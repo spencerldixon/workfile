@@ -13,19 +13,18 @@ personal credentials file. Workfile refuses secrets written straight into
 ```yaml
 github:
   org: example-team
-  lookback: 90d
   auth:
     token: ${EXAMPLE_GITHUB_TOKEN}
 ```
 
 ## GitHub.com
 
-Use a GitHub personal access token that can read the repositories you care
-about. A classic token with the `repo` and `read:org` scopes works. If your
-organisation uses single sign-on, authorise the token for it. If you use a
-fine-grained token, choose your organisation and repositories. Give it read
-access to pull requests, issue labels, repository details, commit statuses,
-checks, and the organisation data the search needs. `wf test github` checks the fields that Workfile reads.
+Use a classic GitHub personal access token with the `repo` and `read:org`
+scopes. `wf setup` opens GitHub's new-token page with both already selected.
+Workfile only reads, but classic tokens have no read-only choice for
+repositories, so `repo` is the smallest scope that works. If your organisation
+uses single sign-on, choose Configure SSO next to the token and authorise it.
+Fine-grained tokens are not recommended. `wf test github` checks the fields that Workfile reads.
 These guides help:
 [GitHub's GraphQL guide](https://docs.github.com/en/graphql/guides/forming-calls-with-graphql)
 and [token setup](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
@@ -33,23 +32,26 @@ and [token setup](https://docs.github.com/en/authentication/keeping-your-account
 | Setting | What it means |
 | --- | --- |
 | `org` | Required. Your GitHub organisation name. |
-| `lookback` | How many days back to look, such as `90d`. The default is `90d`. |
 | `auth.token` | The name of the credential that holds your GitHub token. |
 
-Workfile lists the repositories you can see that are not archived, and searches
-their PRs. It works on up to six repositories at once. It includes open PRs and
-merged PRs that were updated within the lookback. PRs closed without merging are
-left out. Searches read titles, branch names and descriptions first. Workfile
-then reads labels, reviews, draft status and current-commit check status only
-for linked PRs, with up to six PRs read at once.
+Workfile searches your organisation for PRs that mention the tickets being
+checked, six tickets per search, with up to six searches at once. The number of
+searches follows the number of tickets, not the number of repositories, so
+`wf status APP-42` makes one search. PRs of any age are found. It includes open
+and merged PRs in repositories that are not archived. PRs closed without
+merging are left out. Workfile then reads labels, reviews, draft status, merge
+queue membership and current-commit check status only for linked PRs, with up
+to six PRs read at once.
 
-A PR is linked to a ticket when the PR **title or branch name** contains the
-ticket key. Case does not matter, and the whole key must match, so `APP-12` does
-not match `APP-123`. An explicit `https://example-team.atlassian.net/browse/APP-42` link in
-the PR description also links the ticket, but only when the host is your
+A PR is linked to a ticket when the PR **title** contains the ticket key. Case
+does not matter, and the whole key must match, so `APP-12` does not match
+`APP-123`. An explicit `https://example-team.atlassian.net/browse/APP-42` link
+in the PR description also links the ticket, but only when the host is your
 configured Jira site. Bare ticket mentions in descriptions do not link work.
-Commit messages and Jira's development panel are not used. One PR can link to
-several tickets, and repeated links do not duplicate it.
+GitHub search does not read branch names, so a PR that names the ticket only in
+its branch is not found: put the key in the title. Commit messages and Jira's
+development panel are not used. One PR can link to several tickets, and
+repeated links do not duplicate it.
 
 ### PR attributes
 
@@ -61,7 +63,8 @@ several tickets, and repeated links do not duplicate it.
 | `github.fresh_approvals` | Those approvers whose review commit matches the PR's current head commit. Works with `by`. |
 | `github.draft` | Text `true` or `false`: whether the PR is a draft. |
 | `github.checks` | Current commit's combined check and status result: `success`, `pending`, `failure`, or `none`. |
-| `github.state` | `open` or `merged`. |
+| `github.state` | `open` or `merged`. A queued PR is still `open`. |
+| `github.merge_queue` | `queued` when the PR has a merge queue entry; otherwise `none`. Missing membership is unknown. |
 | `github.author` | The login of the person who wrote the PR. |
 | `github.review_requests` | The logins of people asked by name to review. |
 
@@ -69,6 +72,21 @@ Approvals count each reviewer once. If a reviewer's latest opinion asks for
 changes or was dismissed, it is not an approval. A comment-only review does not
 cancel an earlier approval. With `by`, the names must be people whose account
 for this connection is their GitHub login.
+
+### Merge queues
+
+A merge queue holds approved changes while GitHub checks whether they can merge
+safely together. Workfile reads the linked PR's current queue membership. Queued
+PRs show **Queued for merge** and **Wait for merge**, instead of an instruction to
+merge them again. Failing gates or unreadable evidence remain visible, even when
+GitHub has queued the PR.
+
+Queue membership never counts as merged, an approval, or a passing check. Existing
+`github.state == merged` rules still fail until GitHub reports the PR as merged.
+You can explicitly require membership with `github.merge_queue == queued`.
+Workfile does not enqueue, dequeue or merge anything. It reads membership, not
+queue position or the checks on GitHub's temporary merge-group commit; `checks`
+still describes the PR's current commit.
 
 ### CI in the code review gate
 
@@ -124,15 +142,17 @@ Workfile never treats a failed read as an empty list.
 These rules are opt-in. GitHub's own merge restrictions still apply. Workfile
 never merges a PR or moves a ticket.
 
-Repository lists, searches, labels, reviews and review requests all come in
-pages, and Workfile reads every page. GitHub stops a search at 1,000 results. If
-your search hits that limit, the command fails and asks you to shorten
-`lookback`. It will never show a partial result as if it were healthy.
+Searches, labels, reviews and review requests all come in pages, and Workfile
+reads every page. GitHub stops a search at 1,000 results. If one search hits
+that limit, the command fails rather than show a partial result as if it were
+healthy.
 
-The lookback and what your token can see always limit a report. A PR older than
-the lookback, or in an archived or hidden repository, is never linked. Set the
-lookback long enough to cover the tickets you check. A passing token test cannot
-tell you about repositories the token is not allowed to see.
+What your token can see always limits a report. A PR in an archived or hidden
+repository is never linked. A passing token test cannot tell you about
+repositories the token is not allowed to see.
+
+Older `providers.yml` files may still have a `lookback` setting. It is no longer
+used, and you can delete it.
 
 ## When something goes wrong
 

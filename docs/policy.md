@@ -206,10 +206,11 @@ evidence is unknown.
 | `excludes` | The list does not have this item. | `jira.labels excludes blocked` |
 | `matches` | Text, or a list item, fits a pattern. | `github.labels matches "*-risk"` |
 
-Patterns ignore upper and lower case. `*` matches any text, `?` matches one
-character, and `[abc]` matches one character from the set. Other text
-comparisons care about case. Put text with spaces or pattern symbols in quotes,
-like `"Spike: *"`.
+Text comparisons ignore upper and lower case, so `jira.type == story` matches
+`Story`, and `github.labels contains needs-qa` matches `Needs-QA`. In patterns,
+`*` matches any text, `?` matches one character, and `[abc]` matches one
+character from the set. Put text with spaces or pattern symbols in quotes, like
+`"Spike: *"`.
 
 Use several rules to mean "and". Use `contains_any` for "or" within one list.
 You cannot write free-form true/false logic, compare one attribute with another,
@@ -260,7 +261,6 @@ You can connect more than one GitHub organisation:
 github_client:
   provider: github
   org: example-client
-  lookback: 90d
   auth:
     token: ${CLIENT_GITHUB_TOKEN}
 ```

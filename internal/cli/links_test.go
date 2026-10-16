@@ -32,7 +32,7 @@ func TestLinksAcrossViewsAndInstances(t *testing.T) {
 			if o.gate != "" {
 				shown = []workfile.Assessment{w.Assess(done)}
 			}
-			v.report(w, shown, o, map[string]string{"jira": ticket.Assignee, "github_other": "example-bob"})
+			v.report(w, shown, o)
 			text := out.String()
 			if !strings.Contains(text, "\x1b]8;;"+ticket.URL+"\x1b\\") {
 				t.Fatalf("missing ticket hyperlink for %+v at %d:\n%s", o, width, text)

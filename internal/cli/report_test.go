@@ -39,9 +39,6 @@ func TestJSONReportSchemaAndPlainSafety(t *testing.T) {
 		if _, err := time.Parse(time.RFC3339Nano, r.ObservedAt); err != nil {
 			t.Fatal(err)
 		}
-		if r.Coverage.Scope == "" || len(r.Coverage.Providers) != 2 || r.Coverage.Boundary == "" || r.Coverage.Sample != (command == "status") {
-			t.Fatalf("missing coverage: %+v", r.Coverage)
-		}
 		ticket := r.Tickets[0]
 		if ticket.Title != "Settings  " || len(ticket.Routes) == 0 || len(ticket.Unmet) != 2 {
 			t.Fatalf("bad ticket: %+v", ticket)
@@ -84,14 +81,14 @@ func TestJSONProviderFailureCannotProduceReadiness(t *testing.T) {
 	}
 }
 
-func TestEvidenceAndCoverageFitNarrowPlainTerminals(t *testing.T) {
+func TestEvidenceFitsNarrowPlainTerminals(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	tk := fixtureTicket("APP-42", "review", strings.Repeat("x", 120))
 	tk.Records = map[string][]workfile.Record{"github": {{ID: "api#1", Facts: workfile.Facts{"checks": "success", "labels": []string{}, "approvals": []workfile.Actor{}}}}}
 	for _, width := range []int{40, 60} {
 		t.Setenv("COLUMNS", fmt.Sprint(width))
 		_, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status", "APP-42", "--evidence")
-		for _, want := range []string{"COVERAGE", "EVIDENCE", "No approvals", "token", "90d"} {
+		for _, want := range []string{"EVIDENCE", "No approvals"} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("missing %q: %s", want, out)
 			}

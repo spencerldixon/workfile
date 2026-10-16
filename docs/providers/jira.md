@@ -39,7 +39,8 @@ and [REST authentication](https://developer.atlassian.com/cloud/jira/platform/ba
 | Setting | What it means |
 | --- | --- |
 | `site` | Required. Your Jira Cloud address, such as `example-team.atlassian.net`. |
-| `scope` | Required. A JQL search that picks the tickets to check. Used by health, status, and when you name tickets. |
+| `scope` | Required. A JQL search that picks the tickets to check. Used by `health` and `status` listings. A ticket you name, such as `wf status APP-42`, ignores it, so sub-tasks and parked tickets can still be looked up. |
+| `default_project` | Optional. A Jira project key such as `APP`. It lets you name a ticket by number alone: `wf status 42` means `APP-42`. Without it, a bare number is an error. |
 | `statuses` | Required. Maps each stage in your policy to one or more Jira status names. Case does not matter. |
 | `auth.email` | The name of the credential that holds your account email. |
 | `auth.token` | The name of the credential that holds your Jira API token. |

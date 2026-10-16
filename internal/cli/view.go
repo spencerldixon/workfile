@@ -146,7 +146,7 @@ func group(a workfile.Assessment) int {
 	return 4
 }
 
-func (v view) report(w *workfile.Workspace, all []workfile.Assessment, o options, who map[string]string) {
+func (v view) report(w *workfile.Workspace, all []workfile.Assessment, o options) {
 	if o.command == "health" {
 		if o.listing() {
 			v.healthList(w, all, o)
@@ -155,7 +155,7 @@ func (v view) report(w *workfile.Workspace, all []workfile.Assessment, o options
 			v.wrap("No tickets match this selection.", "  ")
 			v.line("")
 		} else {
-			v.healthSummary(w, all, o)
+			fmt.Fprint(v.out, newHealthScreen(v, w, all, o).printed())
 		}
 		return
 	}
@@ -163,19 +163,10 @@ func (v view) report(w *workfile.Workspace, all []workfile.Assessment, o options
 		shown := slices.DeleteFunc(slices.Clone(all), func(a workfile.Assessment) bool { return o.failing && group(a) >= 3 })
 		if len(shown) > 0 {
 			for _, a := range shown {
-				v.details(w, a)
+				fmt.Fprint(v.out, newTicketModel(v, w, a).render())
 			}
 			return
 		}
 	}
-	switch {
-	case len(all) == 0:
-		v.heading("status")
-		v.wrap("No tickets match this selection.", "  ")
-		v.line("")
-	case o.me || o.user != "":
-		v.meBoard(w, all, o, who)
-	default:
-		v.statusBoard(w, all, o)
-	}
+	fmt.Fprint(v.out, newStatusScreen(v, w, all, o).printed())
 }

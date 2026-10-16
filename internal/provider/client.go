@@ -194,36 +194,28 @@ func (c *Client) Test(ctx context.Context, name string) (string, error) {
 	if len(repos) == 0 {
 		return identity + " · connected; no visible active repositories", nil
 	}
-	_, _, err = c.repositoryPRs(ctx, p, token, repos[0], true)
+	_, err = c.searchPRs(ctx, token, fmt.Sprintf("org:%s is:pr archived:false", p.Org), true)
 	return fmt.Sprintf("%s · %s · %d visible active repositories", identity, p.Org, len(repos)), err
 }
 
 func (c *Client) Records(ctx context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error) {
-	var warnings []string
 	if len(tickets) == 0 {
-		return tickets, warnings, nil
+		return tickets, nil, nil
 	}
 	for _, name := range workfile.SortedKeys(c.Workspace.Providers) {
 		if name == c.Workspace.Policy.Tracker {
 			continue
 		}
-		linked, notes, err := c.githubRecords(ctx, name, tickets)
+		linked, err := c.githubRecords(ctx, name, tickets)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", name, err)
 		}
-		warnings = append(warnings, notes...)
 		for i := range tickets {
 			if tickets[i].Records == nil {
 				tickets[i].Records = map[string][]workfile.Record{}
 			}
 			tickets[i].Records[name] = linked[strings.ToUpper(tickets[i].Key)]
-			if len(notes) > 0 {
-				if tickets[i].Unavailable == nil {
-					tickets[i].Unavailable = map[string]string{}
-				}
-				tickets[i].Unavailable[name+".prs"] = "No visible active repositories; PR evidence cannot be checked"
-			}
 		}
 	}
-	return tickets, warnings, nil
+	return tickets, nil, nil
 }

@@ -47,7 +47,7 @@ func requestBody(t *testing.T, r *http.Request) map[string]any {
 }
 
 func TestJiraPaginationScopeAndLabelHistory(t *testing.T) {
-	searchCalls, historyCalls := 0, 0
+	searchCalls, scopedCalls, historyCalls := 0, 0, 0
 	c := client(t, func(r *http.Request) (int, string) {
 		if r.URL.Path == "/_edge/tenant_info" {
 			if r.Header.Get("Authorization") != "" {
@@ -65,10 +65,18 @@ func TestJiraPaginationScopeAndLabelHistory(t *testing.T) {
 		body := requestBody(t, r)
 		switch r.URL.Path {
 		case "/ex/jira/cloud-example/rest/api/3/search/jql":
-			searchCalls++
 			jql := body["jql"].(string)
-			if !strings.Contains(jql, `AND key in ("APP-1", "APP-2") ORDER BY updated DESC`) {
-				t.Errorf("wrong query %s", jql)
+			if strings.Contains(jql, "project = APP") {
+				// The scoped check that finds named tickets the board would hide.
+				scopedCalls++
+				if !strings.HasSuffix(jql, `AND key in ("APP-1", "APP-2")`) {
+					t.Errorf("wrong scoped query %s", jql)
+				}
+				return 200, `{"issues":[{"id":"1","key":"APP-1","fields":{}}],"isLast":true}`
+			}
+			searchCalls++
+			if jql != `key in ("APP-1", "APP-2") ORDER BY updated DESC` {
+				t.Errorf("a named ticket must skip the scope, got %s", jql)
 			}
 			if strings.Contains(jql, "status in") {
 				t.Error("status must include finished and unmapped stages")
@@ -98,14 +106,37 @@ func TestJiraPaginationScopeAndLabelHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if searchCalls != 2 || historyCalls != 2 || len(tickets) != 2 {
-		t.Fatalf("calls %d/%d, tickets %d", searchCalls, historyCalls, len(tickets))
+	if searchCalls != 2 || scopedCalls != 1 || historyCalls != 2 || len(tickets) != 2 {
+		t.Fatalf("calls %d/%d/%d, tickets %d", searchCalls, scopedCalls, historyCalls, len(tickets))
+	}
+	if tickets[0].OutOfScope || !tickets[1].OutOfScope {
+		t.Fatalf("out of scope flags %v %v", tickets[0].OutOfScope, tickets[1].OutOfScope)
 	}
 	if tickets[0].State != "review" || tickets[0].Assignee != "bob" || tickets[1].Error == "" {
 		t.Fatalf("bad mapping %+v", tickets)
 	}
 	if actor := tickets[0].Facts["labels"].([]workfile.Actor)[0]; actor.ID != "alice" {
 		t.Fatalf("wrong latest label actor %+v", actor)
+	}
+}
+
+func TestJiraOnlyMineNarrowsListings(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var jql string
+	c := client(t, func(r *http.Request) (int, string) {
+		if r.URL.Path == "/_edge/tenant_info" {
+			return 200, `{"cloudId":"cloud-example"}`
+		}
+		jql = requestBody(t, r)["jql"].(string)
+		return 200, `{"issues":[],"isLast":true}`
+	})
+	condition, order := splitScope(c.Workspace.Providers["jira"].Scope)
+	c.Workspace.Settings.OnlyMine = true
+	if _, err := c.Tickets(context.Background(), nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if want := "((" + condition + ") AND assignee = currentUser()) ORDER BY " + order; jql != want {
+		t.Fatalf("got %s\nwant %s", jql, want)
 	}
 }
 
@@ -155,19 +186,13 @@ func TestGitHubPaginationLinkingAndApprovals(t *testing.T) {
 		switch {
 		case strings.Contains(query, "organization(login"):
 			repoCalls++
-			if repoCalls == 1 {
-				return 200, `{"data":{"organization":{"repositories":{"nodes":[{"name":"api","isArchived":false},{"name":"archive","isArchived":true}],"pageInfo":{"hasNextPage":true,"endCursor":"repos2"}}}}}`
-			}
-			if variables["after"] != "repos2" {
-				t.Error("missing repository cursor")
-			}
-			return 200, `{"data":{"organization":{"repositories":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}`
+			t.Error("a report must not list the organisation's repositories")
 		case strings.Contains(query, "search(query"):
 			searchCalls++
 			if strings.Contains(query, "labels(") || strings.Contains(query, "latestOpinionatedReviews(") || strings.Contains(query, "reviewRequests(") {
 				t.Error("discovery fetched expensive PR facts")
 			}
-			if !strings.Contains(variables["q"].(string), "repo:example-team/api is:pr updated:>=2026-07-03") {
+			if variables["q"] != `org:example-team is:pr archived:false in:title,body "APP-12"` {
 				t.Errorf("wrong search %v", variables)
 			}
 			if searchCalls == 1 {
@@ -198,7 +223,7 @@ func TestGitHubPaginationLinkingAndApprovals(t *testing.T) {
 		t.Fatal(err)
 	}
 	records := items[0].Records["github"]
-	if repoCalls != 2 || searchCalls != 2 || detailCalls != 2 || len(notes) != 0 || len(records) != 1 {
+	if repoCalls != 0 || searchCalls != 2 || detailCalls != 2 || len(notes) != 0 || len(records) != 1 {
 		t.Fatalf("calls %d/%d/%d, records %+v, notes %v", repoCalls, searchCalls, detailCalls, records, notes)
 	}
 	if records[0].Repository != "example-team/api" {
@@ -215,9 +240,47 @@ func TestGitHubPaginationLinkingAndApprovals(t *testing.T) {
 func TestGitHubSearchCapAndGraphQLErrors(t *testing.T) {
 	for _, body := range []string{`{"data":{"search":{"issueCount":1001,"nodes":[]}}}`, `{"errors":[{"message":"secret-sentinel"}],"data":{"search":{"nodes":[]}}}`, `{"data":null}`} {
 		c := client(t, func(*http.Request) (int, string) { return 200, body })
-		_, _, err := c.repositoryPRs(context.Background(), c.Workspace.Providers["github"], "token", "api", false)
+		_, err := c.searchPRs(context.Background(), "token", "org:example-team is:pr", false)
 		if err == nil || strings.Contains(err.Error(), "secret-sentinel") {
 			t.Fatalf("wrong error %v", err)
+		}
+	}
+}
+
+func TestGitHubSearchesByKeyInBatches(t *testing.T) {
+	var mu sync.Mutex
+	var queries []string
+	c := client(t, func(r *http.Request) (int, string) {
+		body := requestBody(t, r)
+		if strings.Contains(body["query"].(string), "node(id") {
+			return 200, `{"data":{"node":{"id":"pr1","number":1,"title":"APP-1 and APP-7","state":"OPEN","repository":{"name":"api"},"labels":{"nodes":[]},"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]}}}}`
+		}
+		mu.Lock()
+		queries = append(queries, body["variables"].(map[string]any)["q"].(string))
+		mu.Unlock()
+		// The same PR mentions a ticket from each batch.
+		return 200, `{"data":{"search":{"issueCount":1,"nodes":[{"id":"pr1","title":"APP-1 and APP-7","state":"OPEN"}]}}}`
+	})
+	var tickets []workfile.Ticket
+	for i := 1; i <= 7; i++ {
+		tickets = append(tickets, workfile.Ticket{Key: fmt.Sprintf("APP-%d", i)})
+	}
+	items, _, err := c.Records(context.Background(), tickets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(queries)
+	want := []string{
+		`org:example-team is:pr archived:false in:title,body "APP-1" OR "APP-2" OR "APP-3" OR "APP-4" OR "APP-5" OR "APP-6"`,
+		`org:example-team is:pr archived:false in:title,body "APP-7"`,
+	}
+	if !slices.Equal(queries, want) {
+		t.Fatalf("searches %q", queries)
+	}
+	for _, item := range items {
+		linked := item.Key == "APP-1" || item.Key == "APP-7"
+		if got := len(item.Records["github"]); linked && got != 1 || !linked && got != 0 {
+			t.Fatalf("%s: %d records", item.Key, got)
 		}
 	}
 }

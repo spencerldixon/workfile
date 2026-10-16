@@ -4,6 +4,10 @@ package workfile
 import "slices"
 
 type Policy struct {
+	// Name identifies the workspace across clones and computers. Personal files,
+	// such as private automations, are kept under it. It is not part of the
+	// policy hash: renaming a workspace does not change its rules.
+	Name        string                `yaml:"name" json:"-"`
 	Tracker     string                `yaml:"tracker"`
 	States      []string              `yaml:"states"`
 	Transitions map[string]Transition `yaml:"transitions"`
@@ -72,11 +76,15 @@ type Rule struct {
 }
 
 type Provider struct {
-	Kind     string            `yaml:"provider"`
-	Site     string            `yaml:"site"`
-	Scope    string            `yaml:"scope"`
-	Statuses map[string]Names  `yaml:"statuses"`
-	Org      string            `yaml:"org"`
+	Kind  string `yaml:"provider"`
+	Site  string `yaml:"site"`
+	Scope string `yaml:"scope"`
+	// DefaultProject turns a bare ticket number such as 2713 into APP-2713.
+	DefaultProject string           `yaml:"default_project"`
+	Statuses       map[string]Names `yaml:"statuses"`
+	Org            string           `yaml:"org"`
+	// Lookback is no longer used: PRs are found by ticket key, however old.
+	// It is still accepted so older providers.yml files load.
 	Lookback string            `yaml:"lookback"`
 	Auth     map[string]string `yaml:"auth"`
 }
@@ -86,6 +94,10 @@ type Workspace struct {
 	Policy    Policy
 	Providers map[string]Provider
 	People    map[string]map[string]string
+	// Automations are the shared files in .workfile/automations/, one per person.
+	Automations []*AutomationFile
+	// Settings are the person's own, from ~/.config/workfile/<name>/config.yml.
+	Settings WorkspaceSettings
 }
 
 // Actor preserves who supplied a value, such as a label or an approval.
@@ -99,18 +111,24 @@ type Facts map[string]any
 
 type Ticket struct {
 	Key, Title, URL, State, Summary, Error string
-	Assignee                               string
-	Facts                                  Facts
-	Unavailable                            map[string]string
-	Records                                map[string][]Record
+	// OutOfScope marks a ticket that was asked for by key but is hidden from
+	// listings by the Jira scope, such as a sub-task or a parked ticket.
+	OutOfScope  bool
+	Assignee    string
+	Facts       Facts
+	Unavailable map[string]string
+	Records     map[string][]Record
 }
 
 type Record struct {
 	ID, URL, Title, Summary string
-	Repository              string
-	People                  []string
-	Facts                   Facts
-	Unavailable             map[string]string
+	// Head is the latest commit, so an agent can tell whether a PR changed
+	// after its automation fired.
+	Head        string
+	Repository  string
+	People      []string
+	Facts       Facts
+	Unavailable map[string]string
 }
 
 type Reason struct {

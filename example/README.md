@@ -7,7 +7,8 @@ themselves.
 - [`.workfile/`](.workfile/): Jira tickets with GitHub PRs. Work needs a good
   description, a PR, passing CI (continuous integration: automated checks for a
   change), and reviews. High-risk PRs also need a named reviewer's
-  approval.
+  approval. Alice shares her [automations](../docs/automations.md) in
+  `automations/alice.yml`; delete that folder when you copy the example.
 - [`branching/.workfile/`](branching/.workfile/): twelve stages with QA and
   security branches, a shortcut to release, different gates for each
   destination, cancelling, and valid returns. Code review also needs passing CI.

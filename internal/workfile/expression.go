@@ -128,7 +128,7 @@ func (w *Workspace) parseExpression(source string) (Expression, error) {
 	e.kind = provider.Kind
 	facts := []string{"summary", "description", "type", "project", "headings", "assignee", "labels"}
 	if provider.Kind == "github" {
-		facts = []string{"prs", "labels", "approvals", "state", "author", "review_requests", "draft", "checks", "fresh_approvals"}
+		facts = []string{"prs", "labels", "approvals", "state", "author", "review_requests", "draft", "checks", "fresh_approvals", "merge_queue"}
 	}
 	if !slices.Contains(facts, e.Fact) {
 		return e, fmt.Errorf("%s has no attribute %s", e.Provider, e.Fact)
@@ -188,18 +188,19 @@ func (e Expression) Evaluate(value any) bool {
 			return actual != number
 		}
 	}
+	// Text compares without case, so Story, story and STORY are one type.
 	switch e.Op {
 	case "==":
-		return reflect.DeepEqual(value, e.Value)
+		return equal(value, e.Value)
 	case "!=":
-		return !reflect.DeepEqual(value, e.Value)
+		return !equal(value, e.Value)
 	case "contains":
-		return slices.Contains(list(value), fmt.Sprint(e.Value))
+		return includes(list(value), fmt.Sprint(e.Value))
 	case "excludes":
-		return !slices.Contains(list(value), fmt.Sprint(e.Value))
+		return !includes(list(value), fmt.Sprint(e.Value))
 	case "contains_any":
 		for _, candidate := range e.Value.([]string) {
-			if slices.Contains(list(value), candidate) {
+			if includes(list(value), candidate) {
 				return true
 			}
 		}
@@ -214,4 +215,17 @@ func (e Expression) Evaluate(value any) bool {
 		}
 	}
 	return false
+}
+
+func equal(value, want any) bool {
+	text, ok := value.(string)
+	wanted, isText := want.(string)
+	if ok && isText {
+		return strings.EqualFold(text, wanted)
+	}
+	return reflect.DeepEqual(value, want)
+}
+
+func includes(values []string, want string) bool {
+	return slices.ContainsFunc(values, func(v string) bool { return strings.EqualFold(v, want) })
 }

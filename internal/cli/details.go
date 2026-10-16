@@ -253,13 +253,15 @@ func recordIdentity(record workfile.Record) (string, string) {
 	return repo, number
 }
 
-func (v view) pullRequests(w *workfile.Workspace, a workfile.Assessment) []row {
-	type entry struct {
-		record                            workfile.Record
-		repo, number, status, color, next string
-		rank                              int
-	}
-	var entries []entry
+// prEntry is one linked PR with the status and next step shown for it.
+type prEntry struct {
+	record                            workfile.Record
+	repo, number, status, color, next string
+	rank                              int
+}
+
+func prEntries(a workfile.Assessment) []prEntry {
+	var entries []prEntry
 	for _, instance := range workfile.SortedKeys(a.Ticket.Records) {
 		for _, record := range a.Ticket.Records[instance] {
 			var checks []workfile.Check
@@ -272,7 +274,7 @@ func (v view) pullRequests(w *workfile.Workspace, a workfile.Assessment) []row {
 				}
 			}
 			repo, number := recordIdentity(record)
-			e := entry{record: record, repo: repo, number: number, status: "Not assessed", color: muted, rank: 2}
+			e := prEntry{record: record, repo: repo, number: number, status: "Not assessed", color: muted, rank: 2}
 			state, _ := record.Facts["state"].(string)
 			switch {
 			case outcome(checks) == "unknown":
@@ -294,18 +296,36 @@ func (v view) pullRequests(w *workfile.Workspace, a workfile.Assessment) []row {
 			}
 			if state == "open" {
 				e.next = "→ merge"
+				if record.Facts["merge_queue"] == "queued" {
+					e.next = "Wait for merge"
+					switch outcome(checks) {
+					case "unknown":
+						e.status = "Queued; cannot check"
+						e.next = "Restore evidence"
+					case "fail":
+						e.status = "Queued; " + strings.ToLower(e.status)
+						e.next = "Fix gates"
+					default:
+						e.status = "Queued for merge"
+					}
+				}
 			}
 			entries = append(entries, e)
 		}
 	}
+	return entries
+}
+
+func (v view) pullRequests(w *workfile.Workspace, a workfile.Assessment) []row {
+	entries := prEntries(a)
 	if len(entries) == 0 {
-		message := "No linked PRs in the configured scope and lookback."
+		message := "No linked PRs. A PR links when its title names the ticket, or its description links to it."
 		if len(w.Providers) == 1 {
 			message = "No GitHub provider configured."
 		}
 		return textRows(message, "", muted, "", v.innerWidth())
 	}
-	slices.SortStableFunc(entries, func(a, b entry) int {
+	slices.SortStableFunc(entries, func(a, b prEntry) int {
 		if a.rank != b.rank {
 			return a.rank - b.rank
 		}

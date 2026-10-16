@@ -10,26 +10,6 @@ import (
 	"workfile/internal/workfile"
 )
 
-type reportCoverage struct {
-	Scope         string             `json:"jira_scope"`
-	User          string             `json:"user,omitempty"`
-	Me            bool               `json:"me,omitempty"`
-	Gate          string             `json:"gate,omitempty"`
-	Stage         string             `json:"stage,omitempty"`
-	Failing       bool               `json:"failing,omitempty"`
-	Sample        bool               `json:"sample"`
-	Limit         int                `json:"limit,omitempty"`
-	RequestedKeys []string           `json:"requested_keys"`
-	MissingKeys   []string           `json:"missing_keys"`
-	Providers     []providerCoverage `json:"providers"`
-	Boundary      string             `json:"boundary"`
-}
-type providerCoverage struct {
-	Name         string `json:"name"`
-	Kind         string `json:"kind"`
-	Organization string `json:"organization,omitempty"`
-	Lookback     string `json:"lookback,omitempty"`
-}
 type reportRoute struct {
 	To        string           `json:"to"`
 	Backward  bool             `json:"backward"`
@@ -61,24 +41,9 @@ type machineReport struct {
 	PolicyHash    string         `json:"policy_hash"`
 	ObservedAt    string         `json:"observed_at"`
 	ExitCode      int            `json:"exit_code"`
-	Coverage      reportCoverage `json:"coverage"`
 	Summary       map[string]int `json:"summary"`
 	Warnings      []string       `json:"warnings"`
 	Tickets       []reportTicket `json:"tickets"`
-}
-
-const coverageBoundary = "Current facts only; limited to the configured search and token permissions. GitHub includes visible, non-archived repositories and open or merged PRs updated within lookback. Readiness is not permission to merge or move work."
-
-func coverage(w *workfile.Workspace, o options, missing []string) reportCoverage {
-	c := reportCoverage{Scope: w.Providers[w.Policy.Tracker].Scope, User: o.user, Me: o.me, Gate: o.gate, Stage: o.stage, Failing: o.failing, Sample: o.limited(), RequestedKeys: append([]string{}, o.keys...), MissingKeys: append([]string{}, missing...), Providers: []providerCoverage{}, Boundary: coverageBoundary}
-	if c.Sample {
-		c.Limit = o.limit
-	}
-	for _, name := range workfile.SortedKeys(w.Providers) {
-		p := w.Providers[name]
-		c.Providers = append(c.Providers, providerCoverage{name, p.Kind, p.Org, p.Lookback})
-	}
-	return c
 }
 
 func selected(a workfile.Assessment, o options) bool {
@@ -100,8 +65,8 @@ func selected(a workfile.Assessment, o options) bool {
 	return true
 }
 
-func writeReport(out io.Writer, w *workfile.Workspace, all []workfile.Assessment, o options, warnings, missing []string, code int) error {
-	r := machineReport{SchemaVersion: 1, Command: o.command, PolicyHash: w.PolicyHash(), ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ExitCode: code, Coverage: coverage(w, o, missing), Summary: map[string]int{"total": len(all), "cannot_check": 0, "out_of_policy": 0, "needs_work": 0, "ready": 0, "done": 0}, Warnings: append([]string{}, warnings...), Tickets: []reportTicket{}}
+func writeReport(out io.Writer, w *workfile.Workspace, all []workfile.Assessment, o options, warnings []string, code int) error {
+	r := machineReport{SchemaVersion: 1, Command: o.command, PolicyHash: w.PolicyHash(), ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ExitCode: code, Summary: map[string]int{"total": len(all), "cannot_check": 0, "out_of_policy": 0, "needs_work": 0, "ready": 0, "done": 0}, Warnings: append([]string{}, warnings...), Tickets: []reportTicket{}}
 	rollup := w.Rollup(all)
 	r.Summary["checked"] = rollup.Checked
 	r.Summary["in_policy"] = rollup.InPolicy
@@ -112,27 +77,34 @@ func writeReport(out io.Writer, w *workfile.Workspace, all []workfile.Assessment
 		if !selected(a, o) {
 			continue
 		}
-		t := reportTicket{Key: a.Ticket.Key, Title: a.Ticket.Title, URL: a.Ticket.URL, State: a.Ticket.State, Status: status, Error: a.Ticket.Error, Records: []reportRecord{}, EntryChecks: append([]workfile.Check{}, a.Earlier...), Routes: []reportRoute{}, Unmet: []workfile.Reason{}}
-		for _, name := range workfile.SortedKeys(a.Ticket.Records) {
-			for _, p := range a.Ticket.Records[name] {
-				t.Records = append(t.Records, reportRecord{p.ID, p.URL, p.Title, p.Repository, name})
-			}
-		}
-		checks := slices.Clone(a.Earlier)
-		for _, route := range a.Routes {
-			t.Routes = append(t.Routes, reportRoute{route.To, route.Backward, a.Ticket.Error == "" && route.Available(), append([]workfile.Check{}, route.Checks...)})
-			checks = append(checks, route.Checks...)
-		}
-		for _, c := range checks {
-			for _, reason := range c.Reasons {
-				if !slices.Contains(t.Unmet, reason) {
-					t.Unmet = append(t.Unmet, reason)
-				}
-			}
-		}
-		r.Tickets = append(r.Tickets, t)
+		r.Tickets = append(r.Tickets, ticketReport(a))
 	}
 	return encodeCleanJSON(out, r)
+}
+
+// ticketReport is one ticket in the `wf status --json` format. Automations
+// hand the same format to their actions.
+func ticketReport(a workfile.Assessment) reportTicket {
+	statuses := []string{"cannot_check", "out_of_policy", "needs_work", "ready", "done"}
+	t := reportTicket{Key: a.Ticket.Key, Title: a.Ticket.Title, URL: a.Ticket.URL, State: a.Ticket.State, Status: statuses[group(a)], Error: a.Ticket.Error, Records: []reportRecord{}, EntryChecks: append([]workfile.Check{}, a.Earlier...), Routes: []reportRoute{}, Unmet: []workfile.Reason{}}
+	for _, name := range workfile.SortedKeys(a.Ticket.Records) {
+		for _, p := range a.Ticket.Records[name] {
+			t.Records = append(t.Records, reportRecord{p.ID, p.URL, p.Title, p.Repository, name})
+		}
+	}
+	checks := slices.Clone(a.Earlier)
+	for _, route := range a.Routes {
+		t.Routes = append(t.Routes, reportRoute{route.To, route.Backward, a.Ticket.Error == "" && route.Available(), append([]workfile.Check{}, route.Checks...)})
+		checks = append(checks, route.Checks...)
+	}
+	for _, c := range checks {
+		for _, reason := range c.Reasons {
+			if !slices.Contains(t.Unmet, reason) {
+				t.Unmet = append(t.Unmet, reason)
+			}
+		}
+	}
+	return t
 }
 
 // Scrub untrusted strings without exposing raw provider facts or credentials.
@@ -175,29 +147,6 @@ func writeJSONError(out io.Writer, err error) {
 	}{1, 2, err.Error()})
 }
 
-func (v view) coverage(w *workfile.Workspace, o options) {
-	var rows []row
-	rows = append(rows, textRows("Search: "+w.Providers[w.Policy.Tracker].Scope, "", muted, "", v.innerWidth())...)
-	if o.limited() {
-		rows = append(rows, textRows("Selection: sample of up to "+quantity(o.limit, "ticket", "tickets")+"; not the whole search.", "", muted, "", v.innerWidth())...)
-	}
-	if len(o.keys) > 0 {
-		rows = append(rows, textRows("Selection: named tickets only.", "", muted, "", v.innerWidth())...)
-	}
-	if o.me {
-		rows = append(rows, textRows("Selection: tickets involving you.", "", muted, "", v.innerWidth())...)
-	} else if o.user != "" {
-		rows = append(rows, textRows("Selection: tickets involving "+o.user+".", "", muted, "", v.innerWidth())...)
-	}
-	rows = append(rows, textRows("Only data visible to your tokens is checked; permissions can hide tickets and repositories.", "", muted, "", v.innerWidth())...)
-	for _, name := range workfile.SortedKeys(w.Providers) {
-		p := w.Providers[name]
-		if p.Kind == "github" {
-			rows = append(rows, textRows(name+": active repositories in "+p.Org+" · open/merged PRs updated within "+p.Lookback, "", muted, "", v.innerWidth())...)
-		}
-	}
-	v.block(muted, styled("COVERAGE · current facts, not history", "1"), rows)
-}
 func (v view) evidenceReport(all []workfile.Assessment, o options) {
 	for _, a := range all {
 		if !selected(a, o) {

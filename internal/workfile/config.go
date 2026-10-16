@@ -18,8 +18,8 @@ import (
 var namePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 var ruleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]*$`)
 var credentialPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
-var lookbackPattern = regexp.MustCompile(`^[1-9][0-9]{0,4}d$`)
 var orgPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+var projectPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 var yamlLinePattern = regexp.MustCompile(`\bline [0-9]+`)
 
 // Names accepts either a single Jira status or a list of statuses.
@@ -77,7 +77,14 @@ func Load(start string) (*Workspace, error) {
 	if err = ReadYAML(filepath.Join(dir, "people.yml"), &w.People, true); err != nil {
 		return nil, err
 	}
+	if err = w.loadSharedAutomations(); err != nil {
+		return nil, err
+	}
 	if err = w.validate(); err != nil {
+		return nil, err
+	}
+	// Read after validation, so the name is safe to use as a folder.
+	if w.Settings, err = ReadWorkspaceSettings(w.Policy.Name); err != nil {
 		return nil, err
 	}
 	return w, nil
@@ -112,6 +119,9 @@ func (w *Workspace) validate() error {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	p := &w.Policy
+	if p.Name != "" && !ValidName(p.Name) {
+		add("policy.yml: name must be at most 64 lowercase letters, digits and single dashes, such as example-web")
+	}
 	if len(p.States) == 0 {
 		add("policy.yml: states must list the workflow in order")
 	}
@@ -207,6 +217,9 @@ func (w *Workspace) validate() error {
 			if provider.Org != "" || provider.Lookback != "" {
 				add("providers.yml: %s has GitHub settings on a Jira instance", name)
 			}
+			if provider.DefaultProject != "" && !projectPattern.MatchString(provider.DefaultProject) {
+				add("providers.yml: %s.default_project must be a Jira project key such as APP", name)
+			}
 			statuses := map[string]bool{}
 			for _, state := range p.States {
 				if len(provider.Statuses[state]) == 0 {
@@ -232,13 +245,7 @@ func (w *Workspace) validate() error {
 			if !orgPattern.MatchString(provider.Org) {
 				add("providers.yml: %s.org must be a GitHub organisation name", name)
 			}
-			if provider.Lookback == "" {
-				provider.Lookback = "90d"
-			}
-			if !lookbackPattern.MatchString(provider.Lookback) {
-				add("providers.yml: %s.lookback must be a positive number of days, such as 90d", name)
-			}
-			if provider.Site != "" || provider.Scope != "" || len(provider.Statuses) != 0 {
+			if provider.Site != "" || provider.Scope != "" || provider.DefaultProject != "" || len(provider.Statuses) != 0 {
 				add("providers.yml: %s has Jira settings on a GitHub instance", name)
 			}
 		default:
@@ -319,6 +326,12 @@ func (w *Workspace) validate() error {
 			}
 		}
 		p.Gates[gate] = rules
+	}
+	// Automations refer to stages and providers, so they are checked last.
+	if len(problems) == 0 {
+		for _, f := range w.Automations {
+			problems = append(problems, w.CheckAutomations(f)...)
+		}
 	}
 	if len(problems) > 0 {
 		slices.Sort(problems)

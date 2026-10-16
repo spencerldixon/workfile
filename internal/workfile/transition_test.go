@@ -22,6 +22,7 @@ func decodeTransition(t *testing.T, source string) Transition {
 func destinationWorkflow(t *testing.T, requirements string) *Workspace {
 	t.Helper()
 	w := example(t)
+	w.Automations = nil // a different workflow: the example's automations do not apply
 	w.Policy.States = []string{"todo", "ready", "done"}
 	w.Policy.Transitions = map[string]Transition{
 		"todo":  decodeTransition(t, "to: [ready, done]\nrequires: "+requirements+"\n"),

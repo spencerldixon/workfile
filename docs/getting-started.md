@@ -157,8 +157,8 @@ It does not need the gates from every branch.
 
 1. **Install** `wf`. See the [README](../README.md#install).
 2. **Run `wf setup`**. Choose a folder, connect Jira and optional GitHub in
-   your browser, and paste your tokens into hidden prompts. Choose a Jira project
-   and confirm a starter stage order. Setup writes `.workfile/` and saves tokens
+   your browser, and paste your tokens (they show as `*`). Choose a Jira project,
+   tick the statuses you want to track, and confirm a starter stage order. Setup writes `.workfile/` and saves tokens
    privately. See [setup details](usage.md#setup-start-from-scratch).
 3. **Review the starter policy**. Its simple stage-to-stage moves are suggestions,
    not imported Jira workflow moves. Add your team's gates and branches.
@@ -170,11 +170,16 @@ It does not need the gates from every branch.
 6. **Run `wf health` and `wf status`** to see how your work compares with your
    policy.
 7. **Change `policy.yml`** until it describes the way your team really works.
+8. **Put it to work.** Once the policy is right, it is the source of truth for
+   how work moves. [Automations](automations.md) react to it: "when my ticket
+   can move to done, post in the release channel". Agents can ask
+   `wf check APP-42 --to done` before they move anything.
 
 ## Where to read next
 
 - [Using wf](usage.md): every command and option.
 - [Writing a policy](policy.md): stages, moves, gates and rules in detail.
+- [Automations](automations.md): "when this happens to my work, do that".
 - [Jira provider](providers/jira.md) and [GitHub provider](providers/github.md): tokens, settings, and what each
   attribute means.
 - [Examples](../example/): policies you can copy.

@@ -1,17 +1,21 @@
 package cli
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/mattn/go-runewidth"
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"workfile/internal/provider"
 	"workfile/internal/workfile"
 )
@@ -33,240 +37,10 @@ func (f setupFake) SetupPeople(context.Context, string) ([]provider.SetupPerson,
 	return []provider.SetupPerson{{AccountID: "example-alice", DisplayName: "Alice", Active: true}}, nil
 }
 
-func wizardForTest(t *testing.T, width int, answers string) (*setupWizard, *bytes.Buffer, string) {
-	t.Helper()
-	root := t.TempDir()
-	var out bytes.Buffer
-	s := &setupWizard{v: view{out: &out, width: width}, input: bufio.NewScanner(strings.NewReader(answers)), secret: func() (string, error) { return "example-token", nil }, open: func(string) error { return errors.New("no browser") }, credentials: filepath.Join(root, "private", "credentials"), connect: func(*workfile.Workspace, map[string]string) setupSource { return setupFake{} }}
-	return s, &out, root
-}
-func TestSetupCreatesValidatedWorkspaceAndPrivateCredentials(t *testing.T) {
-	for _, width := range []int{40, 60} {
-		t.Run(strconv.Itoa(width), func(t *testing.T) {
-			t.Setenv("NO_COLOR", "1")
-			t.Setenv("WORKFILE_BACKGROUND", "off")
-			s, out, root := wizardForTest(t, width, "n\n\nexample-team.atlassian.net\nalice@example.com\n\n\n\n\n")
-			if err := s.v.setupIntro(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			if err := s.run(context.Background(), root); err != nil {
-				t.Fatal(err)
-			}
-			w, err := workfile.Load(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(w.Policy.States) != 3 || len(w.Policy.Gates) != 0 || len(w.People) != 1 {
-				t.Fatalf("unexpected workspace: %+v", w)
-			}
-			if !w.Policy.Transitions["done"].End {
-				t.Fatal("last stage must be terminal")
-			}
-			info, err := os.Stat(s.credentials)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if info.Mode().Perm() != 0600 {
-				t.Fatal("credentials not private")
-			}
-			c := workfile.Credentials{Path: s.credentials}
-			token, err := c.Get(w.Providers["jira"].Auth["token"])
-			if err != nil || token != "example-token" {
-				t.Fatalf("credential lookup failed: %v", err)
-			}
-			for _, name := range []string{"providers.yml", "people.yml", "policy.yml"} {
-				data, err := os.ReadFile(filepath.Join(root, ".workfile", name))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if bytes.Contains(data, []byte("example-token")) {
-					t.Fatal("workspace contains secret")
-				}
-			}
-			if strings.Contains(out.String(), "example-token") || strings.Contains(out.String(), "\x1b") {
-				t.Fatal("unsafe plain output")
-			}
-			for _, line := range strings.Split(out.String(), "\n") {
-				if runewidth.StringWidth(line) > width {
-					t.Fatalf("width %d overflow: %q", width, line)
-				}
-			}
-		})
-	}
-}
-func TestSetupDeclinedSaveWritesNothing(t *testing.T) {
-	s, _, root := wizardForTest(t, 60, "n\n\nexample-team.atlassian.net\nalice@example.com\n\n\n\nno\n")
-	if err := s.run(context.Background(), root); err == nil {
-		t.Fatal("expected cancellation")
-	}
-	for _, path := range []string{filepath.Join(root, ".workfile"), s.credentials} {
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("unexpected file %s", path)
-		}
-	}
-}
-func TestSetupDoesNotOverwriteWorkspace(t *testing.T) {
-	s, _, root := wizardForTest(t, 60, "n\n\n")
-	if err := os.Mkdir(filepath.Join(root, ".workfile"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	called := false
-	s.connect = func(*workfile.Workspace, map[string]string) setupSource { called = true; return setupFake{} }
-	if err := s.run(context.Background(), root); err == nil || called {
-		t.Fatal("existing workspace not protected")
-	}
-}
-func TestSetupInvalidEntriesRetryInPlace(t *testing.T) {
-	s, out, root := wizardForTest(t, 40, "n\n\n\nnot-a-site\nhttps://example-team.atlassian.net/\n\nnot-an-email\nalice@example.com\n99\n1\n1 1 3\n1 2 3\ny\ny\n")
-	secretReads := 0
-	s.secret = func() (string, error) {
-		secretReads++
-		switch secretReads {
-		case 1:
-			return "", nil
-		case 2:
-			return "bad\nvalue", nil
-		default:
-			return "example-token", nil
-		}
-	}
-	if err := s.run(context.Background(), root); err != nil {
-		t.Fatal(err)
-	}
-	w, err := workfile.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w.Providers["jira"].Site != "example-team.atlassian.net" || secretReads != 3 {
-		t.Fatal("corrections were not retained")
-	}
-	for _, message := range []string{"A value is required", "enter a Jira Cloud hostname", "enter an email address", "Paste a non-empty token", "Choose a number", "valid listed numbers without duplicates"} {
-		if !strings.Contains(strings.Join(strings.Fields(out.String()), " "), message) {
-			t.Fatalf("missing retry feedback %q", message)
-		}
-	}
-	if strings.Contains(out.String(), "example-token") {
-		t.Fatal("token was printed")
-	}
-}
-
-func TestSetupExistingDestinationCanBeCorrected(t *testing.T) {
-	s, _, root := wizardForTest(t, 60, "")
-	if err := os.Mkdir(filepath.Join(root, ".workfile"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	marker := filepath.Join(root, ".workfile", "keep.txt")
-	if err := os.WriteFile(marker, []byte("keep"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	other := t.TempDir()
-	s.input = bufio.NewScanner(strings.NewReader("n\n\n" + other + "\nexample-team.atlassian.net\nalice@example.com\n\n\n\n\n"))
-	if err := s.run(context.Background(), root); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := workfile.Load(other); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(marker)
-	if err != nil || string(data) != "keep" {
-		t.Fatal("existing workspace changed")
-	}
-}
-
 type setupTwoPeopleFake struct{ setupFake }
 
 func (setupTwoPeopleFake) SetupPeople(context.Context, string) ([]provider.SetupPerson, error) {
 	return []provider.SetupPerson{{AccountID: "example-alice", DisplayName: "Alice", Active: true}, {AccountID: "example-bob", DisplayName: "Bob", Active: true}}, nil
-}
-
-func TestSetupSelectedStatusesAndYAMLFormatting(t *testing.T) {
-	s, out, root := wizardForTest(t, 60, "n\n\nexample-team.atlassian.net\nalice@example.com\n\n1 3\n\n\n")
-	s.connect = func(*workfile.Workspace, map[string]string) setupSource { return setupTwoPeopleFake{} }
-	if err := s.run(context.Background(), root); err != nil {
-		t.Fatal(err)
-	}
-	w, err := workfile.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(w.Policy.States, " ") != "to_do done" {
-		t.Fatalf("unexpected states: %v", w.Policy.States)
-	}
-	if len(w.Providers["jira"].Statuses) != 2 || w.Providers["jira"].Scope != `project = "APP" AND status in ("To Do", "Done")` {
-		t.Fatalf("unexpected Jira config: %+v", w.Providers["jira"])
-	}
-	if !strings.Contains(out.String(), "Other statuses are outside") {
-		t.Fatal("missing coverage explanation")
-	}
-	policy, err := os.ReadFile(filepath.Join(root, ".workfile", "policy.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sections := strings.Split(strings.TrimSpace(string(policy)), "\n\n")
-	if len(sections) != 4 {
-		t.Fatalf("expected four spaced sections: %s", policy)
-	}
-	for i, key := range []string{"tracker:", "states:", "transitions:", "gates:"} {
-		if !strings.HasPrefix(sections[i], key) {
-			t.Fatalf("section %d is not %s: %s", i, key, sections[i])
-		}
-	}
-	people, err := os.ReadFile(filepath.Join(root, ".workfile", "people.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(string(people), "alice:\n") || !strings.Contains(string(people), "\n\nbob:\n") || len(w.People) != 2 {
-		t.Fatalf("people not spaced or round-trippable: %s", people)
-	}
-}
-
-func TestSetupOrganisationRetry(t *testing.T) {
-	s, _, _ := wizardForTest(t, 60, "\nhttps://github.com/example-team\nexample-team\n")
-	org, err := s.askValid(context.Background(), "GitHub organisation", "", setupOrg)
-	if err != nil || org != "example-team" {
-		t.Fatalf("organisation retry failed: %q %v", org, err)
-	}
-}
-
-func TestSetupOrder(t *testing.T) {
-	for _, answer := range []string{"", "1 1 3", "0 2 3", "1 2 4", "one two three"} {
-		if _, err := setupOrder(answer, 3); err == nil {
-			t.Fatalf("accepted %q", answer)
-		}
-	}
-	for _, answer := range []string{"2 1 3", "2 1", "2"} {
-		order, err := setupOrder(answer, 3)
-		if err != nil || order[0] != 1 {
-			t.Fatalf("valid selection %q rejected", answer)
-		}
-	}
-}
-func TestSetupFlags(t *testing.T) {
-	for _, args := range [][]string{{"setup", "--json"}, {"setup", "--me"}, {"setup", "APP-1"}} {
-		if _, err := parse(args); err == nil {
-			t.Fatalf("accepted %v", args)
-		}
-	}
-	if _, err := parse([]string{"setup", "--dir", "/tmp/example"}); err != nil {
-		t.Fatal(err)
-	}
-}
-func TestSetupGitHubAndPeopleFallback(t *testing.T) {
-	s, out, root := wizardForTest(t, 60, "y\n\nexample-team.atlassian.net\nalice@example.com\nexample-team\n\n\n\n\n\n")
-	s.connect = func(*workfile.Workspace, map[string]string) setupSource { return setupFake{peopleErr: true} }
-	if err := s.run(context.Background(), root); err != nil {
-		t.Fatal(err)
-	}
-	w, err := workfile.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(w.Providers) != 2 || len(w.People) != 0 {
-		t.Fatal("wrong optional-provider or fallback configuration")
-	}
-	if !strings.Contains(out.String(), "✓ GitHub connected") || !strings.Contains(out.String(), "Could not import project people") {
-		t.Fatal("missing connection or fallback feedback")
-	}
 }
 
 type setupRetryFake struct {
@@ -281,39 +55,14 @@ func (f *setupRetryFake) Identity(context.Context, string) (string, error) {
 	}
 	return "example-user", nil
 }
-func TestSetupRetriesTokenBeforeSaving(t *testing.T) {
-	s, _, root := wizardForTest(t, 60, "n\n\nexample-team.atlassian.net\nalice@example.com\ny\nexample-other.atlassian.net\nbob@example.com\n\n\n\n\n")
-	fake := &setupRetryFake{}
-	s.connect = func(*workfile.Workspace, map[string]string) setupSource { return fake }
-	reads := 0
-	s.secret = func() (string, error) { reads++; return "example-token-" + strconv.Itoa(reads), nil }
-	if err := s.run(context.Background(), root); err != nil {
+func TestSetupFlags(t *testing.T) {
+	for _, args := range [][]string{{"setup", "--json"}, {"setup", "--me"}, {"setup", "APP-1"}} {
+		if _, err := parse(args); err == nil {
+			t.Fatalf("accepted %v", args)
+		}
+	}
+	if _, err := parse([]string{"setup", "--dir", "/tmp/example"}); err != nil {
 		t.Fatal(err)
-	}
-	w, err := workfile.Load(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := workfile.Credentials{Path: s.credentials}
-	got, err := c.Get(w.Providers["jira"].Auth["token"])
-	if err != nil || got != "example-token-2" || fake.calls != 2 {
-		t.Fatalf("retry did not save the replacement: %q %v", got, err)
-	}
-	email, err := c.Get(w.Providers["jira"].Auth["email"])
-	if err != nil || email != "bob@example.com" || w.Providers["jira"].Site != "example-other.atlassian.net" {
-		t.Fatal("retry did not save corrected site and email")
-	}
-}
-func TestSetupCredentialFailureRemovesWorkspace(t *testing.T) {
-	s, _, root := wizardForTest(t, 60, "n\n\nexample-team.atlassian.net\nalice@example.com\n\n\n\n\n")
-	if err := os.MkdirAll(s.credentials, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.run(context.Background(), root); err == nil {
-		t.Fatal("expected credential write failure")
-	}
-	if _, err := os.Stat(filepath.Join(root, ".workfile")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("failed save left a partial workspace")
 	}
 }
 func TestSetupStatesResolveCollisions(t *testing.T) {
@@ -323,26 +72,611 @@ func TestSetupStatesResolveCollisions(t *testing.T) {
 	}
 }
 
-func TestSetupPlainIntro(t *testing.T) {
+// driver feeds messages to the model and plays back the results of its
+// commands, so a whole setup can run without a terminal. Commands that only
+// wait (blinks, ticks) are abandoned after a moment.
+type driver struct {
+	t     *testing.T
+	m     *setupModel
+	width int
+	quit  bool
+
+	pending []chan tea.Msg // commands still running, such as a save
+}
+
+func newDriver(t *testing.T, width int, client setupSource) (*driver, string) {
+	t.Helper()
 	t.Setenv("NO_COLOR", "1")
+	t.Setenv("WORKFILE_BACKGROUND", "off")
+	root := t.TempDir()
 	var out bytes.Buffer
-	v := newView(&out)
-	if err := v.setupIntro(context.Background()); err != nil {
-		t.Fatal(err)
+	m := newSetupModel(context.Background(), view{out: &out, width: width}, setupDeps{
+		dir:         root,
+		credentials: filepath.Join(root, "private", "credentials"),
+		open:        func(string) error { return errors.New("no browser") },
+		connect:     func(*workfile.Workspace, map[string]string) setupSource { return client },
+	})
+	d := &driver{t: t, m: m, width: width}
+	d.send(tea.WindowSizeMsg{Width: width, Height: 40})
+	m.Init()
+	return d, root
+}
+
+func (d *driver) send(msg tea.Msg) {
+	d.t.Helper()
+	_, cmd := d.m.Update(msg)
+	d.run(cmd)
+	d.checkView()
+}
+
+func (d *driver) run(cmd tea.Cmd) {
+	if cmd == nil {
+		return
 	}
-	if strings.ContainsAny(out.String(), "\x1b\r") {
-		t.Fatal("terminal escapes in plain output")
+	done := make(chan tea.Msg, 1)
+	go func() { done <- cmd() }()
+	select {
+	case msg := <-done:
+		d.handle(msg)
+	case <-time.After(30 * time.Millisecond):
+		d.pending = append(d.pending, done)
 	}
 }
 
-func TestSetupColorIntroHasNoAnimation(t *testing.T) {
-	t.Setenv("WORKFILE_BACKGROUND", "off")
-	var out bytes.Buffer
-	v := view{out: &out, width: 60, color: true}
-	if err := v.setupIntro(context.Background()); err != nil {
+func (d *driver) handle(msg tea.Msg) {
+	switch msg := msg.(type) {
+	case tea.BatchMsg:
+		for _, c := range msg {
+			d.run(c)
+		}
+	case tea.QuitMsg:
+		d.quit = true
+	case spinner.TickMsg, animTickMsg:
+	case testedMsg, projectsMsg, statusesMsg, peopleMsg, savedMsg, openedMsg:
+		d.send(msg)
+	}
+}
+
+// settle waits for slow commands while the model says it is working.
+func (d *driver) settle() {
+	deadline := time.Now().Add(5 * time.Second)
+	for d.m.loading && time.Now().Before(deadline) {
+		pending := d.pending
+		d.pending = nil
+		for _, ch := range pending {
+			select {
+			case msg := <-ch:
+				d.handle(msg)
+			default:
+				d.pending = append(d.pending, ch)
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// checkView fails if any line is wider than the terminal or leaks escapes.
+func (d *driver) checkView() {
+	d.t.Helper()
+	view := d.m.render()
+	for _, line := range strings.Split(view, "\n") {
+		if w := lipgloss.Width(line); w > d.width {
+			d.t.Fatalf("line is %d columns, terminal is %d: %q\n%s", w, d.width, line, view)
+		}
+	}
+	if strings.ContainsAny(view, "\x1b\r") {
+		d.t.Fatalf("escapes in plain output: %q", view)
+	}
+}
+
+func (d *driver) press(keys ...string) {
+	d.t.Helper()
+	for _, k := range keys {
+		switch k {
+		case "enter":
+			d.send(tea.KeyPressMsg{Code: tea.KeyEnter})
+		case "esc":
+			d.send(tea.KeyPressMsg{Code: tea.KeyEscape})
+		case "down":
+			d.send(tea.KeyPressMsg{Code: tea.KeyDown})
+		case "shift+down":
+			d.send(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift})
+		case "space":
+			d.send(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+		case "ctrl+c":
+			d.send(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+		default:
+			d.send(tea.KeyPressMsg{Code: []rune(k)[0], Text: k})
+		}
+	}
+}
+
+// typeText replaces whatever is in the input.
+func (d *driver) typeText(s string) {
+	d.t.Helper()
+	d.m.input.SetValue("")
+	d.send(tea.PasteMsg{Content: s})
+}
+
+func (d *driver) view() string { return d.m.render() }
+
+func (d *driver) want(s string) {
+	d.t.Helper()
+	d.settle()
+	// Compare ignoring line breaks and runs of spaces: text wraps by width.
+	if !strings.Contains(strings.Join(strings.Fields(d.view()), " "), strings.Join(strings.Fields(s), " ")) {
+		d.t.Fatalf("expected %q on screen:\n%s", s, d.view())
+	}
+}
+
+// toJira walks from the welcome screen to the Jira token screen.
+func (d *driver) toJiraToken() {
+	d.t.Helper()
+	d.press("enter", "enter")
+	d.typeText("example-team.atlassian.net")
+	d.press("enter")
+	d.typeText("alice@example.com")
+	d.press("enter")
+}
+
+func (d *driver) toGitHubChoice() {
+	d.t.Helper()
+	d.toJiraToken()
+	d.typeText("example-token")
+	d.press("enter")
+}
+
+// finish goes from the review screen to the end.
+func (d *driver) finish() {
+	d.t.Helper()
+	d.want("Ready to save")
+	d.press("enter")
+	d.want("Your workfile is ready")
+}
+
+func (d *driver) skipGitHub() {
+	d.t.Helper()
+	d.toGitHubChoice()
+	d.want("Connect GitHub too?")
+	d.press("n", "enter")
+}
+
+func (d *driver) toStatuses() {
+	d.t.Helper()
+	d.skipGitHub()
+	d.want("Which Jira project?")
+	d.press("enter")
+	d.want("Which statuses should Workfile track?")
+}
+
+func TestSetupFlowCreatesWorkspaceAndPrivateCredentials(t *testing.T) {
+	for _, width := range []int{40, 60} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			d, root := newDriver(t, width, setupFake{})
+			d.toStatuses()
+			d.press("enter")
+			d.finish()
+			w, err := workfile.Load(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(w.Policy.States) != 3 || len(w.Policy.Gates) != 0 || len(w.People) != 1 || len(w.Providers) != 1 {
+				t.Fatalf("unexpected workspace: %+v", w)
+			}
+			c := workfile.Credentials{Path: d.m.deps.credentials}
+			token, err := c.Get(w.Providers["jira"].Auth["token"])
+			if err != nil || token != "example-token" {
+				t.Fatalf("token not saved privately: %q %v", token, err)
+			}
+			data, err := os.ReadFile(filepath.Join(root, ".workfile", "providers.yml"))
+			if err != nil || strings.Contains(string(data), "example-token") {
+				t.Fatal("token written into the workspace")
+			}
+			if !d.m.saved {
+				t.Fatal("not marked saved")
+			}
+		})
+	}
+}
+
+func TestSetupTokenShowsStarsAndNeverTheToken(t *testing.T) {
+	for _, width := range []int{40, 60} {
+		d, _ := newDriver(t, width, setupFake{})
+		d.toJiraToken()
+		d.want("Nothing pasted yet")
+		d.typeText("example-token")
+		d.want("*************")
+		d.want("13 characters pasted")
+		if strings.Contains(d.view(), "example-token") {
+			t.Fatal("token printed")
+		}
+	}
+}
+
+func TestSetupTokenRejectsQuotesAndSpaces(t *testing.T) {
+	d, _ := newDriver(t, 60, setupFake{})
+	d.toJiraToken()
+	d.press("enter")
+	d.want("Paste your token to continue.")
+	for _, bad := range []string{`"example-token"`, "example token"} {
+		d.typeText(bad)
+		d.press("enter")
+		d.want("Paste only the token")
+	}
+	if d.m.step != stepJiraToken {
+		t.Fatal("moved on with a bad token")
+	}
+}
+
+func TestSetupInvalidEntriesStayOnTheScreen(t *testing.T) {
+	d, _ := newDriver(t, 60, setupFake{})
+	d.press("enter", "enter")
+	d.typeText("https://example.com")
+	d.press("enter")
+	d.want("Enter a Jira Cloud hostname")
+	d.typeText("example-team.atlassian.net")
+	d.press("enter")
+	d.typeText("not-an-email")
+	d.press("enter")
+	d.want("Enter an email address")
+}
+
+func TestSetupBackAndCancel(t *testing.T) {
+	d, _ := newDriver(t, 60, setupFake{})
+	d.press("enter", "enter")
+	d.typeText("example-team.atlassian.net")
+	d.press("enter")
+	d.want("Your Jira email")
+	d.press("esc")
+	d.want("Your Jira site")
+	if d.m.input.Value() != "example-team.atlassian.net" {
+		t.Fatal("answer lost going back")
+	}
+	d.press("ctrl+c")
+	if !d.quit || d.m.saved {
+		t.Fatal("ctrl+c did not cancel")
+	}
+}
+
+func TestSetupExistingWorkspaceIsNotOverwritten(t *testing.T) {
+	d, root := newDriver(t, 60, setupFake{})
+	if err := os.Mkdir(filepath.Join(root, ".workfile"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "\r") || strings.Contains(out.String(), "\x1b[2K") {
-		t.Fatal("startup animation controls in output")
+	d.press("enter", "enter")
+	d.want("already exists")
+	if d.m.step != stepFolder {
+		t.Fatal("accepted a folder that already has a workfile")
+	}
+	other := t.TempDir()
+	d.typeText(other)
+	d.press("enter")
+	d.want("Your Jira site")
+}
+
+func TestSetupGitHubIsConnectedWhenChosen(t *testing.T) {
+	for _, width := range []int{40, 60} {
+		d, root := newDriver(t, width, setupFake{})
+		d.toGitHubChoice()
+		d.press("y", "enter")
+		d.want("Your GitHub organisation")
+		d.typeText("https://github.com/example-team")
+		d.press("enter")
+		d.want("not a GitHub URL")
+		d.typeText("example-team")
+		d.press("enter")
+		d.want("Create a GitHub token")
+		d.want("repo and read:org")
+		d.typeText("example-github-token")
+		d.press("enter")
+		d.want("Which Jira project?")
+		d.press("enter", "enter")
+		d.finish()
+		w, err := workfile.Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := workfile.Credentials{Path: d.m.deps.credentials}
+		got, err := c.Get(w.Providers["github"].Auth["token"])
+		if len(w.Providers) != 2 || w.Providers["github"].Org != "example-team" || err != nil || got != "example-github-token" {
+			t.Fatalf("GitHub not configured: %+v %v", w.Providers, err)
+		}
+	}
+}
+
+func TestSetupGitHubTokenPageIsWrittenOutWhenPlain(t *testing.T) {
+	d, _ := newDriver(t, 40, setupFake{})
+	d.toGitHubChoice()
+	d.press("y", "enter")
+	d.typeText("example-team")
+	d.press("enter")
+	flat := strings.Join(strings.Fields(d.view()), "")
+	if !strings.Contains(flat, githubTokenPage) {
+		t.Fatalf("address not written out:\n%s", d.view())
+	}
+}
+
+func TestSetupSkippingGitHubDropsItsProvider(t *testing.T) {
+	d, root := newDriver(t, 60, setupFake{})
+	d.toGitHubChoice()
+	d.press("y", "enter")
+	d.typeText("example-team")
+	d.press("enter")
+	d.typeText("example-github-token")
+	d.press("enter")
+	d.press("esc", "esc", "esc")
+	d.want("Connect GitHub too?")
+	d.press("n", "enter")
+	d.want("Which Jira project?")
+	d.press("enter", "enter")
+	d.finish()
+	w, err := workfile.Load(root)
+	if err != nil || len(w.Providers) != 1 {
+		t.Fatalf("GitHub kept after choosing no: %+v %v", w, err)
+	}
+}
+
+func TestSetupStatusesCanBeUntickedAndReordered(t *testing.T) {
+	d, root := newDriver(t, 60, setupTwoPeopleFake{})
+	d.toStatuses()
+	d.want("[✓] To Do")
+	d.press("down", "space")
+	d.want("[ ] In Progress")
+	d.want("Pipeline  To Do → Done")
+	d.press("enter")
+	d.finish()
+	w, err := workfile.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(w.Policy.States, " ") != "to_do done" || len(w.People) != 2 {
+		t.Fatalf("unexpected workspace: %+v", w)
+	}
+	if w.Providers["jira"].Scope != `project = "APP" AND status in ("To Do", "Done")` {
+		t.Fatalf("unexpected scope: %s", w.Providers["jira"].Scope)
+	}
+	policy, err := os.ReadFile(filepath.Join(root, ".workfile", "policy.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sections := strings.Split(strings.TrimSpace(string(policy)), "\n\n")
+	for i, key := range []string{"tracker:", "states:", "transitions:", "gates:"} {
+		if len(sections) != 4 || !strings.HasPrefix(sections[i], key) {
+			t.Fatalf("policy sections wrong: %s", policy)
+		}
+	}
+	people, err := os.ReadFile(filepath.Join(root, ".workfile", "people.yml"))
+	if err != nil || !strings.HasPrefix(string(people), "alice:\n") || !strings.Contains(string(people), "\n\nbob:\n") {
+		t.Fatalf("people not spaced: %s %v", people, err)
+	}
+
+	d, root = newDriver(t, 60, setupFake{})
+	d.toStatuses()
+	d.press("shift+down")
+	d.want("Pipeline  In Progress → To Do → Done")
+	d.press("enter")
+	d.finish()
+	w, err = workfile.Load(root)
+	if err != nil || strings.Join(w.Policy.States, " ") != "in_progress to_do done" {
+		t.Fatalf("reorder not saved: %+v %v", w, err)
+	}
+}
+
+func TestSetupNeedsAtLeastOneStatus(t *testing.T) {
+	d, _ := newDriver(t, 60, setupFake{})
+	d.toStatuses()
+	d.press("a", "enter")
+	d.want("Keep at least one status.")
+	if d.m.step != stepStatuses {
+		t.Fatal("moved on with no statuses")
+	}
+}
+
+func TestSetupPeopleFailureStillSaves(t *testing.T) {
+	d, root := newDriver(t, 60, setupFake{peopleErr: true})
+	d.toStatuses()
+	d.press("enter")
+	d.want("Could not import people")
+	d.finish()
+	w, err := workfile.Load(root)
+	if err != nil || len(w.People) != 0 {
+		t.Fatalf("unexpected workspace: %+v %v", w, err)
+	}
+}
+
+func TestSetupConnectionFailureReturnsToTheFieldWithAMessage(t *testing.T) {
+	fake := &setupRetryFake{}
+	d, root := newDriver(t, 60, fake)
+	d.toGitHubChoice()
+	d.want("Could not connect to Jira")
+	d.want("HTTP 401")
+	if d.m.step != stepSite || d.m.input.Value() != "example-team.atlassian.net" {
+		t.Fatalf("not back on the site field: step %d", d.m.step)
+	}
+	d.press("enter", "enter")
+	d.typeText("example-token-2")
+	d.press("enter")
+	d.want("Connect GitHub too?")
+	d.press("n", "enter", "enter", "enter")
+	d.finish()
+	w, err := workfile.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := workfile.Credentials{Path: d.m.deps.credentials}
+	got, err := c.Get(w.Providers["jira"].Auth["token"])
+	if err != nil || got != "example-token-2" || fake.calls != 2 {
+		t.Fatalf("replacement token not saved: %q %v", got, err)
+	}
+}
+
+func TestSetupCredentialFailureRemovesWorkspace(t *testing.T) {
+	d, root := newDriver(t, 60, setupFake{})
+	if err := os.MkdirAll(d.m.deps.credentials, 0700); err != nil {
+		t.Fatal(err)
+	}
+	d.toStatuses()
+	d.press("enter")
+	d.want("Ready to save")
+	d.press("enter")
+	d.want("Could not save")
+	if _, err := os.Stat(filepath.Join(root, ".workfile")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed save left a partial workspace")
+	}
+	if d.m.saved {
+		t.Fatal("marked saved after failing")
+	}
+}
+
+func TestSetupLeavingBeforeTheEndWritesNothing(t *testing.T) {
+	d, root := newDriver(t, 60, setupFake{})
+	d.toStatuses()
+	d.press("enter")
+	d.want("Ready to save")
+	d.press("ctrl+c")
+	if _, err := os.Stat(filepath.Join(root, ".workfile")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("wrote files before the final confirm")
+	}
+}
+
+func TestSetupNoProjectsIsAnError(t *testing.T) {
+	d, _ := newDriver(t, 60, setupNoProjects{})
+	d.skipGitHub()
+	if d.m.fatal == nil || !d.quit {
+		t.Fatal("expected a fatal error")
+	}
+}
+
+type setupNoProjects struct{ setupFake }
+
+func (setupNoProjects) SetupProjects(context.Context) ([]provider.SetupProject, error) {
+	return nil, nil
+}
+
+func TestSetupStaleAnswersAreIgnored(t *testing.T) {
+	d, _ := newDriver(t, 60, setupFake{})
+	d.toJiraToken()
+	d.typeText("example-token")
+	d.m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	d.m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	d.m.Update(testedMsg{id: d.m.loadID - 1})
+	if d.m.step == stepAskGitHub {
+		t.Fatal("answer for a cancelled request moved the screen")
+	}
+}
+
+func TestSetupAnimationFramesFit(t *testing.T) {
+	th := newTheme(false, "")
+	var lines int
+	for f := 0; f <= animLast+3; f++ {
+		frame := th.animFrame(f)
+		n := strings.Count(frame, "\n")
+		if f > 0 && n != lines {
+			t.Fatalf("frame %d changes height", f)
+		}
+		lines = n
+		for _, line := range strings.Split(frame, "\n") {
+			if lipgloss.Width(line) > 24 {
+				t.Fatalf("frame %d is too wide: %q", f, line)
+			}
+		}
+	}
+	last := th.animFrame(animLast)
+	if !strings.Contains(last, "w o r k f i l e") || strings.Contains(th.animFrame(0), "w o r k") {
+		t.Fatal("wordmark should appear only at the end")
+	}
+}
+
+func TestSetupPlainSkipsAnimation(t *testing.T) {
+	d, _ := newDriver(t, 40, setupFake{})
+	if d.m.animate || d.m.frame != animLast {
+		t.Fatal("plain output should start on the finished frame")
+	}
+	if cmd := d.m.Init(); cmd != nil {
+		t.Fatal("plain output should not tick")
+	}
+	d.want("w o r k f i l e")
+}
+
+func TestSetupAnimationSkipsOnAnyKey(t *testing.T) {
+	d, _ := newDriver(t, 60, setupFake{})
+	d.m.animate, d.m.frame = true, 3
+	d.press("x")
+	if d.m.frame != animLast || d.m.step != stepWelcome {
+		t.Fatal("a key should skip to the end without moving on")
+	}
+	d.press("enter")
+	if d.m.step != stepFolder {
+		t.Fatal("enter should begin after the animation")
+	}
+}
+
+func TestSetupColourPanelKeepsItsBackground(t *testing.T) {
+	th := newTheme(true, "48;2;30;30;30")
+	panel := th.panel(th.good("ok")+" then "+th.bold("more")+"\nshort", 30)
+	for _, line := range strings.Split(panel, "\n") {
+		if lipgloss.Width(line) != 30 {
+			t.Fatalf("panel line is %d wide: %q", lipgloss.Width(line), line)
+		}
+		if !strings.HasPrefix(line, "\x1b[48;2;30;30;30m") {
+			t.Fatalf("line lost its background: %q", line)
+		}
+	}
+	if strings.Contains(panel, "▌") {
+		t.Fatal("panels have no edge")
+	}
+	if !strings.Contains(panel, "\x1b[0m\x1b[48;2;30;30;30m") {
+		t.Fatal("background not restored after styled text")
+	}
+}
+
+func TestSetupTokenValidation(t *testing.T) {
+	for _, bad := range []string{"", " ", "a b", "a\nb", `"x"`, "x'y"} {
+		if _, err := setupToken(bad); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	if got, err := setupToken("  example-token  "); err != nil || got != "example-token" {
+		t.Fatal("rejected a good token")
+	}
+}
+
+func TestSetupTypingKeysFillsTheInput(t *testing.T) {
+	d, _ := newDriver(t, 60, setupFake{})
+	d.press("enter", "enter")
+	d.m.input.SetValue("")
+	d.press("a", "b", "c")
+	if d.m.input.Value() != "abc" {
+		t.Fatalf("typed keys lost: %q", d.m.input.Value())
+	}
+}
+
+func TestSetupColourUsesOnlyTheTerminalsOwnColours(t *testing.T) {
+	var out bytes.Buffer
+	m := newSetupModel(context.Background(), view{out: &out, width: 60, color: true}, setupDeps{
+		dir: t.TempDir(), background: "48;2;30;30;30",
+		open:    func(string) error { return nil },
+		connect: func(*workfile.Workspace, map[string]string) setupSource { return setupFake{} },
+	})
+	m.Init()
+	var screens []string
+	for _, step := range []setupStep{stepWelcome, stepFolder, stepAskGitHub, stepReview} {
+		m.step = step
+		m.statuses, m.items = []string{"To Do"}, []stageItem{{0, true}}
+		screens = append(screens, m.render())
+	}
+	all := strings.Join(screens, "")
+	if !strings.Contains(all, "\x1b[") {
+		t.Fatal("expected colour")
+	}
+	for _, bad := range []string{"38;2;", "▌"} {
+		if strings.Contains(all, bad) {
+			t.Fatalf("found %q: only the 16 ANSI colours and a panel background are allowed", bad)
+		}
+	}
+	for _, m := range regexp.MustCompile(`38;5;(\d+)`).FindAllStringSubmatch(all, -1) {
+		if n, _ := strconv.Atoi(m[1]); n > 15 {
+			t.Fatalf("colour %d is outside the 16 ANSI colours", n)
+		}
 	}
 }

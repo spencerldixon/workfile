@@ -54,6 +54,11 @@ func TestExpressionOperators(t *testing.T) {
 		{`github.prs == 0`, nil, true},
 		{`jira.type != Story`, "Bug", true},
 		{`jira.labels.count <= 1`, []string{"one", "two"}, false},
+		{`jira.type == story`, "Story", true},
+		{`jira.type != STORY`, "Story", false},
+		{`github.labels contains Needs-QA`, []string{"needs-qa"}, true},
+		{`github.labels excludes do-not-merge`, []string{"DO-NOT-MERGE"}, false},
+		{`jira.labels contains_any [Bug, feature]`, []string{"bug"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.source, func(t *testing.T) {
