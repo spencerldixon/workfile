@@ -4,3 +4,5 @@
 /.cache/
 .DS_Store
 coverage.out
+/.worktrees/
+/.superpowers/
