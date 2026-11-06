@@ -124,6 +124,8 @@ type Ticket struct {
 	Facts       Facts
 	Unavailable map[string]string
 	Records     map[string][]Record
+	// LinkedPRs are PRs the tracker knows are linked, as org/repo#42.
+	LinkedPRs []string
 }
 
 type Record struct {

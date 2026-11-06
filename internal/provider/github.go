@@ -244,20 +244,34 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 	if err != nil {
 		return nil, err
 	}
+	// A tracker that knows a ticket's PRs says so in LinkedPRs. Those are read
+	// directly; only the other tickets are searched for.
 	wanted := map[string]bool{}
-	var keys []string
+	var keys, searchTerms []string
+	var refs []string
+	byRef := map[string][]string{}
 	for _, t := range tickets {
-		key := strings.ToUpper(t.Key)
-		if !wanted[key] {
-			wanted[key] = true
-			keys = append(keys, key)
+		if len(t.LinkedPRs) > 0 {
+			for _, ref := range t.LinkedPRs {
+				if _, _, _, ok := splitRef(p.Org, ref); !ok {
+					continue
+				}
+				if !slices.Contains(byRef[ref], t.Key) {
+					if byRef[ref] == nil {
+						refs = append(refs, ref)
+					}
+					byRef[ref] = append(byRef[ref], t.Key)
+				}
+			}
+			continue
+		}
+		if !wanted[t.Key] {
+			wanted[t.Key] = true
+			keys = append(keys, t.Key)
+			searchTerms = append(searchTerms, tk.Search(t.Key))
 		}
 	}
-	type linkedPR struct {
-		pr   pullRequest
-		keys []string
-	}
-	queries := keySearches(p.Org, keys)
+	queries := keySearches(p.Org, searchTerms)
 	results, err := parallel(ctx, len(queries), func(ctx context.Context, i int) ([]pullRequest, error) {
 		return c.searchPRs(ctx, token, queries[i], false)
 	})
@@ -265,8 +279,15 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 		return nil, err
 	}
 	// Search matches loosely and a PR can mention tickets from two searches.
-	// Link only keys in the title or branch, or explicit Jira links in the body.
+	// Link only keys in the title or branch, or explicit links in the body.
+	type linkedPR struct {
+		id, ref string
+		keys    []string
+	}
 	var matched []linkedPR
+	for _, ref := range refs {
+		matched = append(matched, linkedPR{ref: ref, keys: byRef[ref]})
+	}
 	seen := map[string]bool{}
 	for _, prs := range results {
 		for _, pr := range prs {
@@ -274,19 +295,25 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 				continue
 			}
 			seen[pr.ID] = true
-			keys := tk.Mentions(pr.Title + " " + pr.HeadRefName)
-			keys = append(keys, tk.Links(pr.Body)...)
-			slices.Sort(keys)
-			keys = slices.Compact(keys)
-			keys = slices.DeleteFunc(keys, func(key string) bool { return !wanted[key] })
-			if len(keys) > 0 {
-				matched = append(matched, linkedPR{pr: pr, keys: keys})
+			found := tk.Mentions(pr.Title + " " + pr.HeadRefName)
+			found = append(found, tk.Links(pr.Body)...)
+			slices.Sort(found)
+			found = slices.Compact(found)
+			found = slices.DeleteFunc(found, func(key string) bool { return !wanted[key] })
+			if len(found) > 0 {
+				matched = append(matched, linkedPR{id: pr.ID, keys: found})
 			}
 		}
 	}
 	// Read details in one bounded pool. Keep result order independent of timing.
 	records, err := parallel(ctx, len(matched), func(ctx context.Context, i int) (workfile.Record, error) {
-		pr, err := c.readPR(ctx, token, matched[i].pr.ID)
+		var pr pullRequest
+		var err error
+		if matched[i].ref != "" {
+			pr, err = c.readRef(ctx, token, p.Org, matched[i].ref)
+		} else {
+			pr, err = c.readPR(ctx, token, matched[i].id)
+		}
 		if err != nil {
 			return workfile.Record{}, err
 		}
@@ -304,6 +331,46 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 		}
 	}
 	return linked, nil
+}
+
+// splitRef reads "org/repo#42". It reports false for a PR in another
+// organisation, which this provider cannot read, or for a malformed reference.
+func splitRef(org, ref string) (repo string, number int, owner string, ok bool) {
+	path, num, found := strings.Cut(ref, "#")
+	owner, repo, found2 := strings.Cut(path, "/")
+	number, err := strconv.Atoi(num)
+	if !found || !found2 || err != nil || number <= 0 || owner != org || repo == "" || strings.Contains(repo, "/") {
+		return "", 0, "", false
+	}
+	return repo, number, owner, true
+}
+
+// readRef reads one PR by its "org/repo#42" reference.
+func (c githubCodeHost) readRef(ctx context.Context, token, org, ref string) (pullRequest, error) {
+	repo, number, owner, ok := splitRef(org, ref)
+	if !ok {
+		return pullRequest{}, errors.New("a linked PR reference is not in this organisation")
+	}
+	const query = `query($owner: String!, $name: String!, $number: Int!) {
+	  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ` + prFields + ` } }
+	}`
+	var response struct {
+		Repository *struct{ PullRequest *pullRequest }
+	}
+	if err := c.graph(ctx, token, query, map[string]any{"owner": owner, "name": repo, "number": number}, &response); err != nil {
+		return pullRequest{}, err
+	}
+	if response.Repository == nil || response.Repository.PullRequest == nil {
+		return pullRequest{}, errors.New("GitHub could not read a linked PR")
+	}
+	pr := response.Repository.PullRequest
+	if pr.ID == "" || pr.Number != number || pr.Repository.Name != repo {
+		return pullRequest{}, errors.New("GitHub could not read a linked PR")
+	}
+	if err := c.completePR(ctx, token, pr); err != nil {
+		return pullRequest{}, err
+	}
+	return *pr, nil
 }
 
 func (c *Client) readPR(ctx context.Context, token, id string) (pullRequest, error) {
