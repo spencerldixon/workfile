@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"workfile/internal/workfile"
@@ -131,82 +130,24 @@ func (c *Client) graph(ctx context.Context, token, query string, variables any, 
 	return nil
 }
 
-func (c *Client) Identity(ctx context.Context, name string) (string, error) {
-	p := c.Workspace.Providers[name]
-	if p.Kind == "jira" {
-		base, auth, err := c.jira(ctx, name)
-		if err != nil {
-			return "", err
-		}
-		var user struct {
-			AccountID string `json:"accountId"`
-		}
-		if err := c.request(ctx, "GET", base+"/rest/api/3/myself", auth, nil, &user); err != nil {
-			return "", err
-		}
-		if user.AccountID == "" {
-			return "", errors.New("Jira did not return an account identity; check read:jira-user permission")
-		}
-		return user.AccountID, nil
-	}
-	token, err := c.Credentials.Get(p.Auth["token"])
-	if err != nil {
-		return "", err
-	}
-	var response struct{ Viewer struct{ Login string } }
-	if err := c.graph(ctx, token, `query { viewer { login } }`, nil, &response); err != nil {
-		return "", err
-	}
-	if response.Viewer.Login == "" {
-		return "", errors.New("GitHub did not return an account identity")
-	}
-	return response.Viewer.Login, nil
-}
-
-func (c *Client) Test(ctx context.Context, name string) (string, error) {
-	identity, err := c.Identity(ctx, name)
-	if err != nil {
-		return "", err
-	}
-	p := c.Workspace.Providers[name]
-	if p.Kind == "jira" {
-		items, err := c.Tickets(ctx, nil, 1)
-		if err != nil {
-			return "", err
-		}
-		if len(items) == 0 {
-			return identity + " · connected; scope returned no visible tickets", nil
-		}
-		detail := identity + " · scope readable"
-		if c.needsLabelHistory() {
-			detail += " · label history readable"
-		}
-		return detail, nil
-	}
-	token, err := c.Credentials.Get(p.Auth["token"])
-	if err != nil {
-		return "", err
-	}
-	repos, err := c.repositories(ctx, p, token)
-	if err != nil {
-		return "", err
-	}
-	if len(repos) == 0 {
-		return identity + " · connected; no visible active repositories", nil
-	}
-	_, err = c.searchPRs(ctx, token, fmt.Sprintf("org:%s is:pr archived:false", p.Org), true)
-	return fmt.Sprintf("%s · %s · %d visible active repositories", identity, p.Org, len(repos)), err
-}
-
 func (c *Client) Records(ctx context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error) {
 	if len(tickets) == 0 {
 		return tickets, nil, nil
 	}
+	keys := c.Workspace.TrackerKeys()
 	for _, name := range workfile.SortedKeys(c.Workspace.Providers) {
-		if name == c.Workspace.Policy.Tracker {
+		if c.Workspace.IsTracker(name) {
 			continue
 		}
-		linked, err := c.githubRecords(ctx, name, tickets)
+		conn, err := c.connection(name)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", name, err)
+		}
+		host, ok := conn.(codeHost)
+		if !ok {
+			return nil, nil, fmt.Errorf("%s: not a code host", name)
+		}
+		linked, err := host.Records(ctx, tickets, keys)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", name, err)
 		}
@@ -214,8 +155,40 @@ func (c *Client) Records(ctx context.Context, tickets []workfile.Ticket) ([]work
 			if tickets[i].Records == nil {
 				tickets[i].Records = map[string][]workfile.Record{}
 			}
-			tickets[i].Records[name] = linked[strings.ToUpper(tickets[i].Key)]
+			tickets[i].Records[name] = linked[tickets[i].Key]
 		}
 	}
 	return tickets, nil, nil
+}
+
+// download reads one file, never more than 16 MB. The address and credentials
+// are the caller's; this follows no redirects, so the token stays on its host.
+func (c *Client) download(ctx context.Context, address, auth string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", address, nil)
+	if err != nil {
+		return nil, errors.New("invalid provider URL")
+	}
+	req.Header.Set("User-Agent", "workfile")
+	if auth != "" {
+		req.Header.Set("Authorization", auth)
+	}
+	response, err := c.HTTP.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, errors.New("cannot reach provider; check your network and the configured site")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("provider returned HTTP %d", response.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(response.Body, (16<<20)+1))
+	if err != nil {
+		return nil, errors.New("could not read provider response")
+	}
+	if len(data) > 16<<20 {
+		return nil, errors.New("image exceeds 16 MB")
+	}
+	return data, nil
 }

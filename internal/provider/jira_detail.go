@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"regexp"
 	"time"
@@ -20,7 +18,7 @@ var listingFields = []string{"summary", "status", "assignee", "issuetype"}
 
 // Listing reads the little a ticket list needs, for every ticket in scope.
 func (c jiraTracker) Listing(ctx context.Context, scope string) ([]workfile.Listing, error) {
-	name := c.Workspace.Policy.Tracker
+	name := c.name
 	p := c.Workspace.Providers[name]
 	base, auth, err := c.jira(ctx, name)
 	if err != nil {
@@ -59,7 +57,7 @@ type jiraComments struct {
 
 // Detail reads one ticket's description, comments and attachments.
 func (c jiraTracker) Detail(ctx context.Context, key string) (workfile.Detail, error) {
-	name := c.Workspace.Policy.Tracker
+	name := c.name
 	base, auth, err := c.jira(ctx, name)
 	if err != nil {
 		return workfile.Detail{}, fmt.Errorf("%s: %w", name, err)
@@ -137,34 +135,10 @@ func (c jiraTracker) Image(ctx context.Context, id string) ([]byte, error) {
 	if !attachmentID.MatchString(id) {
 		return nil, errors.New("not an attachment id")
 	}
-	name := c.Workspace.Policy.Tracker
+	name := c.name
 	base, auth, err := c.jira(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", base+"/rest/api/3/attachment/content/"+id+"?redirect=false", nil)
-	if err != nil {
-		return nil, errors.New("invalid provider URL")
-	}
-	req.Header.Set("User-Agent", "workfile")
-	req.Header.Set("Authorization", auth)
-	response, err := c.HTTP.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, errors.New("cannot reach provider; check your network and the configured site")
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, fmt.Errorf("provider returned HTTP %d", response.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, (16<<20)+1))
-	if err != nil {
-		return nil, errors.New("could not read provider response")
-	}
-	if len(data) > 16<<20 {
-		return nil, errors.New("image exceeds 16 MB")
-	}
-	return data, nil
+	return c.download(ctx, base+"/rest/api/3/attachment/content/"+id+"?redirect=false", auth)
 }

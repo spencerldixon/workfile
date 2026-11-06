@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -401,5 +403,49 @@ func TestConnectionChecksReadIdentityAndScope(t *testing.T) {
 		if strings.Contains(path, "changelog") {
 			t.Error("read label history despite no actor rules")
 		}
+	}
+}
+
+func TestUnknownKindDoesNotFallThroughToGitHub(t *testing.T) {
+	calls := 0
+	c := client(t, func(*http.Request) (int, string) { calls++; return 200, `{}` })
+	if _, err := c.Identity(context.Background(), "missing"); err == nil {
+		t.Fatal("an unknown connection must be an error")
+	}
+	p := c.Workspace.Providers["github"]
+	p.Kind = "unknown"
+	c.Workspace.Providers["github"] = p
+	if _, err := c.Identity(context.Background(), "github"); err == nil {
+		t.Fatal("an unknown kind must be an error")
+	}
+	if calls != 0 {
+		t.Fatalf("made %d requests", calls)
+	}
+}
+
+func TestDownloadRefusesLargeImages(t *testing.T) {
+	c := client(t, func(*http.Request) (int, string) { return 200, strings.Repeat("x", (16<<20)+1) })
+	_, err := c.download(context.Background(), "https://example.com/a.png", "")
+	if err == nil || !strings.Contains(err.Error(), "image exceeds 16 MB") {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestAssigneePrefersTheConfiguredAccount(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	c := client(t, func(*http.Request) (int, string) { return 200, `{}` })
+	j := jiraTracker{Client: c, name: c.Workspace.Policy.Tracker}
+	if who, err := j.assignee(); err != nil || who != "currentUser()" {
+		t.Fatalf("got %q, %v", who, err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "workfile"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "workfile", "config.yml"), []byte("me:\n  jira: \"acc-1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if who, err := j.assignee(); err != nil || who != `"acc-1"` {
+		t.Fatalf("got %q, %v", who, err)
 	}
 }

@@ -17,7 +17,7 @@ type pageInfo struct {
 	HasNextPage bool
 	EndCursor   string
 }
-type connection[T any] struct {
+type graphConnection[T any] struct {
 	Nodes    []T
 	PageInfo pageInfo
 }
@@ -38,12 +38,12 @@ type pullRequest struct {
 	IsDraft                            *bool
 	MergeQueueEntry                    json.RawMessage
 	HeadRefOID                         string
-	Commits                            *connection[commitNode]
+	Commits                            *graphConnection[commitNode]
 	Repository                         struct{ Name string }
 	Author                             login
-	Labels                             connection[label]
-	LatestOpinionatedReviews           connection[review]
-	ReviewRequests                     connection[reviewRequest]
+	Labels                             graphConnection[label]
+	LatestOpinionatedReviews           graphConnection[review]
+	ReviewRequests                     graphConnection[reviewRequest]
 }
 
 const repositoryQuery = `query($org: String!, $after: String) {
@@ -96,7 +96,7 @@ func (c *Client) repositories(ctx context.Context, p workfile.Provider, token st
 	for {
 		var response struct {
 			Organization *struct {
-				Repositories connection[struct {
+				Repositories graphConnection[struct {
 					Name       string
 					IsArchived bool
 				}]
@@ -237,13 +237,13 @@ func parallel[T any](ctx context.Context, count int, run func(context.Context, i
 	return results, nil
 }
 
-func (c *Client) githubRecords(ctx context.Context, name string, tickets []workfile.Ticket) (map[string][]workfile.Record, error) {
+func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, tk workfile.Keys) (map[string][]workfile.Record, error) {
+	name := c.name
 	p := c.Workspace.Providers[name]
 	token, err := c.Credentials.Get(p.Auth["token"])
 	if err != nil {
 		return nil, err
 	}
-	tk := c.Workspace.TrackerKeys()
 	wanted := map[string]bool{}
 	var keys []string
 	for _, t := range tickets {

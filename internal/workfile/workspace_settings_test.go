@@ -41,18 +41,3 @@ func TestWorkspaceSettingsRejectUnknownFields(t *testing.T) {
 		t.Fatal("a misspelt setting must not be ignored")
 	}
 }
-
-func TestMyJiraAssigneePrefersTheConfiguredAccount(t *testing.T) {
-	writeSettings(t, "example-web", "only_mine: true\n")
-	w := example(t)
-	if who, err := w.MyJiraAssignee(); err != nil || who != "currentUser()" {
-		t.Fatalf("got %q, %v", who, err)
-	}
-	config := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "workfile", "config.yml")
-	if err := os.WriteFile(config, []byte("me:\n  jira: \"acc-1\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if who, err := w.MyJiraAssignee(); err != nil || who != `"acc-1"` {
-		t.Fatalf("got %q, %v", who, err)
-	}
-}

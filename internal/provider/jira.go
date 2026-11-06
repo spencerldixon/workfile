@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"workfile/internal/workfile"
@@ -94,10 +95,10 @@ func splitScope(scope string) (string, string) {
 
 // scope splits a search into its condition and order, narrowing it to the
 // person's own tickets when the workspace says so.
-func (c *Client) scope(scope string) (string, string, error) {
+func (c jiraTracker) scope(scope string) (string, string, error) {
 	condition, order := splitScope(scope)
 	if c.Workspace.Settings.OnlyMine {
-		assignee, err := c.Workspace.MyJiraAssignee()
+		assignee, err := c.assignee()
 		if err != nil {
 			return "", "", err
 		}
@@ -106,11 +107,31 @@ func (c *Client) scope(scope string) (string, string, error) {
 	return condition, order, nil
 }
 
+// assignee is the JQL value for the person's own Jira account: me.<name> from
+// config.yml when set, otherwise whoever owns the token.
+func (c jiraTracker) assignee() (string, error) {
+	me, err := workfile.Me()
+	if err != nil {
+		return "", err
+	}
+	id := me[c.name]
+	if id == "" {
+		id = me["jira"]
+	}
+	if id == "" {
+		return "currentUser()", nil
+	}
+	return strconv.Quote(id), nil
+}
+
 // jiraTracker reads tickets from Jira.
-type jiraTracker struct{ *Client }
+type jiraTracker struct {
+	*Client
+	name string
+}
 
 func (c jiraTracker) Tickets(ctx context.Context, keys []string, limit int) ([]workfile.Ticket, error) {
-	name := c.Workspace.Policy.Tracker
+	name := c.name
 	p := c.Workspace.Providers[name]
 	base, auth, err := c.jira(ctx, name)
 	if err != nil {
@@ -340,4 +361,40 @@ func (c *Client) search(ctx context.Context, name, base, auth, jql string, field
 		seen[token] = true
 	}
 	return issues, nil
+}
+
+func (c jiraTracker) Identity(ctx context.Context) (string, error) {
+	base, auth, err := c.jira(ctx, c.name)
+	if err != nil {
+		return "", err
+	}
+	var user struct {
+		AccountID string `json:"accountId"`
+	}
+	if err := c.request(ctx, "GET", base+"/rest/api/3/myself", auth, nil, &user); err != nil {
+		return "", err
+	}
+	if user.AccountID == "" {
+		return "", errors.New("Jira did not return an account identity; check read:jira-user permission")
+	}
+	return user.AccountID, nil
+}
+
+func (c jiraTracker) Test(ctx context.Context) (string, error) {
+	identity, err := c.Identity(ctx)
+	if err != nil {
+		return "", err
+	}
+	items, err := c.Tickets(ctx, nil, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 {
+		return identity + " · connected; scope returned no visible tickets", nil
+	}
+	detail := identity + " · scope readable"
+	if c.needsLabelHistory() {
+		detail += " · label history readable"
+	}
+	return detail, nil
 }

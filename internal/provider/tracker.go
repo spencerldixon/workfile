@@ -11,8 +11,9 @@ import (
 // tracker is the place tickets live. Everything above this file works with any
 // tracker: keys, statuses and addresses are the tracker's own text, and rich
 // text arrives as workfile blocks. To add a tracker, write an adapter with
-// these methods and list its kind in Client.tracker.
+// these methods and list its kind in trackers.
 type tracker interface {
+	connection
 	// Tickets reads tickets in full for policy checks: the named keys, or the
 	// configured scope up to limit.
 	Tickets(ctx context.Context, keys []string, limit int) ([]workfile.Ticket, error)
@@ -27,12 +28,22 @@ type tracker interface {
 	Image(ctx context.Context, attachment string) ([]byte, error)
 }
 
+// trackers lists the adapters for each tracker kind.
+var trackers = map[string]func(*Client, string) tracker{
+	"jira": func(c *Client, name string) tracker { return jiraTracker{Client: c, name: name} },
+}
+
 func (c *Client) tracker() (tracker, error) {
-	kind := c.Workspace.Providers[c.Workspace.Policy.Tracker].Kind
-	if kind == "jira" {
-		return jiraTracker{c}, nil
+	name := c.Workspace.Policy.Tracker
+	conn, err := c.connection(name)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("Workfile cannot read tickets from %q yet", kind)
+	t, ok := conn.(tracker)
+	if !ok {
+		return nil, fmt.Errorf("Workfile cannot read tickets from %q yet", c.Workspace.Providers[name].Kind)
+	}
+	return t, nil
 }
 
 func (c *Client) Tickets(ctx context.Context, keys []string, limit int) ([]workfile.Ticket, error) {
