@@ -148,4 +148,3 @@ when it fired as `at`, the `ticket` and `stage`, `to` for a `ready` trigger, and
 `provider`, `record` and `record_url` for a trigger about PRs), and a `ticket`
 object in the same format as one ticket of a report. See
 [Automations](automations.md).
-

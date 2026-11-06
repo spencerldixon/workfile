@@ -8,10 +8,10 @@ You create a .workfile in your repo, with a policy.yml that describes how work m
 
 Since workfile reconciles state across these services, you can build automations on top of this: "when this happens to my work, do that".
 
-Workfile's checks only read. 
-Workfile itself never changes a ticket, a label or a pull request. 
+Workfile's checks only read.
+Workfile itself never changes a ticket, a label or a pull request.
 
-Automations run commands and agents the person chose, on their own computer; those do the changing, with their own access. 
+Automations run commands and agents the person chose, on their own computer; those do the changing, with their own access.
 
 Never add a Jira or GitHub write to Workfile.
 
