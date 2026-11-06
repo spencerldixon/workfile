@@ -90,6 +90,8 @@ type Provider struct {
 	// Lookback is no longer used: PRs are found by ticket key, however old.
 	// It is still accepted so older providers.yml files load.
 	Lookback string            `yaml:"lookback"`
+	Project  int               `yaml:"project"`
+	View     int               `yaml:"view"`
 	Auth     map[string]string `yaml:"auth"`
 }
 

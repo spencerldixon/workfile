@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -219,69 +218,61 @@ func (w *Workspace) validate() error {
 		if provider.Kind == "" {
 			provider.Kind = name
 		}
-		fields := []string{"token"}
-		switch provider.Kind {
-		case "jira":
-			fields = append(fields, "email")
-			provider.Site = strings.TrimSuffix(strings.TrimPrefix(provider.Site, "https://"), "/")
-			u, err := url.Parse("https://" + provider.Site)
-			if err != nil || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(provider.Site, "<> ") {
-				add("providers.yml: %s.site must be a Jira Cloud hostname", name)
-			}
-			if strings.TrimSpace(provider.Scope) == "" {
-				add("providers.yml: %s.scope is required", name)
-			}
-			if provider.Org != "" || provider.Lookback != "" {
-				add("providers.yml: %s has GitHub settings on a Jira instance", name)
-			}
-			if provider.DefaultProject != "" && !projectPattern.MatchString(provider.DefaultProject) {
-				add("providers.yml: %s.default_project must be a Jira project key such as APP", name)
-			}
-			statuses := map[string]bool{}
-			for _, state := range p.States {
-				if len(provider.Statuses[state]) == 0 {
-					add("providers.yml: %s.statuses needs %s", name, state)
-				}
-				for _, status := range provider.Statuses[state] {
-					key := strings.ToLower(strings.TrimSpace(status))
-					if key == "" || statuses[key] {
-						add("providers.yml: %s.statuses must contain nonempty, unique Jira statuses", name)
-					}
-					statuses[key] = true
-				}
-			}
-			for state := range provider.Statuses {
-				if !seen[state] {
-					add("providers.yml: %s.statuses has unknown state %s", name, state)
-				}
-			}
-			if name != p.Tracker {
-				add("providers.yml: only one Jira tracker is supported; %s is not the tracker", name)
-			}
-		case "github":
-			if !orgPattern.MatchString(provider.Org) {
-				add("providers.yml: %s.org must be a GitHub organisation name", name)
-			}
-			if provider.Site != "" || provider.Scope != "" || provider.DefaultProject != "" || len(provider.Statuses) != 0 {
-				add("providers.yml: %s has Jira settings on a GitHub instance", name)
-			}
+		w.Providers[name] = provider
+		kind, known := Kinds[provider.Kind]
+		role := w.RoleOf(name)
+		switch {
+		case !known:
+			add("providers.yml: %s must use a known provider (%s)", name, strings.Join(SortedKeys(Kinds), ", "))
+		case role == nil && w.IsTracker(name):
+			// Reported below, once, as a policy.yml problem.
+		case role == nil:
+			add("providers.yml: %s is a %s connection and cannot be used as a code host; only the tracker can be one", name, kind.Label)
 		default:
-			add("providers.yml: %s must use provider: jira or provider: github", name)
+			for _, setting := range provider.settings() {
+				if !slices.Contains(role.Settings, setting) {
+					add("providers.yml: %s.%s is not a setting of a %s connection", name, setting, kind.Label)
+				}
+			}
+			provider.Site = strings.TrimSuffix(strings.TrimPrefix(provider.Site, "https://"), "/")
+			if role.Check != nil {
+				role.Check(name, provider, add)
+			}
+			if w.IsTracker(name) {
+				statuses := map[string]bool{}
+				for _, state := range p.States {
+					if len(provider.Statuses[state]) == 0 {
+						add("providers.yml: %s.statuses needs %s", name, state)
+					}
+					for _, status := range provider.Statuses[state] {
+						key := strings.ToLower(strings.TrimSpace(status))
+						if key == "" || statuses[key] {
+							add("providers.yml: %s.statuses must contain nonempty, unique statuses", name)
+						}
+						statuses[key] = true
+					}
+				}
+				for state := range provider.Statuses {
+					if !seen[state] {
+						add("providers.yml: %s.statuses has unknown state %s", name, state)
+					}
+				}
+			}
 		}
-		for _, field := range fields {
+		for _, field := range kind.Auth {
 			if !credentialPattern.MatchString(provider.Auth[field]) {
 				add("providers.yml: %s.auth.%s must reference a credential as ${NAME}", name, field)
 			}
 		}
 		for field := range provider.Auth {
-			if !slices.Contains(fields, field) {
+			if known && !slices.Contains(kind.Auth, field) {
 				add("providers.yml: %s has an unknown auth field", name)
 			}
 		}
 		w.Providers[name] = provider
 	}
-	if w.Providers[p.Tracker].Kind != "jira" {
-		add("policy.yml: tracker must name a configured Jira instance")
+	if kind, ok := Kinds[w.Providers[p.Tracker].Kind]; !ok || kind.Tracker == nil {
+		add("policy.yml: tracker must name a configured connection whose provider can be a tracker")
 	}
 	for person, identities := range w.People {
 		for instance, id := range identities {
