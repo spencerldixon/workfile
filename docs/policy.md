@@ -274,7 +274,7 @@ optional and is only used for display.
 You can connect more than one GitHub organisation:
 
 ```yaml
-# providers.yml — in addition to your Jira connection
+# providers.yml — in addition to your tracker connection
 github_client:
   provider: github
   org: example-client
@@ -283,7 +283,7 @@ github_client:
 ```
 
 Then write `github_client.approvals` in rules. People named in `by` rules for
-that connection need a `github_client` account in `people.yml`. Only one Jira
+that connection need a `github_client` account in `people.yml`. Only one tracker
 connection is supported.
 
 Want something to copy? See [the examples](../example/). Want every attribute

@@ -4,6 +4,9 @@
 
 Workfile reads your Jira tickets and their GitHub pull requests. It checks them
 against your team's workflow and shows you what needs attention.
+GitHub Issues can also be your tickets: see
+[GitHub Issues as a tracker](docs/providers/github.md#github-issues-as-a-tracker).
+`wf setup` only sets up Jira, so write `providers.yml` by hand for a GitHub tracker.
 
 You write your workflow in a `.workfile/` folder. Then you run `wf` from any
 folder inside your project. That folder becomes the source of truth for how
@@ -30,7 +33,7 @@ English before you install anything.
 | `wf prove` | Whether your policy has a path that skips a gate. It reads no tickets, so it runs in CI. |
 | `wf automations` | Your automations, and anything stopping them. |
 | `wf watch` | Checks your work every 2 minutes and fires your automations. |
-| `wf test` | Whether your connections to Jira and GitHub work. |
+| `wf test` | Whether your tracker and code host connections work. |
 
 Start from scratch with `wf setup`. It is a short, guided screen-by-screen setup
 with a small welcome animation. It opens token pages in your browser, shows `*`
@@ -458,7 +461,7 @@ make build
 ```
 
 The code has three small packages. `workfile` loads and checks policies.
-`provider` reads Jira and GitHub. `cli` runs the commands and draws the output.
+`provider` reads trackers (Jira, GitHub Issues) and code hosts (GitHub). `cli` runs the commands and draws the output.
 GitHub searches look for the checked tickets' keys in PR titles and
 descriptions, six tickets per search, then fetch labels, reviews and readiness
 evidence only for linked PRs. Up to six linked PRs are read at once.

@@ -567,9 +567,13 @@ Names are the connection names in `providers.yml`. With no names, every
 connection is tested. If one fails, the rest still run.
 
 For Jira, the test checks who the token belongs to and reads one ticket from your
-search. For a GitHub Issues tracker, it checks the project and the view. It also reads label history if your gates need it. For GitHub, it checks
-who you are, lists the repositories you can see, and runs a sample PR search. If
-your Jira search or GitHub organisation is empty, the test tells you.
+search. It also reads label history if your gates need it.
+
+For a GitHub Issues tracker, the test checks the project and the view.
+
+For a GitHub code host, it checks who you are, lists the repositories you can
+see, and runs a sample PR search. If your Jira search, GitHub project or GitHub
+organisation is empty, the test tells you.
 
 A pass means those reads worked. It does not prove you can see every ticket or
 repository you meant to include.

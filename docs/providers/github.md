@@ -179,7 +179,8 @@ github:
     token: ${EXAMPLE_GITHUB_TOKEN}
 ```
 
-In `policy.yml`, set `tracker: issues`. Two connections keep `issues.labels`
+In `policy.yml`, set `tracker: issues`. The keys under `statuses` must be stage
+names from `policy.yml`. Two connections keep `issues.labels`
 (labels on the issue) apart from `github.labels` (labels on the PR).
 
 | Setting | What it means |
