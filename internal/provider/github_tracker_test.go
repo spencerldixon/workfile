@@ -129,6 +129,10 @@ func githubConformTrackerResponses(t *testing.T) func(*http.Request) (int, strin
 		switch {
 		case strings.HasPrefix(query, "query { viewer {"):
 			return 200, `{"data":{"viewer":{"login":"example-bob"}}}`
+		case strings.Contains(query, "comments(last: 100)"):
+			return 200, `{"data":{"repository":{"issue":{"comments":{"totalCount":0,"nodes":[]}}}}}`
+		case strings.Contains(query, "$repo: String!"):
+			return 200, githubDetailBody
 		case strings.Contains(query, "totalCount"):
 			return 200, `{"data":{"organization":{"projectV2":{"title":"Example board","items":{"totalCount":3}}}}}`
 		case strings.Contains(query, "view(number"):
@@ -157,7 +161,6 @@ func TestGitHubTrackerConforms(t *testing.T) {
 		Handle:   githubConformTrackerResponses(t),
 		InScope:  "app#1", OutOfScope: "app#2", Unmapped: "app#3", Missing: "app#404",
 		ConfiguredScope: "label:blocked",
-		NoDetail:        true,
 	})
 }
 
@@ -873,19 +876,5 @@ func TestGitHubFacts(t *testing.T) {
 	}
 	if got := tickets[2]; got.Assignee != "example-charlie" || got.Facts["assignee"] != "example-charlie" {
 		t.Errorf("no display name: %+v", got)
-	}
-}
-
-func TestGitHubDetailIsNotBuiltYet(t *testing.T) {
-	c, rec := conformClient(t, "", issuesProvider(), func(*http.Request) (int, string) { return 200, `{}` })
-	tr := trackerOf(t, c)
-	if _, err := tr.Detail(context.Background(), "app#1"); err == nil {
-		t.Error("Detail should say it is not built")
-	}
-	if _, err := tr.Image(context.Background(), "x"); err == nil {
-		t.Error("Image should say it is not built")
-	}
-	if rec.count() != 0 {
-		t.Error("made a request")
 	}
 }

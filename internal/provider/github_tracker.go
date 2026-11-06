@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -444,8 +445,9 @@ func (c githubTracker) ticket(key string, issue githubIssue, status, problem str
 	} else {
 		t.Summary += " · assigned to " + assignee.displayName()
 	}
+	description, headings := markdownText(issue.Body)
 	t.Facts = workfile.Facts{
-		"summary": issue.Title, "description": issue.Body, "headings": markdownHeadings(issue.Body),
+		"summary": issue.Title, "description": description, "headings": headings,
 		"assignee": assignee.displayName(), "project": issue.Repository.Name,
 	}
 	if issue.Labels == nil {
@@ -466,38 +468,6 @@ func (c githubTracker) ticket(key string, issue githubIssue, status, problem str
 		t.LinkedPRs = append(t.LinkedPRs, fmt.Sprintf("%s/%s#%d", pr.Repository.Owner.Login, pr.Repository.Name, pr.Number))
 	}
 	return t
-}
-
-// markdownHeadings lists the # headings of a Markdown body, outside code fences.
-func markdownHeadings(body string) []string {
-	headings := []string{}
-	fence := ""
-	for line := range strings.Lines(body) {
-		line = strings.TrimRight(line, " \t\r\n")
-		text := strings.TrimLeft(line, " ")
-		if len(line)-len(text) > 3 {
-			continue // four spaces is an indented code block
-		}
-		marker := fenceMarker(text)
-		if fence != "" {
-			if marker == text && marker != "" && marker[0] == fence[0] && len(marker) >= len(fence) {
-				fence = ""
-			}
-			continue
-		}
-		if marker != "" {
-			fence = marker
-			continue
-		}
-		level := len(text) - len(strings.TrimLeft(text, "#"))
-		if level < 1 || level > 6 || len(text) > level && text[level] != ' ' && text[level] != '\t' {
-			continue
-		}
-		if heading := strings.TrimSpace(strings.TrimRight(text[level:], "# \t")); heading != "" {
-			headings = append(headings, heading)
-		}
-	}
-	return headings
 }
 
 // fenceMarker is the run of three or more backticks or tildes that opens line,
@@ -572,12 +542,91 @@ func (c githubTracker) Test(ctx context.Context) (string, error) {
 	return fmt.Sprintf("%s · %s · %d items", identity, project.Title, project.Items.TotalCount), nil
 }
 
-// Detail is built in the next task.
+// githubDetailQuery reads one issue's body, or its newest 100 comments.
+const githubDetailQuery = `query($org: String!, $repo: String!, $number: Int!) {
+	  repository(owner: $org, name: $repo) { issue(number: $number) { body } }
+	}`
+
+const githubCommentsQuery = `query($org: String!, $repo: String!, $number: Int!) {
+	  repository(owner: $org, name: $repo) { issue(number: $number) {
+	    comments(last: 100) { totalCount nodes { author { login } createdAt body } }
+	  } }
+	}`
+
+// Detail reads one issue's text and its newest 100 comments. The comments are a
+// second read: if it fails, the issue is still worth showing.
 func (c githubTracker) Detail(ctx context.Context, key string) (workfile.Detail, error) {
-	return workfile.Detail{}, errors.New("not built")
+	token, err := c.token()
+	if err != nil {
+		return workfile.Detail{}, err
+	}
+	p := c.Workspace.Providers[c.name]
+	key, err = c.Workspace.TrackerKeys().Parse(key, p.DefaultProject)
+	if err != nil {
+		return workfile.Detail{}, err
+	}
+	repo, number, _ := strings.Cut(key, "#")
+	n, _ := strconv.Atoi(number)
+	variables := map[string]any{"org": p.Org, "repo": repo, "number": n}
+	var body struct {
+		Repository *struct{ Issue *struct{ Body string } }
+	}
+	if err := c.graphPartial(ctx, token, githubDetailQuery, variables, 2, &body); err != nil {
+		return workfile.Detail{}, fmt.Errorf("%s: %w", c.name, err)
+	}
+	if body.Repository == nil || body.Repository.Issue == nil {
+		return workfile.Detail{}, fmt.Errorf("%s: cannot find %s", c.name, key)
+	}
+	d := workfile.Detail{Key: key, Body: markdownBlocks(body.Repository.Issue.Body)}
+	var thread struct {
+		Repository *struct {
+			Issue *struct {
+				Comments struct {
+					TotalCount int
+					Nodes      []struct {
+						Author    *struct{ Login string }
+						CreatedAt string
+						Body      string
+					}
+				}
+			}
+		}
+	}
+	if c.graphPartial(ctx, token, githubCommentsQuery, variables, 2, &thread) != nil || thread.Repository == nil || thread.Repository.Issue == nil {
+		return d, nil
+	}
+	comments := thread.Repository.Issue.Comments
+	d.CommentTotal = comments.TotalCount
+	for _, node := range comments.Nodes {
+		// A date or author GitHub leaves out is left empty, not an error.
+		created, _ := time.Parse(time.RFC3339, node.CreatedAt)
+		comment := workfile.Comment{Created: created, Body: markdownBlocks(node.Body)}
+		if node.Author != nil {
+			comment.Author = node.Author.Login
+		}
+		d.Comments = append(d.Comments, comment)
+	}
+	return d, nil
 }
 
-// Image is built in the next task.
+// githubImageHosts are the only hosts an image may come from. The address comes
+// from issue text, so it must never decide where the token goes.
+var githubImageHosts = []string{"github.com", "user-images.githubusercontent.com", "private-user-images.githubusercontent.com"}
+
+// Image downloads one image a body named. The address is checked before any
+// request: https only, no login or port, and the host must be exactly one of
+// GitHub's own. The client follows no redirects, so the token stays on that host.
 func (c githubTracker) Image(ctx context.Context, attachment string) ([]byte, error) {
-	return nil, errors.New("not built")
+	if strings.ContainsFunc(attachment, func(r rune) bool { return r <= ' ' || r == '\\' || r == 0x7f }) {
+		return nil, errors.New("not an image address")
+	}
+	u, err := url.Parse(attachment)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" || u.Host != u.Hostname() || !slices.Contains(githubImageHosts, strings.ToLower(u.Hostname())) {
+		return nil, errors.New("not an image address on GitHub")
+	}
+	token, err := c.token()
+	if err != nil {
+		return nil, err
+	}
+	return c.download(ctx, u.String(), "Bearer "+token)
 }
