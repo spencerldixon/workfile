@@ -42,6 +42,7 @@ var Kinds = map[string]Kind{
 	"jira": {
 		Label: "Jira",
 		Auth:  []string{"token", "email"},
+		Keys:  func(p Provider) Keys { return dashKeys{site: p.Site, path: "/browse/"} },
 		Tracker: &Role{
 			Settings: []string{"site", "scope", "default_project", "statuses"},
 			Check:    checkJira,

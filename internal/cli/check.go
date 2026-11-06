@@ -19,9 +19,6 @@ func checkArgs(o options) error {
 	if len(o.keys) != 1 {
 		return errors.New("check takes one ticket, such as wf check APP-42 --to done")
 	}
-	if err := ticketArgs(o); err != nil {
-		return err
-	}
 	if o.to == "" {
 		return errors.New("check needs --to STAGE, the stage the ticket would move to")
 	}

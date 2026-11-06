@@ -83,25 +83,6 @@ func TestJiraMissingAndEmptyEvidence(t *testing.T) {
 	}
 }
 
-func TestExplicitLinksOnlyUseConfiguredJiraBrowseURLs(t *testing.T) {
-	for _, tc := range []struct {
-		body string
-		want int
-	}{
-		{"Related APP-42", 0},
-		{"[Ticket](https://example-team.atlassian.net/browse/APP-42)", 1},
-		{"https://other.example.com/browse/APP-42", 0},
-		{"https://example-team.atlassian.net.evil.example.com/browse/APP-42", 0},
-		{"https://example-team.atlassian.net/browse/APP-42/more", 0},
-		{"https://example-team.atlassian.net/browse/APP-42?focusedCommentId=1", 1},
-		{"https://example-alice@example-team.atlassian.net/browse/APP-42", 0},
-	} {
-		if got := explicitKeys(tc.body, "example-team.atlassian.net"); len(got) != tc.want {
-			t.Fatalf("%q: %v", tc.body, got)
-		}
-	}
-}
-
 func TestBodyLinkedPRIsFetchedAndDeduplicated(t *testing.T) {
 	calls := 0
 	c := client(t, func(r *http.Request) (int, string) {

@@ -8,7 +8,7 @@ import (
 	"workfile/internal/workfile"
 )
 
-var statusCommand = command{flags: ticketFlags, args: ticketArgs, ticketKeys: true, run: status}
+var statusCommand = command{flags: ticketFlags, ticketKeys: true, run: status}
 
 // status answers "what do I do next?" for the board, a person or named
 // tickets. Exit 1 when a ticket is out of policy or blocked, 2 when one cannot

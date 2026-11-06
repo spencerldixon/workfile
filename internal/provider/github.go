@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -238,32 +237,13 @@ func parallel[T any](ctx context.Context, count int, run func(context.Context, i
 	return results, nil
 }
 
-// Boundaries avoid accidentally linking APP-12 to APP-123 or MYAPP-12.
-var ticketKey = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*-[0-9]+`)
-
-func linkedKeys(text string) []string {
-	var keys []string
-	for _, match := range ticketKey.FindAllStringIndex(text, -1) {
-		word := func(c byte) bool {
-			return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
-		}
-		if match[0] > 0 && word(text[match[0]-1]) || match[1] < len(text) && word(text[match[1]]) {
-			continue
-		}
-		key := strings.ToUpper(text[match[0]:match[1]])
-		if !slices.Contains(keys, key) {
-			keys = append(keys, key)
-		}
-	}
-	return keys
-}
-
 func (c *Client) githubRecords(ctx context.Context, name string, tickets []workfile.Ticket) (map[string][]workfile.Record, error) {
 	p := c.Workspace.Providers[name]
 	token, err := c.Credentials.Get(p.Auth["token"])
 	if err != nil {
 		return nil, err
 	}
+	tk := c.Workspace.TrackerKeys()
 	wanted := map[string]bool{}
 	var keys []string
 	for _, t := range tickets {
@@ -294,8 +274,8 @@ func (c *Client) githubRecords(ctx context.Context, name string, tickets []workf
 				continue
 			}
 			seen[pr.ID] = true
-			keys := linkedKeys(pr.Title + " " + pr.HeadRefName)
-			keys = append(keys, explicitKeys(pr.Body, c.Workspace.Providers[c.Workspace.Policy.Tracker].Site)...)
+			keys := tk.Mentions(pr.Title + " " + pr.HeadRefName)
+			keys = append(keys, tk.Links(pr.Body)...)
 			slices.Sort(keys)
 			keys = slices.Compact(keys)
 			keys = slices.DeleteFunc(keys, func(key string) bool { return !wanted[key] })

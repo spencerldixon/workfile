@@ -10,7 +10,6 @@ import (
 
 var healthCommand = command{
 	flags:      slices.Concat(ticketFlags, []string{"gate", "stage"}),
-	args:       ticketArgs,
 	ticketKeys: true,
 	run:        health,
 }

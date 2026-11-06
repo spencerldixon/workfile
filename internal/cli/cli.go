@@ -114,7 +114,7 @@ type source interface {
 type command struct {
 	flags       []string                                // the options it takes
 	args        func(options) error                     // checks its positional arguments; nil takes any
-	ticketKeys  bool                                    // its arguments are tickets, so complete bare numbers
+	ticketKeys  bool                                    // its arguments are tickets: check them and complete bare numbers
 	noWorkspace bool                                    // it runs without a .workfile/
 	run         func(context.Context, env) (int, error) // returns an exit code, or an error to print
 }
@@ -184,7 +184,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 			return fail(err)
 		}
 		if c.ticketKeys {
-			if e.o.keys, err = completeKeys(o.keys, e.w.Providers[e.w.Policy.Tracker].DefaultProject); err != nil {
+			if e.o.keys, err = completeKeys(o.keys, e.w.TrackerKeys(), e.w.Providers[e.w.Policy.Tracker].DefaultProject); err != nil {
 				return fail(err)
 			}
 		}
