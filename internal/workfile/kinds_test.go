@@ -45,7 +45,11 @@ func TestJiraMustBeTheTracker(t *testing.T) {
 }
 
 func TestKindMustBeAbleToBeTheTracker(t *testing.T) {
+	withKind(t, "hostonly", Kind{CodeHost: &Role{Facts: slices.Clone(CodeHostFacts)}})
 	w := example(t)
+	p := w.Providers["github"]
+	p.Kind = "hostonly"
+	w.Providers["github"] = p
 	w.Policy.Tracker = "github"
 	if got := problems(t, w); !strings.Contains(got, "tracker must name") {
 		t.Fatalf("got %q", got)

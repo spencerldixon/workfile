@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
+	"unicode"
 
 	"workfile/internal/workfile"
 )
@@ -30,7 +32,48 @@ type tracker interface {
 
 // trackers lists the adapters for each tracker kind.
 var trackers = map[string]func(*Client, string) tracker{
-	"jira": func(c *Client, name string) tracker { return jiraTracker{Client: c, name: name} },
+	"jira":   func(c *Client, name string) tracker { return jiraTracker{Client: c, name: name} },
+	"github": func(c *Client, name string) tracker { return githubTracker{Client: c, name: name} },
+}
+
+// stateFor is the policy state a status maps to, or "" if it has none. An exact
+// match, ignoring case, wins. Otherwise leading symbols are ignored too, as emoji
+// are hard to type and some hold invisible characters, so done: Done matches
+// "☠️ Done". If that leaves names from two states, it is left unmapped, not
+// guessed.
+func stateFor(p workfile.Provider, status string) string {
+	status = strings.TrimSpace(status)
+	states := workfile.SortedKeys(p.Statuses)
+	for _, state := range states {
+		for _, name := range p.Statuses[state] {
+			if strings.EqualFold(strings.TrimSpace(name), status) {
+				return state
+			}
+		}
+	}
+	words := statusWords(status)
+	if words == "" {
+		return ""
+	}
+	found := ""
+	for _, state := range states {
+		for _, name := range p.Statuses[state] {
+			if strings.EqualFold(statusWords(name), words) {
+				if found != "" && found != state {
+					return ""
+				}
+				found = state
+			}
+		}
+	}
+	return found
+}
+
+// statusWords is a status without its leading symbols.
+func statusWords(status string) string {
+	return strings.TrimSpace(strings.TrimLeftFunc(status, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}))
 }
 
 func (c *Client) tracker() (tracker, error) {

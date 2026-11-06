@@ -53,6 +53,12 @@ var Kinds = map[string]Kind{
 	"github": {
 		Label: "GitHub",
 		Auth:  []string{"token"},
+		Keys:  func(p Provider) Keys { return githubKeys{org: p.Org} },
+		Tracker: &Role{
+			Settings: []string{"org", "project", "view", "statuses", "default_project"},
+			Check:    checkGitHubTracker,
+			Facts:    slices.Clone(TrackerFacts),
+		},
 		CodeHost: &Role{
 			Settings: []string{"org", "lookback"},
 			Check:    checkGitHub,

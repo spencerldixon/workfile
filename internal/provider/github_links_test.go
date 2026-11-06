@@ -94,6 +94,17 @@ func TestLinkFromAnotherOrgIsIgnored(t *testing.T) {
 	}
 }
 
+func TestLinkIgnoresTheCaseOfTheOrg(t *testing.T) {
+	c, queries := linkServer(t, `{"data":{"search":{"issueCount":0,"nodes":[]}}}`)
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"Example-Team/App#7"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searches(*queries) != 0 || len(items[0].Records["github"]) != 1 {
+		t.Fatalf("queries %q, records %+v", *queries, items[0].Records)
+	}
+}
+
 func TestChangeLinkedToTwoTicketsAppearsUnderBoth(t *testing.T) {
 	c, queries := linkServer(t, `{"data":{"search":{"issueCount":0,"nodes":[]}}}`)
 	items, _, err := c.Records(context.Background(), []workfile.Ticket{

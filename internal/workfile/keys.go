@@ -53,10 +53,7 @@ func (dashKeys) Search(key string) string { return key }
 func (dashKeys) Mentions(text string) []string {
 	var keys []string
 	for _, match := range mentionPattern.FindAllStringIndex(text, -1) {
-		word := func(c byte) bool {
-			return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
-		}
-		if match[0] > 0 && word(text[match[0]-1]) || match[1] < len(text) && word(text[match[1]]) {
+		if match[0] > 0 && isWordByte(text[match[0]-1]) || match[1] < len(text) && isWordByte(text[match[1]]) {
 			continue
 		}
 		key := strings.ToUpper(text[match[0]:match[1]])

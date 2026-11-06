@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"workfile/internal/workfile"
@@ -22,6 +23,10 @@ type Client struct {
 	githubURL, jiraGateway string
 	jiraBases              map[string]string
 	Now                    func() time.Time
+
+	// viewFilters remembers each connection's saved view, read once per run.
+	viewLock    sync.Mutex
+	viewFilters map[string]string
 }
 
 func New(w *workfile.Workspace) *Client {
@@ -29,7 +34,7 @@ func New(w *workfile.Workspace) *Client {
 		Workspace: w,
 		HTTP:      &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		githubURL: "https://api.github.com/graphql", jiraGateway: "https://api.atlassian.com/ex/jira/",
-		jiraBases: map[string]string{}, Now: time.Now,
+		jiraBases: map[string]string{}, Now: time.Now, viewFilters: map[string]string{},
 	}
 }
 
@@ -110,21 +115,66 @@ func (c *Client) request(ctx context.Context, method, endpoint, auth string, bod
 }
 
 func (c *Client) graph(ctx context.Context, token, query string, variables any, target any) error {
+	data, failures, err := c.graphPost(ctx, token, query, variables)
+	if err != nil {
+		return err
+	}
+	if len(failures) > 0 {
+		return errGraphRejected
+	}
+	return graphData(data, target)
+}
+
+// graphPartial is graph for a read where a part may not exist. GitHub answers
+// that with NOT_FOUND beside the rest of the data, leaving the part null for the
+// caller to notice. Only a NOT_FOUND at most depth steps into the response is
+// allowed: any other error fails the read. Errors are told apart by type,
+// because their messages are GitHub's own text and never reach a person.
+func (c *Client) graphPartial(ctx context.Context, token, query string, variables any, depth int, target any) error {
+	data, failures, err := c.graphPost(ctx, token, query, variables)
+	if err != nil {
+		return err
+	}
+	rejected := false
+	for _, raw := range failures {
+		var failure struct {
+			Type string
+			Path []any
+		}
+		_ = json.Unmarshal(raw, &failure)
+		switch {
+		case failure.Type == "INSUFFICIENT_SCOPES":
+			return errGraphScopes
+		case failure.Type == "NOT_FOUND" && len(failure.Path) > 0 && len(failure.Path) <= depth:
+		default:
+			rejected = true
+		}
+	}
+	if rejected {
+		return errGraphRejected
+	}
+	return graphData(data, target)
+}
+
+var (
+	errGraphRejected = errors.New("GitHub rejected the query; check token permissions, organisation access, and rate limits")
+	errGraphScopes   = errors.New("the token is missing a scope; a classic token needs repo, read:org and read:project")
+)
+
+func (c *Client) graphPost(ctx context.Context, token, query string, variables any) (json.RawMessage, []json.RawMessage, error) {
 	var response struct {
 		Data   json.RawMessage
 		Errors []json.RawMessage
 	}
 	err := c.request(ctx, "POST", c.githubURL, "Bearer "+token, map[string]any{"query": query, "variables": variables}, &response)
-	if err != nil {
-		return err
-	}
-	if len(response.Errors) > 0 {
-		return errors.New("GitHub rejected the query; check token permissions, organisation access, and rate limits")
-	}
-	if len(response.Data) == 0 || string(response.Data) == "null" {
+	return response.Data, response.Errors, err
+}
+
+func graphData(data json.RawMessage, target any) error {
+	if len(data) == 0 || string(data) == "null" {
 		return errors.New("GitHub returned no data")
 	}
-	if json.Unmarshal(response.Data, target) != nil {
+	if json.Unmarshal(data, target) != nil {
 		return errors.New("GitHub returned an unexpected response")
 	}
 	return nil

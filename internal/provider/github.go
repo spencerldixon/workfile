@@ -335,11 +335,12 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 
 // splitRef reads "org/repo#42". It reports false for a PR in another
 // organisation, which this provider cannot read, or for a malformed reference.
+// GitHub's organisation names ignore case.
 func splitRef(org, ref string) (repo string, number int, owner string, ok bool) {
 	path, num, found := strings.Cut(ref, "#")
 	owner, repo, found2 := strings.Cut(path, "/")
 	number, err := strconv.Atoi(num)
-	if !found || !found2 || err != nil || number <= 0 || owner != org || repo == "" || strings.Contains(repo, "/") {
+	if !found || !found2 || err != nil || number <= 0 || !strings.EqualFold(owner, org) || repo == "" || strings.Contains(repo, "/") {
 		return "", 0, "", false
 	}
 	return repo, number, owner, true
@@ -364,7 +365,7 @@ func (c githubCodeHost) readRef(ctx context.Context, token, org, ref string) (pu
 		return pullRequest{}, errors.New("GitHub could not read a linked PR")
 	}
 	pr := response.Repository.PullRequest
-	if pr.ID == "" || pr.Number != number || pr.Repository.Name != repo {
+	if pr.ID == "" || pr.Number != number || !strings.EqualFold(pr.Repository.Name, repo) {
 		return pullRequest{}, errors.New("GitHub could not read a linked PR")
 	}
 	if err := c.completePR(ctx, token, pr); err != nil {

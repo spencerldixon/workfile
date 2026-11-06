@@ -163,6 +163,12 @@ type trackerFixture struct {
 	// but the scope hides it. Unmapped is in the scope with a status the policy
 	// does not map. Missing does not exist.
 	InScope, OutOfScope, Unmapped, Missing string
+	// ConfiguredScope is text only the configured scope sends. Empty means the
+	// provider's Scope setting.
+	ConfiguredScope string
+	// NoDetail skips the Detail and Image checks, for a tracker that does not
+	// read them yet.
+	NoDetail bool
 }
 
 func conformTracker(t *testing.T, f trackerFixture) {
@@ -347,8 +353,14 @@ func conformTracker(t *testing.T, f trackerFixture) {
 		if _, err := tr.Listing(ctx, custom); err != nil {
 			t.Fatal(err)
 		}
-		configured, _ := json.Marshal(c.Workspace.Providers[c.Workspace.Policy.Tracker].Scope)
-		configured = bytes.Trim(configured, `"`)
+		configured := []byte(f.ConfiguredScope)
+		if len(configured) == 0 {
+			configured, _ = json.Marshal(c.Workspace.Providers[c.Workspace.Policy.Tracker].Scope)
+			configured = bytes.Trim(configured, `"`)
+		}
+		if len(configured) == 0 {
+			t.Fatal("the fixture needs a configured scope to replace")
+		}
 		for _, request := range rec.requests {
 			if strings.Contains(request, custom) && !strings.Contains(request, string(configured)) {
 				return
@@ -375,6 +387,9 @@ func conformTracker(t *testing.T, f trackerFixture) {
 	// Detail and Image are separate so a tracker that does not read them yet
 	// can skip just these two.
 	t.Run("Detail", func(t *testing.T) {
+		if f.NoDetail {
+			t.Skip("this tracker does not read details yet")
+		}
 		c, tr, rec := fresh(t)
 		d, err := tr.Detail(ctx, f.InScope)
 		if err != nil || d.Key != f.InScope {
@@ -386,6 +401,9 @@ func conformTracker(t *testing.T, f trackerFixture) {
 	})
 
 	t.Run("Image", func(t *testing.T) {
+		if f.NoDetail {
+			t.Skip("this tracker does not read images yet")
+		}
 		_, tr, rec := fresh(t)
 		for _, attachment := range []string{"", "../secret", "https://example.com/a.png", "1/../2", "a b"} {
 			if _, err := tr.Image(ctx, attachment); err == nil {
