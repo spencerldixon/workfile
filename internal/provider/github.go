@@ -247,7 +247,7 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 	// A tracker that knows a ticket's PRs says so in LinkedPRs. Those are read
 	// directly; only the other tickets are searched for.
 	wanted := map[string]bool{}
-	var keys, searchTerms []string
+	var searchTerms []string
 	var refs []string
 	byRef := map[string][]string{}
 	for _, t := range tickets {
@@ -267,7 +267,6 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 		}
 		if !wanted[t.Key] {
 			wanted[t.Key] = true
-			keys = append(keys, t.Key)
 			searchTerms = append(searchTerms, tk.Search(t.Key))
 		}
 	}

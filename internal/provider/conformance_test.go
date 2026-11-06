@@ -156,6 +156,43 @@ func known(t *testing.T, what string, standard []string, facts workfile.Facts, u
 	}
 }
 
+// conformKind checks the fixture's kind is registered for the role: it has a row
+// with the role, a Keys function if it is a tracker, an adapter, and only
+// settings the role allows, and that its own checks accept the fixture.
+func conformKind(t *testing.T, p workfile.Provider, asTracker bool) {
+	t.Helper()
+	kind, ok := workfile.Kinds[p.Kind]
+	if !ok {
+		t.Fatalf("kind %q has no row in workfile.Kinds", p.Kind)
+	}
+	role, registered := kind.CodeHost, false
+	if asTracker {
+		role = kind.Tracker
+		_, registered = trackers[p.Kind]
+		if role != nil && kind.Keys == nil {
+			t.Errorf("kind %q is a tracker but has no Keys", p.Kind)
+		}
+	} else {
+		_, registered = codeHosts[p.Kind]
+	}
+	if role == nil {
+		t.Fatalf("kind %q has no row for this role", p.Kind)
+	}
+	if !registered {
+		t.Errorf("kind %q has no adapter registered for this role", p.Kind)
+	}
+	for _, setting := range p.Settings() {
+		if !slices.Contains(role.Settings, setting) {
+			t.Errorf("fixture setting %q is not allowed by the kind row", setting)
+		}
+	}
+	if role.Check != nil {
+		role.Check("fixture", p, func(format string, args ...any) {
+			t.Errorf("fixture is rejected by the kind: "+format, args...)
+		})
+	}
+}
+
 type trackerFixture struct {
 	Provider workfile.Provider
 	Handle   func(*http.Request) (int, string)
@@ -169,6 +206,7 @@ type trackerFixture struct {
 }
 
 func conformTracker(t *testing.T, f trackerFixture) {
+	conformKind(t, f.Provider, true)
 	ctx := context.Background()
 	fresh := func(t *testing.T) (*Client, tracker, *recorder) {
 		t.Helper()
@@ -417,6 +455,7 @@ type hostFixture struct {
 const hostName = "github"
 
 func conformCodeHost(t *testing.T, f hostFixture) {
+	conformKind(t, f.Provider, false)
 	ctx := context.Background()
 	fresh := func(t *testing.T) (*Client, codeHost, *recorder) {
 		t.Helper()

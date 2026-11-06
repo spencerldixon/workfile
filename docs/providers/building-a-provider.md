@@ -51,7 +51,8 @@ type Role struct {
 ```
 
 Workfile rejects settings not listed, and a connection given a role its kind
-does not have. A new setting also needs a field on `workfile.Provider`.
+does not have. A new setting also needs a field on `workfile.Provider` and a line in
+`settings()` in `kinds.go`. Without that line, other kinds silently accept it.
 
 ## 2. Write the adapter
 
@@ -124,7 +125,8 @@ type Keys interface {
 }
 ```
 
-Keys that look like `APP-42` can use `dashKeys`. `Keys` is pure: no network.
+Keys that look like `APP-42` can use `dashKeys`. Other shapes need their own
+file in `internal/workfile`, as `github_keys.go` shows. `Keys` is pure: no network.
 
 ## Code host
 

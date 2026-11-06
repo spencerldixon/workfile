@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func problems(t *testing.T, w *Workspace) string {
@@ -182,5 +184,15 @@ func TestOptionalFactNeedsTheKind(t *testing.T) {
 	}
 	if _, err := w.parseExpression("plain.state == open"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProviderMarshalOmitsUnsetProjectAndView(t *testing.T) {
+	data, err := yaml.Marshal(Provider{Kind: "jira", Site: "example.atlassian.net"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains("\n"+string(data), "\nproject:") || strings.Contains("\n"+string(data), "\nview:") {
+		t.Errorf("a Jira provider writes project or view:\n%s", data)
 	}
 }

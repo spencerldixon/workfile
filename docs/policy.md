@@ -274,7 +274,7 @@ optional and is only used for display.
 You can connect more than one GitHub organisation:
 
 ```yaml
-# providers.yml — in addition to your tracker connection
+# providers.yml - in addition to your tracker connection
 github_client:
   provider: github
   org: example-client

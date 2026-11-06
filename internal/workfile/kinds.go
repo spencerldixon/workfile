@@ -96,6 +96,9 @@ func (w *Workspace) TrackerLabel() string {
 	return "tracker"
 }
 
+// Settings lists the names of the settings that are set.
+func (p Provider) Settings() []string { return p.settings() }
+
 // settings lists the names of the settings that are set.
 func (p Provider) settings() []string {
 	var set []string

@@ -179,6 +179,19 @@ github:
     token: ${EXAMPLE_GITHUB_TOKEN}
 ```
 
+To see a person's assigned tickets with `--me` or `--user`, `people.yml` needs
+their login under the tracker's connection name, as well as under `github`:
+
+```yaml
+alice:
+  name: Alice
+  issues: example-alice
+  github: example-alice
+```
+
+Without the `issues` line, `wf status --user alice` silently misses the tickets
+assigned to her.
+
 In `policy.yml`, set `tracker: issues`. The keys under `statuses` must be stage
 names from `policy.yml`. Two connections keep `issues.labels`
 (labels on the issue) apart from `github.labels` (labels on the PR).
@@ -234,12 +247,15 @@ which ignores leading symbols.
 ### What it reads
 
 - `assignee` is the first person assigned to the issue. Only the first counts.
-  `status --me` and `tickets --me` see that person only. A second assignee does
+  `wf status --me` and the `wf tickets --view me` screen see that person only. A second assignee does
   not see the ticket in those views, and their automations do not fire, unless
   a PR involves them.
 - With `view` set, Workfile reads the filtered view once and remembers it for 5
   minutes. One run of a command pays for one paged read of that view.
 - At most 20 closing PRs per issue are read.
+- An issue whose only closing PR is in another organisation gets no records.
+- An issue from another organisation's repository can appear in a list of the
+  board, but cannot be read by key.
 - `project` is the repository, and `type` is the issue type. Priority, size and
   other project fields are not facts. Label `by` rules are not supported.
 
@@ -250,14 +266,15 @@ A PR links to an issue when GitHub itself links them: for example `Resolves
 these links in the same query as the issue. PRs closed without merging are left
 out. Open PRs and drafts are included.
 
-Workfile also links a PR when its title or branch has the full key, such as
-`app#42`, or when its description has the issue's address. A bare `#42` in a
+Workfile also links a PR when GitHub's search finds the full key, such as
+`app#42`, in its title or description, or when its description has the issue's
+address. A key only in the branch name is not found. A bare `#42` in a
 title does not link, because it matches too loosely. A PR that only mentions an
 issue does not link.
 
 ### Issue text and images
 
-`wf status` shows the issue's text and comments. Headings, paragraphs, emphasis,
+The `wf tickets` screen shows the issue's text and comments (`wf status` does not). Headings, paragraphs, emphasis,
 code, links, lists, quotes, rules and tables are shown. Anything else stays as
 plain text.
 
