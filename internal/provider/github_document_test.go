@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"io"
+	"math/rand"
 	"net/http"
 	"reflect"
 	"strings"
@@ -91,6 +92,13 @@ func TestMarkdownBlocks(t *testing.T) {
 		{"blank line inside a fence", "```\na\n\nb\n```", []workfile.Block{{Kind: workfile.BlockCode, Spans: []workfile.Span{{Text: "a\n\nb", Code: true}}}}},
 		{"unclosed fence with newline", "```\na\n", []workfile.Block{{Kind: workfile.BlockCode, Spans: []workfile.Span{{Text: "a\n", Code: true}}}}},
 		{"indented rule is text", "    - - -", []workfile.Block{para(workfile.Span{Text: "- - -"})}},
+		{"lone star then italic", "2 * 3 = 6 and *this* matters", []workfile.Block{para(workfile.Span{Text: "2 * 3 = 6 and "}, workfile.Span{Text: "this", Italic: true}, workfile.Span{Text: " matters"})}},
+		{"wildcard star then italic", "Note: * is a wildcard. *Do not* use it.", []workfile.Block{para(workfile.Span{Text: "Note: * is a wildcard. "}, workfile.Span{Text: "Do not", Italic: true}, workfile.Span{Text: " use it."})}},
+		{"spaced bold marks then bold", "a ** b and **bold** here", []workfile.Block{para(workfile.Span{Text: "a ** b and "}, workfile.Span{Text: "bold", Bold: true}, workfile.Span{Text: " here"})}},
+		{"spaced underscore then italic", "snake _ case and _italic_ here", []workfile.Block{para(workfile.Span{Text: "snake _ case and "}, workfile.Span{Text: "italic", Italic: true}, workfile.Span{Text: " here"})}},
+		{"star then bold and italic", "Use a * b, then **bold** and *italic*", []workfile.Block{para(workfile.Span{Text: "Use a * b, then "}, workfile.Span{Text: "bold", Bold: true}, workfile.Span{Text: " and "}, workfile.Span{Text: "italic", Italic: true})}},
+		{"stray backtick after code", "*a `x` ` y", []workfile.Block{para(workfile.Span{Text: "*a "}, workfile.Span{Text: "x", Code: true}, workfile.Span{Text: " ` y"})}},
+		{"unclosed star then code", "unclosed *star then `code` and `more` and ` tail", []workfile.Block{para(workfile.Span{Text: "unclosed *star then "}, workfile.Span{Text: "code", Code: true}, workfile.Span{Text: " and "}, workfile.Span{Text: "more", Code: true}, workfile.Span{Text: " and ` tail"})}},
 		{"empty", " \n\n", nil},
 	}
 	for _, tc := range cases {
@@ -241,6 +249,7 @@ func TestImageOnlyGoesToGitHub(t *testing.T) {
 
 func TestMarkdownBlocksSurvivesAwkwardInput(t *testing.T) {
 	inputs := []string{
+		"- - - ", "- - -\f", "- - -\v", "* * * ", "    - - - ", "a\n- - - ", "> - - - ", "- - -\u00a0", "- - -\u2003", "- - -\u0085", "a_" + "b_",
 		"    - - -", "      * * *", ">     - - -", "```\n\n", "```", "~~~\n\n\n~~~", "- ", "-", "1.", "> ", ">", "|", "|\n|", "| a |\n| - |",
 		"![", "![](", "[](", "[a](", "[a]()", "***", "**", "* ", "_", "`", "``", "\\", "# ", "#", "\x00\xff", "- a\n\n\n- b", "- a\n    - - -\n- c",
 		strings.Repeat("- ", 1000), strings.Repeat("> ", 1000), strings.Repeat("[", 5000), strings.Repeat("*", 5001),
@@ -275,6 +284,10 @@ func TestMarkdownBlocksHostileInputIsBounded(t *testing.T) {
 		"deep spaced quote":          strings.Repeat("> ", 100000),
 		"unmatched brackets":         strings.Repeat("[", 65000),
 		"nested emphasis":            strings.Repeat("*a ", 20000) + strings.Repeat("*", 20000),
+		"intraword underscores":      strings.Repeat("a_", 32767),
+		"underscores in a cell":      "| a |\n| - |\n| " + strings.Repeat("a_", 20000) + " |",
+		"word underscores":           strings.Repeat("x_a ", 16383) + "b_",
+		"long link":                  "[a](" + strings.Repeat("b", 7000) + ") ![c](" + strings.Repeat("d", 7000) + ")",
 		"many list lines":            "- a\n" + strings.Repeat("b\n", 30000),
 	}
 	for name, in := range cases {
@@ -286,5 +299,36 @@ func TestMarkdownBlocksHostileInputIsBounded(t *testing.T) {
 		} else {
 			t.Logf("%s: %v", name, took)
 		}
+	}
+}
+
+func TestMarkdownBlocksKeepsLongAddresses(t *testing.T) {
+	address := "https://github.com/user-attachments/assets/" + strings.Repeat("a", 5000)
+	blocks := markdownBlocks("![shot](" + address + ")")
+	if len(blocks) != 1 || blocks[0].Kind != workfile.BlockImage || blocks[0].Attachment != address {
+		t.Errorf("%+v", blocks)
+	}
+}
+
+func TestMarkdownBlocksRandomInput(t *testing.T) {
+	tokens := []string{"*", "**", "_", "__", "`", "``", "```", "~~~", "[", "]", "(", ")", "!", "#", "##", ">", "-", "+", "1.", "|", "---", "\\", "a", "b", "x_y", " ", "  ", "    ", "\t", "\n", "\n\n", "\u00a0", "\f", "\v", "\u2003", "\u3000", "\u0085", "\r", "[ ]", "[x]", "<", "&", "\u00e9"}
+	rng := rand.New(rand.NewSource(1))
+	start := time.Now()
+	for n := 0; n < 3000; n++ {
+		var in strings.Builder
+		for k := rng.Intn(40); k >= 0; k-- {
+			in.WriteString(tokens[rng.Intn(len(tokens))])
+		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("markdownText(%q) panicked: %v", in.String(), r)
+				}
+			}()
+			markdownText(in.String())
+		}()
+	}
+	if took := time.Since(start); took > 10*time.Second {
+		t.Errorf("took %v", took)
 	}
 }

@@ -85,7 +85,7 @@ const mdMaxDepth = 32
 
 // mdWindow caps how far a bracket looks for its partner, so a run of unmatched
 // brackets costs a little each, not the whole text each.
-const mdWindow = 2000
+const mdWindow = 8000
 
 func mdParse(lines []string, quoted bool, depth int) []workfile.Block {
 	var blocks []workfile.Block
@@ -150,7 +150,12 @@ func mdParse(lines []string, quoted bool, depth int) []workfile.Block {
 		case mdListItem.MatchString(strings.TrimRight(lines[i], " \t")) && !mdRule(text) && mdStartsList(para, text):
 			flush()
 			var end int
-			for _, b := range mdList(lines[i:], &end) {
+			items := mdList(lines[i:], &end)
+			if end == 0 {
+				para = append(para, text) // cannot happen, but never loop
+				continue
+			}
+			for _, b := range items {
 				add(b)
 			}
 			i += end - 1
@@ -214,7 +219,7 @@ func mdList(lines []string, end *int) []workfile.Block {
 			}
 			break
 		}
-		if m := mdListItem.FindStringSubmatch(line); m != nil && !mdRule(strings.TrimSpace(line)) {
+		if m := mdListItem.FindStringSubmatch(line); m != nil && !mdRule(line) {
 			indent := len(m[1])
 			for len(stack) > 0 && stack[len(stack)-1] > indent {
 				stack = stack[:len(stack)-1]
@@ -237,6 +242,9 @@ func mdList(lines []string, end *int) []workfile.Block {
 		}
 		indent, text := mdIndent(line)
 		if indent <= 3 && (fenceMarker(text) != "" || mdHeading(text) != nil || mdRule(text) || text[0] == '>') {
+			break
+		}
+		if len(items) == 0 {
 			break
 		}
 		last := &items[len(items)-1]
@@ -352,8 +360,8 @@ func mdSpans(s string, style workfile.Span) []workfile.Span { return mdInline(s,
 // mdSearch remembers searches that found nothing, so a text full of unclosed
 // marks is read in one pass, not one pass per mark.
 type mdSearch struct {
-	noCode map[int]bool
-	noMark map[[2]int]bool
+	noCode map[int]int    // run length -> a position after which no such run closes
+	noMark map[[2]int]int // mark and depth -> a position after which nothing closes
 }
 
 // mdInline reads inline Markdown. style carries what an outer span already set.
@@ -362,7 +370,7 @@ func mdInline(s string, style workfile.Span, depth int) []workfile.Span {
 		style.Text = s
 		return []workfile.Span{style}
 	}
-	search := &mdSearch{noCode: map[int]bool{}, noMark: map[[2]int]bool{}}
+	search := &mdSearch{noCode: map[int]int{}, noMark: map[[2]int]int{}}
 	var spans []workfile.Span
 	var buf strings.Builder
 	emit := func() {
@@ -423,7 +431,15 @@ func mdInline(s string, style workfile.Span, depth int) []workfile.Span {
 		case c == '*' || c == '_':
 			n := mdRun(s, i)
 			depth2 := min(n, 2)
-			if content, end, ok := search.emphasis(s, i, c, depth2); ok && (c == '*' || i == 0 || !isMdAlnum(s[i-1])) {
+			// An underscore inside a word is text, so do not search for its partner.
+			opens := c == '*' || i == 0 || !isMdAlnum(s[i-1])
+			var content string
+			var end int
+			ok := false
+			if opens {
+				content, end, ok = search.emphasis(s, i, c, depth2)
+			}
+			if ok {
 				emit()
 				inner := style
 				if depth2 == 2 {
@@ -457,13 +473,13 @@ func mdRun(s string, at int) int {
 
 // mdCodeEnd is where a run of exactly n backticks closes a code span, or -1.
 func (m *mdSearch) codeEnd(s string, from, n int) int {
-	if m.noCode[n] {
+	if pos, failed := m.noCode[n]; failed && from >= pos {
 		return -1
 	}
 	if j := mdCodeEnd(s, from, n); j >= 0 {
 		return j
 	}
-	m.noCode[n] = true
+	m.noCode[n] = from
 	return -1
 }
 
@@ -486,12 +502,17 @@ func mdCodeEnd(s string, from, n int) int {
 // and where to carry on after them. A closing run longer than depth gives its
 // extra marks to the text inside, so ***x*** is bold around italic.
 func (m *mdSearch) emphasis(s string, at int, mark byte, depth int) (content string, end int, ok bool) {
-	// A search that found no closer would find none from a later start either.
-	if m.noMark[[2]int{int(mark), depth}] {
+	// A scan that found no closer would find none from a later start either.
+	key := [2]int{int(mark), depth}
+	if pos, failed := m.noMark[key]; failed && at >= pos {
 		return
 	}
+	start := at + depth
+	if start >= len(s) || s[start] == ' ' || s[start] == '\t' || s[start] == '\n' {
+		return // not an opener, which says nothing about later ones
+	}
 	if content, end, ok = m.emphasisFrom(s, at, mark, depth); !ok {
-		m.noMark[[2]int{int(mark), depth}] = true
+		m.noMark[key] = at
 	}
 	return
 }
