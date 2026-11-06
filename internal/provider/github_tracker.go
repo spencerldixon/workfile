@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"workfile/internal/workfile"
 )
@@ -18,6 +19,11 @@ type githubTracker struct {
 	*Client
 	name string
 }
+
+// viewMemory is how long a view's filter and the tickets it shows are remembered.
+// Opening ticket after ticket reuses them, and a long run such as wf watch still
+// sees the view change.
+const viewMemory = 5 * time.Minute
 
 // issuesPerRead is how many issues one aliased key read asks for.
 const issuesPerRead = 50
@@ -200,31 +206,75 @@ func (c githubTracker) items(ctx context.Context, token, fields, query string, l
 	}
 }
 
-// viewFilter is the filter of the configured view, or "" for the whole project.
-// A view with an empty or null filter means the whole project too.
-func (c githubTracker) viewFilter(ctx context.Context, token string) (string, error) {
+// githubView is what is remembered of a saved view. A filter of "" means the whole
+// project. shown is nil until something needs it, and is never changed once set.
+type githubView struct {
+	read   time.Time
+	filter string
+	shown  map[string]bool
+}
+
+// view is the remembered view, read again if it is too old. A failed read
+// remembers nothing. The caller holds viewLock.
+func (c githubTracker) view(ctx context.Context, token string) (*githubView, error) {
+	if view := c.views[c.name]; view != nil && c.Now().Sub(view.read) < viewMemory {
+		return view, nil
+	}
 	p := c.Workspace.Providers[c.name]
-	if p.View == 0 {
-		return "", nil
-	}
-	c.viewLock.Lock()
-	defer c.viewLock.Unlock()
-	if filter, ok := c.viewFilters[c.name]; ok {
-		return filter, nil
-	}
 	const query = `query($org: String!, $project: Int!, $view: Int!) {
 	  organization(login: $org) { projectV2(number: $project) { view(number: $view) { filter } } }
 	}`
 	project, err := readProject[struct{ View *struct{ Filter string } }](ctx, c, token, query, map[string]any{"view": p.View}, 3)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if project.View == nil {
-		return "", fmt.Errorf("cannot find view %d on project %d; check the view setting", p.View, p.Project)
+		return nil, fmt.Errorf("cannot find view %d on project %d; check the view setting", p.View, p.Project)
 	}
-	filter := strings.TrimSpace(project.View.Filter)
-	c.viewFilters[c.name] = filter
-	return filter, nil
+	view := &githubView{read: c.Now(), filter: strings.TrimSpace(project.View.Filter)}
+	c.views[c.name] = view
+	return view, nil
+}
+
+// viewFilter is the filter of the configured view, or "" for the whole project.
+// A view with an empty or null filter means the whole project too.
+func (c githubTracker) viewFilter(ctx context.Context, token string) (string, error) {
+	if c.Workspace.Providers[c.name].View == 0 {
+		return "", nil
+	}
+	c.viewLock.Lock()
+	defer c.viewLock.Unlock()
+	view, err := c.view(ctx, token)
+	if err != nil {
+		return "", err
+	}
+	return view.filter, nil
+}
+
+// viewShown is the keys the configured view shows, or nil if it hides nothing.
+// Only a read of the whole view can tell, so it is remembered with the filter.
+func (c githubTracker) viewShown(ctx context.Context, token string) (map[string]bool, error) {
+	if c.Workspace.Providers[c.name].View == 0 {
+		return nil, nil
+	}
+	c.viewLock.Lock()
+	defer c.viewLock.Unlock()
+	view, err := c.view(ctx, token)
+	if err != nil || view.filter == "" {
+		return nil, err
+	}
+	if view.shown == nil {
+		items, err := c.items(ctx, token, githubKeyFields, view.filter, 0)
+		if err != nil {
+			return nil, err
+		}
+		shown := make(map[string]bool, len(items))
+		for _, item := range items {
+			shown[item.Content.key()] = true
+		}
+		view.shown = shown
+	}
+	return view.shown, nil
 }
 
 // assignee is the filter value for the person's own account: me.<name> from
@@ -355,24 +405,15 @@ func (c githubTracker) onProject(key string, issue githubIssue) workfile.Ticket 
 	return t
 }
 
-// markHidden sets OutOfScope on tickets the configured view filters out. Only a
-// read of the view can tell, so it happens only if a view has a filter and a
-// ticket is left to check.
+// markHidden sets OutOfScope on tickets the configured view filters out. It reads
+// the view only if a ticket is left to check.
 func (c githubTracker) markHidden(ctx context.Context, token string, tickets []workfile.Ticket) error {
 	if !slices.ContainsFunc(tickets, func(t workfile.Ticket) bool { return !t.OutOfScope }) {
 		return nil
 	}
-	filter, err := c.viewFilter(ctx, token)
-	if err != nil || filter == "" {
+	shown, err := c.viewShown(ctx, token)
+	if err != nil || shown == nil {
 		return err
-	}
-	items, err := c.items(ctx, token, githubKeyFields, filter, 0)
-	if err != nil {
-		return err
-	}
-	shown := map[string]bool{}
-	for _, item := range items {
-		shown[item.Content.key()] = true
 	}
 	for i := range tickets {
 		tickets[i].OutOfScope = tickets[i].OutOfScope || !shown[tickets[i].Key]

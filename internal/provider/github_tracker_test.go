@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"workfile/internal/workfile"
 )
@@ -280,11 +282,12 @@ func TestRepeatedCursorStops(t *testing.T) {
 		return 200, page([]string{boardItem("ISSUE", "Done", false, issue("app", calls, ""))}, "same")
 	}
 	c, _ := conformClient(t, "", issuesProvider(), repeat)
-	if _, err := trackerOf(t, c).Listing(context.Background(), ""); err == nil {
-		t.Error("a repeated cursor gave no error")
+	_, err := trackerOf(t, c).Listing(context.Background(), "")
+	if err == nil || !strings.Contains(err.Error(), "cursor") {
+		t.Errorf("got %v; want an error about the cursor", err)
 	}
-	if calls > 2 {
-		t.Errorf("called %d times", calls)
+	if calls != 2 {
+		t.Errorf("called %d times; want 2", calls)
 	}
 }
 
@@ -380,9 +383,164 @@ func TestMissingViewSaysWhichSetting(t *testing.T) {
 		return 200, `{"data":{"organization":{"projectV2":{"view":null}}},"errors":[{"type":"NOT_FOUND","path":["organization","projectV2","view"],"message":"` + githubText + `"}]}`
 	})
 	_, err := trackerOf(t, c).Tickets(context.Background(), nil, 0)
-	if err == nil || strings.Contains(err.Error(), githubText) {
+	if err == nil || strings.Contains(err.Error(), githubText) || !strings.Contains(err.Error(), "view 3") || !strings.Contains(err.Error(), "check the view setting") {
 		t.Fatalf("got %v", err)
 	}
+}
+
+// viewServer is a made-up project 7 whose view 3 shows label:blocked. Tests can
+// change what the view shows, and fail either of its two reads.
+type viewServer struct {
+	mu                     sync.Mutex
+	shown                  []int
+	filterReads, itemReads int
+	failFilter, failItems  bool
+}
+
+func (v *viewServer) handle(t *testing.T) func(*http.Request) (int, string) {
+	on := projectItems(false, projectItem(7, "example-team", "Done", false))
+	return func(r *http.Request) (int, string) {
+		body := requestBody(t, r)
+		query := body["query"].(string)
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		switch {
+		case isKeyRead(query):
+			return 200, keyRead(t, body, map[string]string{"app#1": issue("app", 1, on), "app#2": issue("app", 2, on)})
+		case strings.Contains(query, "view(number"):
+			v.filterReads++
+			if v.failFilter {
+				return 400, `{}`
+			}
+			return 200, `{"data":{"organization":{"projectV2":{"view":{"filter":"label:blocked"}}}}}`
+		}
+		v.itemReads++
+		if v.failItems {
+			return 400, `{}`
+		}
+		var items []string
+		for _, n := range v.shown {
+			items = append(items, boardItem("ISSUE", "Done", false, issue("app", n, "")))
+		}
+		return 200, page(items, "")
+	}
+}
+
+func (v *viewServer) reads() (int, int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.filterReads, v.itemReads
+}
+
+func viewClient(t *testing.T, v *viewServer) (*Client, tracker) {
+	t.Helper()
+	p := issuesProvider()
+	p.View = 3
+	c, _ := conformClient(t, "", p, v.handle(t))
+	return c, trackerOf(t, c)
+}
+
+func hidden(t *testing.T, tr tracker, key string) bool {
+	t.Helper()
+	tickets, err := tr.Tickets(context.Background(), []string{key}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return one(t, tickets).OutOfScope
+}
+
+func TestKeyReadsReadTheViewOnce(t *testing.T) {
+	v := &viewServer{shown: []int{1}}
+	_, tr := viewClient(t, v)
+	if hidden(t, tr, "app#1") {
+		t.Error("app#1 is in the view")
+	}
+	if !hidden(t, tr, "app#2") {
+		t.Error("app#2 is not in the view")
+	}
+	if filters, items := v.reads(); filters != 1 || items != 1 {
+		t.Fatalf("%d filter reads and %d item reads; want 1 of each", filters, items)
+	}
+}
+
+func TestKeyReadsAtOnceReadTheViewOnce(t *testing.T) {
+	v := &viewServer{shown: []int{1}}
+	c, _ := viewClient(t, v)
+	var reads sync.WaitGroup
+	for range 8 {
+		reads.Go(func() {
+			tickets, err := trackerOf(t, c).Tickets(context.Background(), []string{"app#1"}, 0)
+			if err != nil || len(tickets) != 1 || tickets[0].OutOfScope {
+				t.Errorf("%+v, %v", tickets, err)
+			}
+		})
+	}
+	reads.Wait()
+	if filters, items := v.reads(); filters != 1 || items != 1 {
+		t.Fatalf("%d filter reads and %d item reads; want 1 of each", filters, items)
+	}
+}
+
+func TestRememberedViewExpires(t *testing.T) {
+	v := &viewServer{shown: []int{1}}
+	c, tr := viewClient(t, v)
+	start := c.Now()
+	if hidden(t, tr, "app#1") {
+		t.Fatal("app#1 is in the view")
+	}
+	v.mu.Lock()
+	v.shown = nil
+	v.mu.Unlock()
+	c.Now = func() time.Time { return start.Add(viewMemory - time.Second) }
+	if hidden(t, tr, "app#1") {
+		t.Error("the view was read again too soon")
+	}
+	if filters, items := v.reads(); filters != 1 || items != 1 {
+		t.Fatalf("before expiry: %d filter reads and %d item reads", filters, items)
+	}
+	c.Now = func() time.Time { return start.Add(viewMemory) }
+	if !hidden(t, tr, "app#1") {
+		t.Error("a ticket that left the view was still shown after expiry")
+	}
+	if filters, items := v.reads(); filters != 2 || items != 2 {
+		t.Fatalf("after expiry: %d filter reads and %d item reads", filters, items)
+	}
+}
+
+func TestFailedViewReadIsNotRemembered(t *testing.T) {
+	ctx := context.Background()
+	t.Run("filter", func(t *testing.T) {
+		v := &viewServer{shown: []int{1}, failFilter: true}
+		_, tr := viewClient(t, v)
+		if _, err := tr.Tickets(ctx, []string{"app#1"}, 0); err == nil {
+			t.Fatal("a failed view read gave no error")
+		}
+		v.mu.Lock()
+		v.failFilter = false
+		v.mu.Unlock()
+		if hidden(t, tr, "app#1") {
+			t.Error("app#1 is in the view")
+		}
+		if filters, _ := v.reads(); filters != 2 {
+			t.Fatalf("%d filter reads; want a retry", filters)
+		}
+	})
+	t.Run("shown tickets", func(t *testing.T) {
+		v := &viewServer{shown: []int{1}, failItems: true}
+		_, tr := viewClient(t, v)
+		if _, err := tr.Tickets(ctx, []string{"app#1"}, 0); err == nil {
+			t.Fatal("a failed view read gave no error")
+		}
+		v.mu.Lock()
+		v.failItems = false
+		v.mu.Unlock()
+		if hidden(t, tr, "app#1") {
+			t.Error("app#1 is in the view")
+		}
+		if _, items := v.reads(); items != 2 {
+			t.Fatalf("%d item reads; want a retry", items)
+		}
+	})
 }
 
 func TestListingScopeReplacesTheView(t *testing.T) {

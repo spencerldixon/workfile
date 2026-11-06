@@ -24,9 +24,10 @@ type Client struct {
 	jiraBases              map[string]string
 	Now                    func() time.Time
 
-	// viewFilters remembers each connection's saved view, read once per run.
-	viewLock    sync.Mutex
-	viewFilters map[string]string
+	// views remembers each connection's saved view, for viewMemory. viewLock is
+	// held across a read, so reads at the same time share one result.
+	viewLock sync.Mutex
+	views    map[string]*githubView
 }
 
 func New(w *workfile.Workspace) *Client {
@@ -34,7 +35,7 @@ func New(w *workfile.Workspace) *Client {
 		Workspace: w,
 		HTTP:      &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		githubURL: "https://api.github.com/graphql", jiraGateway: "https://api.atlassian.com/ex/jira/",
-		jiraBases: map[string]string{}, Now: time.Now, viewFilters: map[string]string{},
+		jiraBases: map[string]string{}, Now: time.Now, views: map[string]*githubView{},
 	}
 }
 
