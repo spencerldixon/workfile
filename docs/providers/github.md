@@ -154,16 +154,128 @@ repositories the token is not allowed to see.
 Older `providers.yml` files may still have a `lookback` setting. It is no longer
 used, and you can delete it.
 
+## GitHub Issues as a tracker
+
+GitHub can do two jobs: hold your tickets (a **tracker**), and hold the PRs that
+change code (a **code host**). A team that uses it for both has two connections.
+`issues` is the tracker. `github` is the code host.
+
+```yaml
+issues:
+  provider: github
+  org: example-team
+  project: 7
+  view: 3
+  default_project: app
+  statuses:
+    todo: Backlog
+    doing: In progress
+    done: Done
+  auth:
+    token: ${EXAMPLE_GITHUB_TOKEN}
+github:
+  org: example-team
+  auth:
+    token: ${EXAMPLE_GITHUB_TOKEN}
+```
+
+In `policy.yml`, set `tracker: issues`. Two connections keep `issues.labels`
+(labels on the issue) apart from `github.labels` (labels on the PR).
+
+| Setting | What it means |
+| --- | --- |
+| `org` | Required. Your GitHub organisation name. |
+| `project` | Required. The number of your organisation's GitHub Project, from its address. |
+| `view` | Optional. The number of a saved view of that project. Only tickets the view shows are in your scope. |
+| `statuses` | Required. Maps each stage in your policy to one or more `Status` names. |
+| `default_project` | Optional. A repository name in lower case, such as `app`. It lets you name an issue by number alone. |
+
+### Token
+
+Use a classic token with `repo`, `read:org` and `read:project`. Without
+`read:project` GitHub refuses the read, and `wf test` names the missing scope.
+
+### Status comes from the project
+
+A ticket's stage comes from the project's **`Status`** field, not from whether
+the issue is open or closed. Boards often drift from the issue state, so the
+board wins. The field name is fixed: it must be called `Status`. Only
+organisation projects work. User projects do not.
+
+Status names match without case and without leading symbols, so `done: Done`
+matches a status called `☠️ Done`. If an exact match exists, it wins. If two
+stages would match, the status is left unmapped and reported as an error.
+
+Your scope is the live items of the project, or of the view if you set `view`.
+Archived items are left out of lists, but you can still look one up by key. An
+issue that is not on the project is reported with an error.
+
+### Naming a ticket
+
+A ticket key is the repository, then the number, such as `app#42`. Keys are in
+lower case. With `default_project: app`, both of these work:
+
+```sh
+wf status 42
+wf status app#42
+```
+
+Do not write `wf status #42` without quotes. In most shells an unquoted `#42` is
+a comment, so the command runs with no ticket. Write `'#42'` or leave off the `#`.
+
+### Filter text
+
+A scope given to a list command is GitHub's own filter text. It is exact: the
+status must be written with its emoji, as in `status:"🕰 Backlog"`. Plain
+`status:Backlog` finds nothing. This differs from `statuses` in providers.yml,
+which ignores leading symbols.
+
+### What it reads
+
+- `assignee` is the first person assigned to the issue. Only the first counts.
+  `status --me` and `tickets --me` see that person only. A second assignee does
+  not see the ticket in those views, and their automations do not fire, unless
+  a PR involves them.
+- With `view` set, Workfile reads the filtered view once and remembers it for 5
+  minutes. One run of a command pays for one paged read of that view.
+- At most 20 closing PRs per issue are read.
+- `project` is the repository, and `type` is the issue type. Priority, size and
+  other project fields are not facts. Label `by` rules are not supported.
+
+### Which PRs link
+
+A PR links to an issue when GitHub itself links them: for example `Resolves
+#42` in the PR description, or a link made by hand in GitHub. Workfile reads
+these links in the same query as the issue. PRs closed without merging are left
+out. Open PRs and drafts are included.
+
+Workfile also links a PR when its title or branch has the full key, such as
+`app#42`, or when its description has the issue's address. A bare `#42` in a
+title does not link, because it matches too loosely. A PR that only mentions an
+issue does not link.
+
+### Issue text and images
+
+`wf status` shows the issue's text and comments. Headings, paragraphs, emphasis,
+code, links, lists, quotes, rules and tables are shown. Anything else stays as
+plain text.
+
+Only `![alt](address)` images on GitHub's own hosts are shown. `<img>` tags stay
+as text. An image address that redirects does not display. Workfile never sends
+your token to another host.
+
 ## When something goes wrong
 
 | What you see | What to try |
 | --- | --- |
 | Credential is not set | Make sure the `${NAME}` in `auth` matches an environment variable or a line in your credentials file, and that it is not empty. |
+| GitHub project read refused | Add the `read:project` scope to your token, and check that the project belongs to your organisation. |
 | Credentials permission error | On macOS or Linux, run `chmod 600` on the file it names. |
 | HTTP 401 | Check the account, the token, and whether the token has expired. |
 | HTTP 403 or GraphQL query rejected | Check scopes, repository access, organisation rules, single sign-on, and rate limits. |
 | Jira query rejected | Try your JQL in Jira, and check the project and status names. |
 | No Jira cloud ID | Check `site`. Only Jira Cloud is supported. |
+| Unmapped GitHub status | Add the name to the right stage under `statuses`. |
 | Unmapped Jira status | Add it to the right stage under `statuses`, or leave it out of your search on purpose. |
 | A PR you expected is missing | Check its title or branch for the ticket key, its last update date, whether you can see the repository, and whether it is archived. |
 | A ticket you expected is missing | Check your search, your `--me` or `--user` filter, the limit, and your account's access. |

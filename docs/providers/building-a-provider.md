@@ -1,8 +1,8 @@
 # Building a provider
 
-> **Draft.** This is the standard in the
-> [provider standard design](../superpowers/specs/2026-11-06-provider-standard-design.md).
-> The code does not match it yet.
+This is the standard from the
+[provider standard design](../superpowers/specs/2026-11-06-provider-standard-design.md).
+Jira and GitHub follow it.
 
 A provider connects Workfile to a service. New to Workfile? Start with
 [Getting started](../getting-started.md).
@@ -23,8 +23,8 @@ jobs, through two connections.
 | Step | Where |
 |---|---|
 | 1. Describe the kind | a row in `internal/workfile/kinds.go` |
-| 2. Write the adapter | `internal/provider/<kind>.go` |
-| 3. Register it | one line in `trackers` or `codeHosts` |
+| 2. Write the adapter | `internal/provider/<kind>.go`, or `<kind>_tracker.go` and `<kind>_host.go` as GitHub does |
+| 3. Register it | one line in `trackers` (`tracker.go`) or `codeHosts` (`connection.go`) |
 | 4. Pass the shared test | `conformTracker` or `conformCodeHost` |
 | 5. Document it | `docs/providers/<kind>.md`, linked from `docs/getting-started.md` |
 
@@ -194,7 +194,8 @@ a field the service did not send is `Unavailable`, and Workfile reports "cannot
 check" and not a failed rule. Never guess a value.
 
 **Read only.** Never create, change or delete anything. POST is for a search or a
-GraphQL query only. No mutations.
+GraphQL query only. No mutations. Jira's changelog bulk fetch is a POST that only
+reads.
 
 **Be sparing.** Cost follows the tickets asked for, not the size of the service.
 Fetch many tickets per search, name the fields you want, and read expensive facts

@@ -128,7 +128,7 @@ wf health --stage review
 wf health APP-42
 ```
 
-Plain `wf health` checks every ticket in your Jira search and sums them up. It
+Plain `wf health` checks every ticket in your scope (your Jira search, or your GitHub project) and sums them up. It
 starts with one sentence, such as "40 of 168 tickets are out of policy (24%)",
 and a bar. Gates and stages always follow the order of your workflow.
 
@@ -567,7 +567,7 @@ Names are the connection names in `providers.yml`. With no names, every
 connection is tested. If one fails, the rest still run.
 
 For Jira, the test checks who the token belongs to and reads one ticket from your
-search. It also reads label history if your gates need it. For GitHub, it checks
+search. For a GitHub Issues tracker, it checks the project and the view. It also reads label history if your gates need it. For GitHub, it checks
 who you are, lists the repositories you can see, and runs a sample PR search. If
 your Jira search or GitHub organisation is empty, the test tells you.
 
@@ -605,7 +605,7 @@ find every failure, use `--all --failing`.
 `--me` and `--user` look through your whole search and all linked PRs first, and
 only then apply the limit. This takes more work, but you will not miss a ticket
 just because it was not in the first 25. When you name tickets, the limit is
-ignored, but the tickets must still be in your Jira search.
+ignored, but the tickets must still be in your scope.
 
 ## Who is "me"?
 

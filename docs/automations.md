@@ -360,7 +360,7 @@ command or prompt:
   y run  ·  n skip  ·  q stop watching
 ```
 
-`wf watch` checks every ticket in your Jira search, and the PRs linked to them,
+`wf watch` checks every ticket in your scope, and the PRs linked to them,
 each time. A long interval uses less of your Jira and GitHub request limits.
 
 ## Where things are kept

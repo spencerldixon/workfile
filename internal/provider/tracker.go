@@ -13,7 +13,8 @@ import (
 // tracker is the place tickets live. Everything above this file works with any
 // tracker: keys, statuses and addresses are the tracker's own text, and rich
 // text arrives as workfile blocks. To add a tracker, write an adapter with
-// these methods and list its kind in trackers.
+// these methods and list its kind in trackers. The steps are in
+// docs/providers/building-a-provider.md.
 type tracker interface {
 	connection
 	// Tickets reads tickets in full for policy checks: the named keys, or the

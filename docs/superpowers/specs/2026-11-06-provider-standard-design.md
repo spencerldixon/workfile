@@ -1,6 +1,6 @@
 # Provider standard design
 
-**Status:** draft, not built. The contract a provider must meet is in
+**Status:** built. The contract a provider must meet is in
 [Building a provider](../../providers/building-a-provider.md). This file says why,
 and how the code gets there.
 

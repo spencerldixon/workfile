@@ -12,7 +12,7 @@ Every rule that applies must pass.
 | File | What it holds |
 | --- | --- |
 | `.workfile/policy.yml` | Stages, moves between stages, and gates. |
-| `.workfile/providers.yml` | Your Jira and GitHub connections, your Jira search, status names, and where credentials come from. |
+| `.workfile/providers.yml` | Your Jira and GitHub connections, the search or project that picks your tickets, status names, and where credentials come from. |
 | `.workfile/people.yml` | Optional. Names and accounts for people, used by `by` and `--user`. |
 
 Each file is one YAML document. Mistakes are errors, not guesses. That covers
@@ -50,7 +50,7 @@ gates:
     - if: github.checks == success
 ```
 
-- `tracker` is the name of the Jira connection that supplies tickets.
+- `tracker` is the name of the connection that supplies tickets. It can be a Jira or a GitHub Issues connection. Every other connection is a code host.
 - `states` puts the stages in order. The order decides which moves go forward
   and which are returns. It also sets the order of `wf health` and `wf status`.
 - `to` lists where a ticket can go next. A `requires` list shares the same gates

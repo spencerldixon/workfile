@@ -181,5 +181,6 @@ It does not need the gates from every branch.
 - [Writing a policy](policy.md): stages, moves, gates and rules in detail.
 - [Automations](automations.md): "when this happens to my work, do that".
 - [Jira provider](providers/jira.md) and [GitHub provider](providers/github.md): tokens, settings, and what each
-  attribute means.
+  attribute means. GitHub can also hold your tickets.
+- [Building a provider](providers/building-a-provider.md): add a new tracker or code host.
 - [Examples](../example/): policies you can copy.

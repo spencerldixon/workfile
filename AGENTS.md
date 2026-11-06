@@ -30,7 +30,9 @@ output changes so the person you are working with can try the real thing.
 
 - `internal/workfile`: loads policies and checks tickets. No terminal code, no network.
 - `internal/provider`: reads Jira and GitHub. Trackers sit behind the `tracker`
-  interface in `tracker.go`, so nothing above it may depend on one tracker.
+  interface in `tracker.go`, and code hosts behind `codeHost`, so nothing above
+  them may depend on one service. `internal/workfile/kinds.go` is the table of
+  kinds. See `docs/providers/building-a-provider.md`.
 - `internal/automation`: finds a person's automations, remembers what each
   check saw, and runs their commands. No terminal code, no network.
 - `internal/cli`: commands and everything drawn on the terminal.
