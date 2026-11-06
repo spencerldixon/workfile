@@ -194,6 +194,23 @@ func (w *Workspace) validate() error {
 			add("policy.yml: transition %s is not in states", state)
 		}
 	}
+	for _, stage := range SortedKeys(p.Invariants) {
+		gates := p.Invariants[stage]
+		if !seen[stage] {
+			add("policy.yml: invariants refers to unknown state %s", stage)
+		}
+		if len(gates) == 0 {
+			add("policy.yml: invariants.%s needs at least one gate", stage)
+		}
+		for i, gate := range gates {
+			if _, ok := p.Gates[gate]; !ok {
+				add("policy.yml: invariants.%s refers to unknown gate %s", stage, gate)
+			}
+			if slices.Contains(gates[:i], gate) {
+				add("policy.yml: invariants.%s lists %s twice", stage, gate)
+			}
+		}
+	}
 	for _, name := range SortedKeys(w.Providers) {
 		provider := w.Providers[name]
 		if !namePattern.MatchString(name) {

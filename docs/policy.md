@@ -150,6 +150,23 @@ entry gates and any gate named on the return.
 `wf health` lists gates in the order they first appear along your workflow,
 starting from the first stage.
 
+## Invariants: what must always be true
+
+Because any one path is enough, a gate on one path promises nothing about the
+others. List what must hold on **every** path under `invariants`, as a stage and
+the gates every forward path to it must pass:
+
+```yaml
+invariants:
+  done: [code_review, merged]
+  release: [code_review]
+```
+
+`wf prove` checks them, and shows the path that skips a gate when one does. See
+[Prove](usage.md#prove-does-the-policy-say-what-you-mean). Invariants do not
+change how tickets are checked, and they are not part of the policy hash. Each
+stage and gate must exist, and each gate is listed once.
+
 ## Rules
 
 ```yaml

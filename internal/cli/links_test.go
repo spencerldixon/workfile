@@ -32,7 +32,11 @@ func TestLinksAcrossViewsAndInstances(t *testing.T) {
 			if o.gate != "" {
 				shown = []workfile.Assessment{w.Assess(done)}
 			}
-			v.report(w, shown, o)
+			if o.command == "health" {
+				v.healthReport(w, shown, o)
+			} else {
+				v.statusReport(w, shown, o)
+			}
 			text := out.String()
 			if !strings.Contains(text, "\x1b]8;;"+ticket.URL+"\x1b\\") {
 				t.Fatalf("missing ticket hyperlink for %+v at %d:\n%s", o, width, text)

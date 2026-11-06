@@ -6,12 +6,9 @@ import (
 	"fmt"
 	"net/mail"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"go.yaml.in/yaml/v3"
@@ -28,6 +25,18 @@ type setupSource interface {
 	SetupPeople(context.Context, string) ([]provider.SetupPerson, error)
 }
 
+var setupCommand = command{
+	flags: []string{"dir"},
+	args: func(o options) error {
+		if len(o.keys) > 0 {
+			return errors.New("setup takes no positional arguments; use --dir to choose a folder")
+		}
+		return nil
+	},
+	noWorkspace: true,
+	run:         func(ctx context.Context, e env) (int, error) { return 0, setup(ctx, e.view, e.o) },
+}
+
 // setup runs the interactive setup screens. The terminal's background is read
 // first, because Bubble Tea takes over the terminal once it starts.
 func setup(ctx context.Context, v view, o options) error {
@@ -38,7 +47,7 @@ func setup(ctx context.Context, v view, o options) error {
 		dir:         o.dir,
 		background:  v.laneBackground(),
 		credentials: workfile.PersonalPath("credentials"),
-		open:        func(target string) error { return openSetupBrowser(ctx, target) },
+		open:        func(target string) error { return openBrowser(ctx, target) },
 		connect: func(w *workfile.Workspace, values map[string]string) setupSource {
 			c := provider.New(w)
 			c.Credentials.Set(values)
@@ -61,25 +70,6 @@ func setup(ctx context.Context, v view, o options) error {
 		}
 	}
 	return nil
-}
-
-func openSetupBrowser(ctx context.Context, target string) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	var command string
-	var args []string
-	switch runtime.GOOS {
-	case "darwin":
-		command = "open"
-		args = []string{target}
-	case "windows":
-		command = "rundll32"
-		args = []string{"url.dll,FileProtocolHandler", target}
-	default:
-		command = "xdg-open"
-		args = []string{target}
-	}
-	return exec.CommandContext(ctx, command, args...).Run()
 }
 
 func setupDirectory(value string) (string, error) {

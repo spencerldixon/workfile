@@ -25,7 +25,9 @@ English before you install anything.
 | `wf setup` | Connect Jira and optional GitHub, and create a starter `.workfile/` folder. |
 | `wf health` | How your board compares to your policy. Which gates and stages are failing, and how many tickets are affected. |
 | `wf status` | Where each ticket is, and what it needs before it can move on. |
+| `wf tickets` | A searchable list of your tickets. Read each one as your tracker shows it, with what Workfile knows about it. |
 | `wf check` | Whether one ticket may move to a stage right now. Agents ask it before they move work. |
+| `wf prove` | Whether your policy has a path that skips a gate. It reads no tickets, so it runs in CI. |
 | `wf automations` | Your automations, and anything stopping them. |
 | `wf watch` | Checks your work every 2 minutes and fires your automations. |
 | `wf test` | Whether your connections to Jira and GitHub work. |
@@ -342,6 +344,53 @@ nearest branch unless the ticket is in another one. Detours such as blocked and
 extra end stages such as cancelled are left out; if the ticket is in one, the
 screen says so. **Next moves** lists every place the ticket can go from here. On
 a narrow terminal the gaps get smaller, then the path wraps onto more lines.
+
+## Prove your policy
+
+Workfile accepts a ticket's stage when **any one** forward path to it passes its
+gates. So a policy is only as strong as its weakest path. Write down what must
+always be true, and `wf prove` checks every path:
+
+```yaml
+# .workfile/policy.yml
+invariants:
+  done: [code_review, merged]
+```
+
+Here it is on the [branching example](example/branching/.workfile/), which has a
+hole: the security path reaches done without code review.
+
+```text
+
+  WORKFILE PROVE
+  1 of 2 invariants can be skipped.
+
+  INVARIANTS
+  ✗ done requires code review
+    A ticket can reach done without it:
+    intake → triage → discovery → ready → doing → review → security → release → done
+    Require code review on review → security or security → release.
+  ✓ done requires merged
+
+  WHAT EACH STAGE GUARANTEES
+  Every path to the stage passes these gates.
+  intake     nothing
+  triage     nothing
+  discovery  nothing
+  ready      nothing
+  doing      refinement
+  blocked    refinement
+  review     refinement · linked pull requests · risk assessment
+  qa         refinement · linked pull requests · risk assessment · code review
+  security   refinement · linked pull requests · risk assessment · threat model
+  release    refinement · linked pull requests · risk assessment
+  done       refinement · linked pull requests · risk assessment · merged
+  cancelled  nothing
+```
+
+It exits 1 when an invariant can be skipped, so run it in CI on any pull request
+that changes `.workfile/`. It needs no credentials. `--json` gives agents the
+same answer. See [Prove](docs/usage.md#prove-does-the-policy-say-what-you-mean).
 
 ## Automations
 

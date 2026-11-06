@@ -453,12 +453,7 @@ func newStatusModel(s statusScreen, who map[string]string) *statusModel {
 		Page:   key.NewBinding(key.WithKeys("pgdown", "pgup"), key.WithHelp("pgdn", "more")),
 		Quit:   key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 	}
-	m.help = bubblehelp.New()
-	m.help.ShortSeparator = "  ·  "
-	m.help.Styles.ShortKey = s.t.style(func(st lipgloss.Style) lipgloss.Style { return st })
-	m.help.Styles.ShortDesc = s.t.style(func(st lipgloss.Style) lipgloss.Style { return st.Faint(true) })
-	m.help.Styles.ShortSeparator = m.help.Styles.ShortDesc
-	m.help.Styles.Ellipsis = m.help.Styles.ShortDesc
+	m.help = s.t.help()
 	m.build()
 	return m
 }

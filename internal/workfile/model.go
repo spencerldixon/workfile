@@ -12,6 +12,10 @@ type Policy struct {
 	States      []string              `yaml:"states"`
 	Transitions map[string]Transition `yaml:"transitions"`
 	Gates       map[string][]Rule     `yaml:"gates"`
+	// Invariants name the gates every forward path to a stage must pass. wf
+	// prove checks them. They describe the rules rather than add to them, so
+	// they are not part of the policy hash.
+	Invariants map[string][]string `yaml:"invariants" json:"-"`
 }
 
 type Transition struct {

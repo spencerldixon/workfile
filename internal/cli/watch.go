@@ -3,8 +3,8 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"slices"
 	"strings"
@@ -19,10 +19,23 @@ import (
 	"workfile/internal/workfile"
 )
 
+var watchCommand = command{flags: []string{"dir", "once", "interval", "dry-run"}, args: watchArgs, run: watch}
+
+func watchArgs(o options) error {
+	if len(o.keys) > 0 {
+		return errors.New("watch takes no positional arguments")
+	}
+	if o.interval < time.Minute {
+		return errors.New("--interval must be at least 1m")
+	}
+	return nil
+}
+
 // watch checks the person's work on a timer and fires their automations. In
 // a terminal it is a Bubble Tea screen that can ask before running; piped, or
 // with --once, it prints plain blocks and never asks.
-func watch(ctx context.Context, v view, w *workfile.Workspace, client source, o options, _ io.Writer) (int, error) {
+func watch(ctx context.Context, e env) (int, error) {
+	v, w, client, o := e.view, e.w, e.client, e.o
 	s, err := loadAutomations(ctx, w, client, true)
 	if err != nil {
 		return 2, err

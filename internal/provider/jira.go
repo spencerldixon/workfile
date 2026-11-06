@@ -92,20 +92,33 @@ func splitScope(scope string) (string, string) {
 	return strings.TrimSpace(scope), "updated DESC"
 }
 
-func (c *Client) Tickets(ctx context.Context, keys []string, limit int) ([]workfile.Ticket, error) {
+// scope splits a search into its condition and order, narrowing it to the
+// person's own tickets when the workspace says so.
+func (c *Client) scope(scope string) (string, string, error) {
+	condition, order := splitScope(scope)
+	if c.Workspace.Settings.OnlyMine {
+		assignee, err := c.Workspace.MyJiraAssignee()
+		if err != nil {
+			return "", "", err
+		}
+		condition = "(" + condition + ") AND assignee = " + assignee
+	}
+	return condition, order, nil
+}
+
+// jiraTracker reads tickets from Jira.
+type jiraTracker struct{ *Client }
+
+func (c jiraTracker) Tickets(ctx context.Context, keys []string, limit int) ([]workfile.Ticket, error) {
 	name := c.Workspace.Policy.Tracker
 	p := c.Workspace.Providers[name]
 	base, auth, err := c.jira(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	condition, order := splitScope(p.Scope)
-	if c.Workspace.Settings.OnlyMine {
-		assignee, err := c.Workspace.MyJiraAssignee()
-		if err != nil {
-			return nil, err
-		}
-		condition = "(" + condition + ") AND assignee = " + assignee
+	condition, order, err := c.scope(p.Scope)
+	if err != nil {
+		return nil, err
 	}
 	jql := "(" + condition + ")"
 	if len(keys) > 0 {
@@ -144,13 +157,7 @@ func (c *Client) Tickets(ctx context.Context, keys []string, limit int) ([]workf
 			return nil, errors.New("Jira returned a ticket without an ID or key")
 		}
 		t := workfile.Ticket{Key: issue.Key, Title: f.Summary, URL: "https://" + p.Site + "/browse/" + url.PathEscape(issue.Key), Assignee: f.Assignee.AccountID, OutOfScope: inScope != nil && !inScope[issue.Key]}
-		for state, names := range p.Statuses {
-			for _, status := range names {
-				if strings.EqualFold(status, f.Status.Name) {
-					t.State = state
-				}
-			}
-		}
+		t.State = jiraState(p, f.Status.Name)
 		if t.State == "" {
 			t.Error = fmt.Sprintf("Jira status %q is not mapped in %s.statuses", f.Status.Name, name)
 		}
@@ -178,6 +185,19 @@ func (c *Client) Tickets(ctx context.Context, keys []string, limit int) ([]workf
 		items = append(items, t)
 	}
 	return items, nil
+}
+
+// jiraState is the policy state a Jira status maps to, or "" if it has none.
+func jiraState(p workfile.Provider, name string) string {
+	found := ""
+	for state, names := range p.Statuses {
+		for _, status := range names {
+			if strings.EqualFold(status, name) {
+				found = state
+			}
+		}
+	}
+	return found
 }
 
 func (c *Client) needsLabelHistory() bool {

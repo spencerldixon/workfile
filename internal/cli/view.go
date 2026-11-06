@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -144,29 +143,4 @@ func group(a workfile.Assessment) int {
 		return 3
 	}
 	return 4
-}
-
-func (v view) report(w *workfile.Workspace, all []workfile.Assessment, o options) {
-	if o.command == "health" {
-		if o.listing() {
-			v.healthList(w, all, o)
-		} else if len(all) == 0 {
-			v.heading("health")
-			v.wrap("No tickets match this selection.", "  ")
-			v.line("")
-		} else {
-			fmt.Fprint(v.out, newHealthScreen(v, w, all, o).printed())
-		}
-		return
-	}
-	if len(o.keys) > 0 {
-		shown := slices.DeleteFunc(slices.Clone(all), func(a workfile.Assessment) bool { return o.failing && group(a) >= 3 })
-		if len(shown) > 0 {
-			for _, a := range shown {
-				fmt.Fprint(v.out, newTicketModel(v, w, a).render())
-			}
-			return
-		}
-	}
-	fmt.Fprint(v.out, newStatusScreen(v, w, all, o).printed())
 }

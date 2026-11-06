@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 
+	bubblehelp "charm.land/bubbles/v2/help"
 	"charm.land/lipgloss/v2"
 )
 
@@ -13,6 +14,17 @@ import (
 type theme struct {
 	bg    string // SGR parameters for the panel background, or "" for none
 	color bool
+}
+
+// help is the key line at the foot of a screen, in the theme's colours.
+func (t theme) help() bubblehelp.Model {
+	h := bubblehelp.New()
+	h.ShortSeparator = "  ·  "
+	h.Styles.ShortKey = t.style(func(st lipgloss.Style) lipgloss.Style { return st })
+	h.Styles.ShortDesc = t.style(func(st lipgloss.Style) lipgloss.Style { return st.Faint(true) })
+	h.Styles.ShortSeparator = h.Styles.ShortDesc
+	h.Styles.Ellipsis = h.Styles.ShortDesc
+	return h
 }
 
 func newTheme(color bool, bg string) theme {

@@ -6,7 +6,8 @@ settings, `wf workspaces`, `wf watch --all`, `--json` events and step 7 are not
 built yet. The user guide is [Automations](../automations.md).
 
 New to Workfile? Read [Getting started](../getting-started.md) first. This page
-uses its words: stage, move, gate and rule.
+uses its words: stage, move, gate and rule. For where this is all heading, read
+the [vision](../vision.md).
 
 ## The idea
 
@@ -65,7 +66,7 @@ workspace by its `name:` in `policy.yml`, for example
 `~/.config/workfile/example-web/automations.yml`. Any repository can claim a
 name, so a private file also lists the git remotes it may run in. You can use
 both. Details
-are in [Personal automations](automations.md#linking-a-private-file-to-its-workspace).
+are in [Where automations live](../automations.md#where-automations-live).
 
 ## An automation file
 
@@ -142,7 +143,7 @@ The same file works as a private file. Moved to
 only Alice can see it.
 
 The full file format, triggers, modes and safety limits are in
-[Personal automations](automations.md).
+[Automations](../automations.md).
 
 ## What to add to Workfile
 
@@ -185,7 +186,7 @@ creates your private file.
 
 `wf watch --once --dry-run` checks your work, compares it with the last check,
 and prints what would fire. The rules are in
-[Personal automations](automations.md#triggers): the first check fires nothing,
+[Triggers](../automations.md#triggers): the first check fires nothing,
 each change fires once, and unknown is never a change.
 
 ### 5. Actions and modes
@@ -281,6 +282,15 @@ This matches Work Hub's rule that Workfile is the only place to configure
 anything. Its planned Automations table reads the same files. Its own trigger
 evaluation and Jira transition action are no longer needed. Moves happen
 through agents and scripts, and they ask `wf check` first.
+
+## Out of scope for now
+
+- **Moves by Workfile itself.** A built-in `move:` action needs Jira write
+  access, which Workfile does not have. An agent or script does the move.
+- **Shared team automations.** These need one runner for the team, for example
+  a CI job, so they do not run once per person.
+- **Events Workfile does not read**, such as new comments, Slack messages or
+  review requests. Automations use facts the policy can already see.
 
 ## Order
 

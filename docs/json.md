@@ -122,6 +122,24 @@ wf check APP-42 --to done --json || exit 1   # stop unless the move is allowed
 Compare each PR's `head` with the one you saw when you started. If it changed,
 check again before you move anything.
 
+## Prove
+
+`wf prove --json` checks the policy, not tickets, so it has no `observed_at`.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | Currently `1`. |
+| `command` | `prove`. |
+| `policy_hash`, `exit_code` | As in reports. `exit_code` is `1` when any invariant can be skipped. |
+| `invariants` | One entry for each gate under `invariants:`, in pipeline order, then the order listed. Each has `stage`, `gate` and `holds`. |
+| `invariants[].bypass` | When it does not hold: the shortest forward path that reaches `stage` without `gate`, as moves with `from`, `to` and `requires`. Missing when the stage is where tickets start. |
+| `invariants[].fixes` | Moves on that path where requiring `gate` would close every bypass. Missing when no single move does. |
+| `guarantees` | One entry per stage, in pipeline order: `stage`, and `gates` every forward path to it passes. |
+
+```sh
+wf prove --json || exit 1   # fail CI when a path skips a gate
+```
+
 ## Automation events
 
 An automation's command or agent gets `WORKFILE_EVENT`: the path of a JSON file

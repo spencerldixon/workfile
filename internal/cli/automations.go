@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +52,23 @@ func loadAutomations(ctx context.Context, w *workfile.Workspace, client source, 
 	return s, nil
 }
 
-func automations(ctx context.Context, v view, w *workfile.Workspace, client source, o options, _ io.Writer) (int, error) {
+var automationsCommand = command{flags: []string{"dir", "all", "log"}, args: automationsArgs, run: automations}
+
+func automationsArgs(o options) error {
+	if len(o.keys) > 1 || len(o.keys) == 1 && o.keys[0] != "init" && o.keys[0] != "trust" {
+		return errors.New("automations takes init, trust or nothing")
+	}
+	if len(o.keys) == 1 && (o.all || o.log != "") {
+		return fmt.Errorf("automations %s takes no options", o.keys[0])
+	}
+	if o.all && o.log != "" {
+		return errors.New("choose either --all or --log")
+	}
+	return nil
+}
+
+func automations(ctx context.Context, e env) (int, error) {
+	v, w, client, o := e.view, e.w, e.client, e.o
 	switch {
 	case len(o.keys) == 1 && o.keys[0] == "init":
 		return initAutomations(ctx, v, w)

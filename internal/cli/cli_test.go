@@ -20,11 +20,44 @@ type fakeSource struct {
 	limit        int
 	keys, tested []string
 	testErrors   map[string]error
+	// wf tickets
+	listing     []workfile.Listing
+	listingErr  error
+	scope       string
+	identityErr error
+	identities  int
+	details     map[string]workfile.Detail
+	detailErr   error
+	policyErr   error
+	detailReads []string
+	policyReads []string
+	images      map[string][]byte
+	imageReads  []string
+}
+
+func (f *fakeSource) Listing(_ context.Context, scope string) ([]workfile.Listing, error) {
+	f.scope = scope
+	return f.listing, f.listingErr
+}
+func (f *fakeSource) Detail(_ context.Context, key string) (workfile.Detail, error) {
+	f.detailReads = append(f.detailReads, key)
+	return f.details[key], f.detailErr
+}
+func (f *fakeSource) Image(_ context.Context, attachment string) ([]byte, error) {
+	f.imageReads = append(f.imageReads, attachment)
+	if data, ok := f.images[attachment]; ok {
+		return data, nil
+	}
+	return nil, errors.New("no such image")
 }
 
 func (f *fakeSource) Tickets(_ context.Context, keys []string, limit int) ([]workfile.Ticket, error) {
 	f.limit = limit
 	f.keys = keys
+	f.policyReads = append(f.policyReads, keys...)
+	if f.policyErr != nil {
+		return nil, f.policyErr
+	}
 	result := slices.Clone(f.tickets)
 	if len(keys) > 0 {
 		result = slices.DeleteFunc(result, func(t workfile.Ticket) bool { return !slices.Contains(keys, t.Key) })
@@ -37,7 +70,10 @@ func (f *fakeSource) Tickets(_ context.Context, keys []string, limit int) ([]wor
 func (f *fakeSource) Records(_ context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error) {
 	return tickets, nil, nil
 }
-func (f *fakeSource) Identity(context.Context, string) (string, error) { return "example-bob", nil }
+func (f *fakeSource) Identity(context.Context, string) (string, error) {
+	f.identities++
+	return "example-bob", f.identityErr
+}
 func (f *fakeSource) Test(_ context.Context, name string) (string, error) {
 	f.tested = append(f.tested, name)
 	return "connected", f.testErrors[name]
@@ -397,6 +433,29 @@ func TestStatusWordsFixesLikeTheTicketView(t *testing.T) {
 	for _, pr := range []string{"example-team/api #31", "example-team/api #18"} {
 		if strings.Count(board, "Get at least 1 approval · "+pr+" · code review") != 1 {
 			t.Fatalf("%q needs its own approval, named once\n%s", pr, board)
+		}
+	}
+}
+
+func TestEveryCommandIsInHelpAndTakesItsOwnFlags(t *testing.T) {
+	for name, c := range commands {
+		if !strings.Contains(help, "\n  "+name+" ") {
+			t.Errorf("%s is not described in help", name)
+		}
+		if c.run == nil {
+			t.Errorf("%s has nothing to run", name)
+		}
+		if !slices.Contains(c.flags, "dir") {
+			t.Errorf("%s does not take --dir", name)
+		}
+	}
+}
+
+func TestParseRejectsAnotherCommandsFlag(t *testing.T) {
+	for _, args := range [][]string{{"status", "--gate", "code_review"}, {"test", "--json"}, {"setup", "--me"}} {
+		_, err := parse(args)
+		if err == nil || !strings.Contains(err.Error(), "is not an option for wf "+args[0]) {
+			t.Errorf("%v: %v", args, err)
 		}
 	}
 }

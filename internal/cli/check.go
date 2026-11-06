@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -12,11 +13,27 @@ import (
 	"workfile/internal/workfile"
 )
 
+var checkCommand = command{flags: []string{"dir", "to", "json"}, args: checkArgs, ticketKeys: true, run: checkMove}
+
+func checkArgs(o options) error {
+	if len(o.keys) != 1 {
+		return errors.New("check takes one ticket, such as wf check APP-42 --to done")
+	}
+	if err := ticketArgs(o); err != nil {
+		return err
+	}
+	if o.to == "" {
+		return errors.New("check needs --to STAGE, the stage the ticket would move to")
+	}
+	return nil
+}
+
 // checkMove answers one question, for an agent or a person: may this ticket
 // move to that stage right now? It reads the ticket fresh and asks the policy.
 // Agents run it before they move a ticket, so an automation can never move
 // work the team's gates do not allow. Exit 0 yes, 1 no, 2 cannot check.
-func checkMove(ctx context.Context, v view, w *workfile.Workspace, client source, o options, errOut io.Writer) (int, error) {
+func checkMove(ctx context.Context, e env) (int, error) {
+	v, w, client, o := e.view, e.w, e.client, e.o
 	if !slices.Contains(w.Policy.States, o.to) {
 		return 2, fmt.Errorf("%s is not a stage in policy.yml", o.to)
 	}
@@ -33,7 +50,7 @@ func checkMove(ctx context.Context, v view, w *workfile.Workspace, client source
 	}
 	if !o.json {
 		for _, warning := range warnings {
-			fmt.Fprintln(errOut, "wf: "+clean(warning))
+			fmt.Fprintln(e.errOut, "wf: "+clean(warning))
 		}
 	}
 	a := w.Assess(tickets[0])

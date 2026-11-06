@@ -9,7 +9,8 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/mattn/go-runewidth v0.0.30
 	go.yaml.in/yaml/v3 v3.0.4
-	golang.org/x/sys v0.47.0
+	golang.org/x/image v0.47.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.40.0
 )
 
@@ -27,5 +28,6 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sahilm/fuzzy v0.1.3 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )

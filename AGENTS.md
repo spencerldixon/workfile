@@ -29,7 +29,8 @@ output changes so the person you are working with can try the real thing.
 ## Packages
 
 - `internal/workfile`: loads policies and checks tickets. No terminal code, no network.
-- `internal/provider`: reads Jira and GitHub.
+- `internal/provider`: reads Jira and GitHub. Trackers sit behind the `tracker`
+  interface in `tracker.go`, so nothing above it may depend on one tracker.
 - `internal/automation`: finds a person's automations, remembers what each
   check saw, and runs their commands. No terminal code, no network.
 - `internal/cli`: commands and everything drawn on the terminal.
@@ -139,6 +140,8 @@ a section below says it is for old output only.
 - The only computed colour is the panel background, derived from the terminal's
   reported background (OSC 11), asked once per run, in true colour or the nearest
   256 colour. `WORKFILE_BACKGROUND=off` turns it off.
+- One more computed colour: large title images use the terminal's text colour
+  (OSC 10), asked once per run. If it does not answer, titles are bold text.
 - Icons stay: `✓` ready, `✗` needs work, `‼` out of policy, `!` cannot check,
   `·` done.
 - Never rely on colour alone. Pair it with an icon or word: `✓` ready, `✗` needs
@@ -147,6 +150,15 @@ a section below says it is for old output only.
   same information: no escapes, no background, and web addresses written out
   where a hyperlink would have been.
 - Ticket keys and PR numbers are hyperlinks (`view.link`) when colour is on.
+
+### Images
+
+- Use kitty graphics only when the terminal says it can, by asking over the
+  protocol. Never check a terminal's name. `WORKFILE_GRAPHICS=off` turns it off.
+- Draw images with kitty Unicode placeholders, so they scroll and clip as cells.
+  Name images with the 256-colour form: 24-bit ids are rewritten on terminals
+  without true colour.
+- Everything drawn as an image needs a text fallback with the same information.
 
 ### Fit the terminal
 
