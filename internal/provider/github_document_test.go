@@ -88,6 +88,9 @@ func TestMarkdownBlocks(t *testing.T) {
 			para(workfile.Span{Text: "<!-- note -->"}),
 			para(workfile.Span{Text: "indented"}),
 		}},
+		{"blank line inside a fence", "```\na\n\nb\n```", []workfile.Block{{Kind: workfile.BlockCode, Spans: []workfile.Span{{Text: "a\n\nb", Code: true}}}}},
+		{"unclosed fence with newline", "```\na\n", []workfile.Block{{Kind: workfile.BlockCode, Spans: []workfile.Span{{Text: "a\n", Code: true}}}}},
+		{"indented rule is text", "    - - -", []workfile.Block{para(workfile.Span{Text: "- - -"})}},
 		{"empty", " \n\n", nil},
 	}
 	for _, tc := range cases {
@@ -218,6 +221,12 @@ func TestImageOnlyGoesToGitHub(t *testing.T) {
 		"https://[github.com/a.png",
 		"ftp://github.com/a.png",
 		"file:///etc/passwd",
+		"https://g\u0130thub.com/a.png",
+		"https://G\u0130THUB.COM/a.png",
+		"https://user-\u0130mages.githubusercontent.com/a.png",
+		"https://github.com/\u00e9.png",
+		"https://github.com/a\x7f.png",
+		"https://GITHUB.com/a.png",
 	}
 	for _, address := range refused {
 		c, rec := conformClient(t, "", issuesProvider(), func(*http.Request) (int, string) { return 200, "PNG" })
@@ -226,6 +235,56 @@ func TestImageOnlyGoesToGitHub(t *testing.T) {
 		}
 		if rec.count() != 0 {
 			t.Errorf("%q caused a request: %q", address, rec.requests)
+		}
+	}
+}
+
+func TestMarkdownBlocksSurvivesAwkwardInput(t *testing.T) {
+	inputs := []string{
+		"    - - -", "      * * *", ">     - - -", "```\n\n", "```", "~~~\n\n\n~~~", "- ", "-", "1.", "> ", ">", "|", "|\n|", "| a |\n| - |",
+		"![", "![](", "[](", "[a](", "[a]()", "***", "**", "* ", "_", "`", "``", "\\", "# ", "#", "\x00\xff", "- a\n\n\n- b", "- a\n    - - -\n- c",
+		strings.Repeat("- ", 1000), strings.Repeat("> ", 1000), strings.Repeat("[", 5000), strings.Repeat("*", 5001),
+	}
+	for _, in := range inputs {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("markdownBlocks(%.40q) panicked: %v", in, r)
+				}
+			}()
+			markdownText(in)
+		}()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("markdownBlocks(%.40q) did not return", in)
+		}
+	}
+}
+
+func TestMarkdownBlocksHostileInputIsBounded(t *testing.T) {
+	var unique strings.Builder
+	for n := 1; n <= 250; n++ {
+		unique.WriteString(strings.Repeat("`", n) + " ")
+	}
+	cases := map[string]string{
+		"unclosed emphasis and code": strings.Repeat("*a ", 10922) + unique.String(),
+		"deep quote":                 strings.Repeat(">", 262144),
+		"deep spaced quote":          strings.Repeat("> ", 100000),
+		"unmatched brackets":         strings.Repeat("[", 65000),
+		"nested emphasis":            strings.Repeat("*a ", 20000) + strings.Repeat("*", 20000),
+		"many list lines":            "- a\n" + strings.Repeat("b\n", 30000),
+	}
+	for name, in := range cases {
+		start := time.Now()
+		markdownText(in)
+		// The unbounded version took tens of seconds, or crashed.
+		if took := time.Since(start); took > 5*time.Second {
+			t.Errorf("%s took %v", name, took)
+		} else {
+			t.Logf("%s: %v", name, took)
 		}
 	}
 }

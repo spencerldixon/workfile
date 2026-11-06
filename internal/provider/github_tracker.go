@@ -614,15 +614,17 @@ func (c githubTracker) Detail(ctx context.Context, key string) (workfile.Detail,
 var githubImageHosts = []string{"github.com", "user-images.githubusercontent.com", "private-user-images.githubusercontent.com"}
 
 // Image downloads one image a body named. The address is checked before any
-// request: https only, no login or port, and the host must be exactly one of
-// GitHub's own. The client follows no redirects, so the token stays on that host.
+// request: ASCII only, https only, no login or port, and the host must equal one
+// of GitHub's own byte for byte. No case folding: some letters fold to ASCII ones
+// and would name another domain. The client follows no redirects, so the token
+// stays on that host.
 func (c githubTracker) Image(ctx context.Context, attachment string) ([]byte, error) {
-	if strings.ContainsFunc(attachment, func(r rune) bool { return r <= ' ' || r == '\\' || r == 0x7f }) {
-		return nil, errors.New("not an image address")
+	if strings.ContainsFunc(attachment, func(r rune) bool { return r <= ' ' || r >= 0x7f || r == '\\' }) {
+		return nil, fmt.Errorf("%s: not an image address", c.name)
 	}
 	u, err := url.Parse(attachment)
-	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" || u.Host != u.Hostname() || !slices.Contains(githubImageHosts, strings.ToLower(u.Hostname())) {
-		return nil, errors.New("not an image address on GitHub")
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Opaque != "" || u.Host != u.Hostname() || !slices.Contains(githubImageHosts, u.Hostname()) {
+		return nil, fmt.Errorf("%s: not an image address on GitHub", c.name)
 	}
 	token, err := c.token()
 	if err != nil {

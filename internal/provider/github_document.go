@@ -15,7 +15,7 @@ import (
 // came: the caller cleans it before drawing.
 func markdownBlocks(text string) []workfile.Block {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-	return mdParse(strings.Split(text, "\n"), false)
+	return mdParse(strings.Split(text, "\n"), false, 0)
 }
 
 // markdownText is the plain text of a body and its headings, for policy checks.
@@ -79,7 +79,15 @@ func mdIndent(line string) (int, string) {
 	return width, ""
 }
 
-func mdParse(lines []string, quoted bool) []workfile.Block {
+// mdMaxDepth caps how deep quotes and emphasis nest. Anything deeper is text, so
+// hostile input cannot overflow the stack.
+const mdMaxDepth = 32
+
+// mdWindow caps how far a bracket looks for its partner, so a run of unmatched
+// brackets costs a little each, not the whole text each.
+const mdWindow = 2000
+
+func mdParse(lines []string, quoted bool, depth int) []workfile.Block {
 	var blocks []workfile.Block
 	var para []string
 	add := func(b workfile.Block) {
@@ -105,7 +113,7 @@ func mdParse(lines []string, quoted bool) []workfile.Block {
 			var code []string
 			for i++; i < len(lines); i++ {
 				_, inner := mdIndent(strings.TrimRight(lines[i], " \t"))
-				if closes := fenceMarker(inner); closes == inner && closes[0] == fence[0] && len(closes) >= len(fence) {
+				if closes := fenceMarker(inner); closes != "" && closes == inner && closes[0] == fence[0] && len(closes) >= len(fence) {
 					break
 				}
 				code = append(code, lines[i])
@@ -119,7 +127,7 @@ func mdParse(lines []string, quoted bool) []workfile.Block {
 		case indent <= 3 && mdRule(text):
 			flush()
 			add(workfile.Block{Kind: workfile.BlockRule})
-		case indent <= 3 && text[0] == '>':
+		case indent <= 3 && text[0] == '>' && depth < mdMaxDepth:
 			flush()
 			var inner []string
 			for ; i < len(lines); i++ {
@@ -130,7 +138,7 @@ func mdParse(lines []string, quoted bool) []workfile.Block {
 				inner = append(inner, strings.TrimPrefix(line[1:], " "))
 			}
 			i--
-			blocks = append(blocks, mdParse(inner, true)...)
+			blocks = append(blocks, mdParse(inner, true, depth+1)...)
 		case strings.Contains(text, "|") && i+1 < len(lines) && mdTableHead(text, lines[i+1]):
 			flush()
 			table := workfile.Block{Kind: workfile.BlockTable, Header: true, Rows: [][]string{mdCells(text)}}
@@ -139,7 +147,7 @@ func mdParse(lines []string, quoted bool) []workfile.Block {
 			}
 			i--
 			add(table)
-		case mdListItem.MatchString(strings.TrimRight(lines[i], " \t")) && mdStartsList(para, text):
+		case mdListItem.MatchString(strings.TrimRight(lines[i], " \t")) && !mdRule(text) && mdStartsList(para, text):
 			flush()
 			var end int
 			for _, b := range mdList(lines[i:], &end) {
@@ -190,8 +198,9 @@ func mdRule(text string) bool {
 // end is how many lines it used.
 func mdList(lines []string, end *int) []workfile.Block {
 	type item struct {
-		level        int
-		marker, text string
+		level  int
+		marker string
+		lines  []string
 	}
 	var items []item
 	var stack []int
@@ -223,19 +232,20 @@ func mdList(lines []string, end *int) []workfile.Block {
 			case strings.HasPrefix(text, "[x] "), strings.HasPrefix(text, "[X] "):
 				marker, text = "✓", text[4:]
 			}
-			items = append(items, item{len(stack) - 1, marker, text})
+			items = append(items, item{len(stack) - 1, marker, []string{text}})
 			continue
 		}
 		indent, text := mdIndent(line)
 		if indent <= 3 && (fenceMarker(text) != "" || mdHeading(text) != nil || mdRule(text) || text[0] == '>') {
 			break
 		}
-		items[len(items)-1].text += "\n" + text
+		last := &items[len(items)-1]
+		last.lines = append(last.lines, text)
 	}
 	*end = i
 	blocks := make([]workfile.Block, len(items))
 	for n, it := range items {
-		blocks[n] = workfile.Block{Kind: workfile.BlockList, Level: it.level, Marker: it.marker, Spans: mdSpans(it.text, workfile.Span{})}
+		blocks[n] = workfile.Block{Kind: workfile.BlockList, Level: it.level, Marker: it.marker, Spans: mdSpans(strings.Join(it.lines, "\n"), workfile.Span{})}
 	}
 	return blocks
 }
@@ -322,7 +332,7 @@ func mdLink(s string, at int) (label, dest string, end int, ok bool) {
 // mdMatch is the index of the bracket closing the one at s[at], or -1.
 func mdMatch(s string, at int, open, closing byte) int {
 	depth := 0
-	for i := at; i < len(s); i++ {
+	for i := at; i < len(s) && i-at < mdWindow; i++ {
 		switch s[i] {
 		case '\\':
 			i++
@@ -337,8 +347,22 @@ func mdMatch(s string, at int, open, closing byte) int {
 	return -1
 }
 
-// mdSpans reads inline Markdown. style carries what an outer span already set.
-func mdSpans(s string, style workfile.Span) []workfile.Span {
+func mdSpans(s string, style workfile.Span) []workfile.Span { return mdInline(s, style, 0) }
+
+// mdSearch remembers searches that found nothing, so a text full of unclosed
+// marks is read in one pass, not one pass per mark.
+type mdSearch struct {
+	noCode map[int]bool
+	noMark map[[2]int]bool
+}
+
+// mdInline reads inline Markdown. style carries what an outer span already set.
+func mdInline(s string, style workfile.Span, depth int) []workfile.Span {
+	if depth > mdMaxDepth {
+		style.Text = s
+		return []workfile.Span{style}
+	}
+	search := &mdSearch{noCode: map[int]bool{}, noMark: map[[2]int]bool{}}
 	var spans []workfile.Span
 	var buf strings.Builder
 	emit := func() {
@@ -357,7 +381,7 @@ func mdSpans(s string, style workfile.Span) []workfile.Span {
 			i += 2
 		case c == '`':
 			n := mdRun(s, i)
-			if j := mdCodeEnd(s, i+n, n); j >= 0 {
+			if j := search.codeEnd(s, i+n, n); j >= 0 {
 				emit()
 				code := s[i+n : j]
 				if len(code) > 2 && code[0] == ' ' && code[len(code)-1] == ' ' && strings.TrimSpace(code) != "" {
@@ -390,7 +414,7 @@ func mdSpans(s string, style workfile.Span) []workfile.Span {
 				emit()
 				inner := style
 				inner.Link = dest
-				spans = append(spans, mdSpans(label, inner)...)
+				spans = append(spans, mdInline(label, inner, depth+1)...)
 				i = end
 				continue
 			}
@@ -398,16 +422,16 @@ func mdSpans(s string, style workfile.Span) []workfile.Span {
 			i++
 		case c == '*' || c == '_':
 			n := mdRun(s, i)
-			depth := min(n, 2)
-			if content, end, ok := mdEmphasis(s, i, c, depth); ok && (c == '*' || i == 0 || !isMdAlnum(s[i-1])) {
+			depth2 := min(n, 2)
+			if content, end, ok := search.emphasis(s, i, c, depth2); ok && (c == '*' || i == 0 || !isMdAlnum(s[i-1])) {
 				emit()
 				inner := style
-				if depth == 2 {
+				if depth2 == 2 {
 					inner.Bold = true
 				} else {
 					inner.Italic = true
 				}
-				spans = append(spans, mdSpans(content, inner)...)
+				spans = append(spans, mdInline(content, inner, depth+1)...)
 				i = end
 				continue
 			}
@@ -432,6 +456,17 @@ func mdRun(s string, at int) int {
 }
 
 // mdCodeEnd is where a run of exactly n backticks closes a code span, or -1.
+func (m *mdSearch) codeEnd(s string, from, n int) int {
+	if m.noCode[n] {
+		return -1
+	}
+	if j := mdCodeEnd(s, from, n); j >= 0 {
+		return j
+	}
+	m.noCode[n] = true
+	return -1
+}
+
 func mdCodeEnd(s string, from, n int) int {
 	for j := from; j < len(s); {
 		if s[j] != '`' {
@@ -450,7 +485,18 @@ func mdCodeEnd(s string, from, n int) int {
 // mdEmphasis finds the text between depth marks at s[at] and the matching marks,
 // and where to carry on after them. A closing run longer than depth gives its
 // extra marks to the text inside, so ***x*** is bold around italic.
-func mdEmphasis(s string, at int, mark byte, depth int) (content string, end int, ok bool) {
+func (m *mdSearch) emphasis(s string, at int, mark byte, depth int) (content string, end int, ok bool) {
+	// A search that found no closer would find none from a later start either.
+	if m.noMark[[2]int{int(mark), depth}] {
+		return
+	}
+	if content, end, ok = m.emphasisFrom(s, at, mark, depth); !ok {
+		m.noMark[[2]int{int(mark), depth}] = true
+	}
+	return
+}
+
+func (m *mdSearch) emphasisFrom(s string, at int, mark byte, depth int) (content string, end int, ok bool) {
 	start := at + depth
 	if start >= len(s) || s[start] == ' ' || s[start] == '\t' || s[start] == '\n' {
 		return
@@ -460,7 +506,7 @@ func mdEmphasis(s string, at int, mark byte, depth int) (content string, end int
 		case s[j] == '\\':
 			j += 2
 		case s[j] == '`':
-			if k := mdCodeEnd(s, j+mdRun(s, j), mdRun(s, j)); k >= 0 {
+			if k := m.codeEnd(s, j+mdRun(s, j), mdRun(s, j)); k >= 0 {
 				j = k + mdRun(s, j)
 			} else {
 				j += mdRun(s, j)
