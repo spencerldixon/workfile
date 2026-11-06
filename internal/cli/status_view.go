@@ -227,7 +227,7 @@ func (s statusScreen) notes() []string {
 		notes = append(notes, "Only tickets involving "+s.w.DisplayName(s.o.user)+".")
 	}
 	if s.o.limited() && s.o.limit > 0 && len(s.all) >= s.o.limit {
-		notes = append(notes, fmt.Sprintf("The first %d tickets in your Jira search; wf status --all checks every one.", s.o.limit))
+		notes = append(notes, fmt.Sprintf("The first %d tickets in your %s search; wf status --all checks every one.", s.o.limit, s.w.TrackerLabel()))
 	}
 	return notes
 }

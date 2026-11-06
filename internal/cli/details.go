@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -107,7 +108,7 @@ func (v view) details(w *workfile.Workspace, a workfile.Assessment) {
 	var transitions []row
 	switch {
 	case a.Ticket.Error != "":
-		message := "Map this ticket's Jira status in providers.yml before checking transitions."
+		message := fmt.Sprintf("Map this ticket's %s status in providers.yml before checking transitions.", w.TrackerLabel())
 		if strings.Contains(a.Ticket.Error, "evidence") {
 			message = "Restore access to the missing evidence, then run wf again. Unknown checks are listed below."
 		}

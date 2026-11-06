@@ -54,7 +54,7 @@ func assess(ctx context.Context, e env) (checked, error) {
 	}
 	for _, key := range o.keys {
 		if !slices.ContainsFunc(tickets, func(t workfile.Ticket) bool { return t.Key == key }) {
-			fmt.Fprintf(e.errOut, "wf: %s is not visible to your Jira token: check the key, or ask for access\n", key)
+			fmt.Fprintf(e.errOut, "wf: %s is not visible to your %s token: check the key, or ask for access\n", key, w.TrackerLabel())
 			r.missing = true
 		}
 	}

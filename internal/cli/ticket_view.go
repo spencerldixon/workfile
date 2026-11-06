@@ -322,7 +322,7 @@ func (m *ticketModel) track() []string {
 	}
 	if m.a.Ticket.Error != "" {
 		// An error replaces the track: say what is wrong and what to do next.
-		action := "Map this ticket's Jira status in providers.yml before checking transitions."
+		action := fmt.Sprintf("Map this ticket's %s status in providers.yml before checking transitions.", m.w.TrackerLabel())
 		if strings.Contains(m.a.Ticket.Error, "evidence") {
 			action = "Restore access to the missing evidence, then run wf again. Unknown checks are listed below."
 		}
