@@ -104,3 +104,79 @@ func TestRoleOfIsNilSafe(t *testing.T) {
 		t.Fatal("label should have a fallback")
 	}
 }
+
+// withKind adds a test kind for one test.
+func withKind(t *testing.T, name string, kind Kind) {
+	t.Helper()
+	Kinds[name] = kind
+	t.Cleanup(func() { delete(Kinds, name) })
+}
+
+func TestFactsFollowTheRole(t *testing.T) {
+	both := Kind{
+		Tracker:  &Role{Facts: slices.Clone(TrackerFacts)},
+		CodeHost: &Role{Facts: slices.Clone(CodeHostFacts)},
+	}
+	withKind(t, "both", both)
+	w := example(t)
+	w.Providers["issues"] = Provider{Kind: "both"}
+	w.Policy.Tracker = "issues"
+	e, err := w.parseExpression("issues.summary > 0")
+	if err != nil || e.Record() {
+		t.Fatalf("tracker summary: %v, record %v", err, e.Record())
+	}
+	if _, err := w.parseExpression("issues.approvals >= 1"); err == nil || !strings.Contains(err.Error(), "has no attribute") {
+		t.Fatalf("tracker approvals: %v", err)
+	}
+	w.Policy.Tracker = "jira"
+	e, err = w.parseExpression("issues.approvals >= 1")
+	if err != nil || !e.Record() {
+		t.Fatalf("host approvals: %v, record %v", err, e.Record())
+	}
+	if _, err := w.parseExpression("issues.summary > 0"); err == nil || !strings.Contains(err.Error(), "has no attribute") {
+		t.Fatalf("host summary: %v", err)
+	}
+	if e, err := w.parseExpression("issues.prs > 0"); err != nil || e.Record() {
+		t.Fatalf("prs: %v, record %v", err, e.Record())
+	}
+}
+
+func TestParseExpressionSurvivesABadKind(t *testing.T) {
+	w := example(t)
+	w.Providers["bad"] = Provider{Kind: "nope"}
+	if _, err := w.parseExpression("bad.summary > 0"); err == nil {
+		t.Fatal("want an error")
+	}
+}
+
+func byProblems(t *testing.T, w *Workspace, expr string) string {
+	t.Helper()
+	w.Policy.Gates = map[string][]Rule{"review": {{If: expr, By: []string{"alice"}}}}
+	return problems(t, w)
+}
+
+func TestByFollowsTheRole(t *testing.T) {
+	w := example(t)
+	if got := byProblems(t, w, "github.approvals >= 1"); strings.Contains(got, "by is not supported") {
+		t.Fatalf("approvals: %q", got)
+	}
+	if got := byProblems(t, w, "jira.labels contains bug"); strings.Contains(got, "by is not supported") {
+		t.Fatalf("labels: %q", got)
+	}
+	if got := byProblems(t, w, "github.checks == passing"); !strings.Contains(got, "by is not supported for github.checks") {
+		t.Fatalf("checks: %q", got)
+	}
+}
+
+func TestOptionalFactNeedsTheKind(t *testing.T) {
+	host := Kind{CodeHost: &Role{Facts: slices.Clone(CodeHostFacts)}}
+	withKind(t, "plainhost", host)
+	w := example(t)
+	w.Providers["plain"] = Provider{Kind: "plainhost"}
+	if _, err := w.parseExpression("plain.merge_queue == true"); err == nil || !strings.Contains(err.Error(), "has no attribute merge_queue") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := w.parseExpression("plain.state == open"); err != nil {
+		t.Fatal(err)
+	}
+}

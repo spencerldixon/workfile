@@ -19,7 +19,7 @@ type Expression struct {
 	Measure  string `json:"measure,omitempty"`
 	Op       string `json:"operator"`
 	Value    any    `json:"value"`
-	kind     string
+	record   bool
 }
 
 var expressionPattern = regexp.MustCompile(`^\s*([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)(?:\.(length|count))?\s+(>=|<=|==|!=|>|<|contains_any|contains|excludes|matches)\s+(.+?)\s*$`)
@@ -121,22 +121,24 @@ func (w *Workspace) parseExpression(source string) (Expression, error) {
 	if err != nil {
 		return e, err
 	}
-	provider, ok := w.Providers[e.Provider]
+	_, ok := w.Providers[e.Provider]
 	if !ok {
 		return e, fmt.Errorf("unknown provider instance %s", e.Provider)
 	}
-	e.kind = provider.Kind
-	facts := []string{"summary", "description", "type", "project", "headings", "assignee", "labels"}
-	if provider.Kind == "github" {
-		facts = []string{"prs", "labels", "approvals", "state", "author", "review_requests", "draft", "checks", "fresh_approvals", "merge_queue"}
+	host := !w.IsTracker(e.Provider)
+	role := w.RoleOf(e.Provider)
+	known := role != nil && slices.Contains(role.Facts, e.Fact)
+	if host && e.Fact == "prs" && role != nil {
+		known = true
 	}
-	if !slices.Contains(facts, e.Fact) {
+	if !known {
 		return e, fmt.Errorf("%s has no attribute %s", e.Provider, e.Fact)
 	}
+	e.record = host && e.Fact != "prs"
 	return e, nil
 }
 
-func (e Expression) Record() bool { return e.kind == "github" && e.Fact != "prs" }
+func (e Expression) Record() bool { return e.record }
 
 func size(value any) int {
 	switch v := value.(type) {

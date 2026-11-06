@@ -322,9 +322,8 @@ func (w *Workspace) validate() error {
 				}
 			}
 			if len(r.By) > 0 {
-				kind := w.Providers[expr.Provider].Kind
-				if !(kind == "jira" && expr.Fact == "labels" || kind == "github" && (expr.Fact == "approvals" || expr.Fact == "fresh_approvals")) {
-					add("%s: by is supported only for Jira labels and GitHub approvals", at)
+				if role := w.RoleOf(expr.Provider); role == nil || !slices.Contains(role.ByFacts, expr.Fact) {
+					add("%s: by is not supported for %s.%s", at, expr.Provider, expr.Fact)
 				}
 				for _, person := range r.By {
 					if w.People[person][expr.Provider] == "" {
