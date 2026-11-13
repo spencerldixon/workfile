@@ -1,6 +1,7 @@
 jira:
   site: example-team.atlassian.net
-  scope: project = OPS AND (statusCategory != Done OR resolved >= -14d)
+  projects: [OPS]
+  keep_done_for: 14d
   statuses:
     todo: To Do
     doing: In Progress

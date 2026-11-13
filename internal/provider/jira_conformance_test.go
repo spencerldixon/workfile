@@ -57,13 +57,18 @@ func jiraConformResponses(t *testing.T) func(*http.Request) (int, string) {
 	}
 }
 
+func withScope(p workfile.Provider, scope string) workfile.Provider {
+	p.Scope = scope
+	return p
+}
+
 func TestJiraConforms(t *testing.T) {
 	w, err := workfile.Load("../../example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	conformTracker(t, trackerFixture{
-		Provider: w.Providers["jira"],
+		Provider: withScope(w.Providers["jira"], "labels != spike"),
 		Handle:   jiraConformResponses(t),
 		InScope:  "APP-1", OutOfScope: "APP-2", Unmapped: "APP-3", Missing: "APP-404",
 	})

@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +21,7 @@ const githubText = "github-own-words"
 func issuesProvider() workfile.Provider {
 	return workfile.Provider{
 		Kind: "github", Org: "example-team", Project: 7, DefaultProject: "app",
+		Repos: workfile.Names{"all"}, KeepDoneFor: "14d",
 		Statuses: map[string]workfile.Names{
 			"todo": {"Backlog"}, "doing": {"In progress"}, "review": {"In review"}, "done": {"Done"},
 		},
@@ -112,9 +113,10 @@ func keyRead(t *testing.T, r map[string]any, issues map[string]string) string {
 
 func isKeyRead(query string) bool { return strings.Contains(query, "issue(number") }
 
-// githubConformTrackerResponses is a made-up project 7 with view 3, which shows
-// label:blocked. app#1 is in the view, app#2 is on the project but the view
-// hides it, and app#3 has a status the policy does not map.
+// githubConformTrackerResponses is a made-up project 7 whose scope is
+// label:blocked and which skips the Backlog status. app#1 is in scope, app#2 is
+// on the project but its status is skipped, and app#3 has a status the policy
+// does not map.
 func githubConformTrackerResponses(t *testing.T) func(*http.Request) (int, string) {
 	on := func(status string) string { return projectItems(false, projectItem(7, "example-team", status, false)) }
 	issues := map[string]string{
@@ -135,8 +137,6 @@ func githubConformTrackerResponses(t *testing.T) func(*http.Request) (int, strin
 			return 200, githubDetailBody
 		case strings.Contains(query, "totalCount"):
 			return 200, `{"data":{"organization":{"projectV2":{"title":"Example board","items":{"totalCount":3}}}}}`
-		case strings.Contains(query, "view(number"):
-			return 200, `{"data":{"organization":{"projectV2":{"view":{"filter":"label:blocked"}}}}}`
 		case isKeyRead(query):
 			return 200, keyRead(t, body, issues)
 		case strings.Contains(query, "items("):
@@ -155,7 +155,8 @@ func githubConformTrackerResponses(t *testing.T) func(*http.Request) (int, strin
 
 func TestGitHubTrackerConforms(t *testing.T) {
 	p := issuesProvider()
-	p.View = 3
+	p.Scope = "label:blocked"
+	p.SkipStatuses = workfile.Names{"Backlog"}
 	conformTracker(t, trackerFixture{
 		Provider: p,
 		Handle:   githubConformTrackerResponses(t),
@@ -335,232 +336,201 @@ func TestDraftsAndPRsOnTheBoardAreSkipped(t *testing.T) {
 	}
 }
 
-func TestViewFilterIsTheScope(t *testing.T) {
-	for _, tc := range []struct {
-		name, filter string
-		want         any
-	}{
-		{"filter", `"label:blocked"`, "label:blocked"},
-		{"empty", `""`, nil},
-		{"null", `null`, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			p := issuesProvider()
-			p.View = 3
-			views, reads := 0, 0
-			c, _ := conformClient(t, "", p, func(r *http.Request) (int, string) {
-				body := requestBody(t, r)
-				variables := body["variables"].(map[string]any)
-				if strings.Contains(body["query"].(string), "view(number") {
-					views++
-					if variables["view"] != float64(3) {
-						t.Errorf("read view %v", variables["view"])
-					}
-					return 200, `{"data":{"organization":{"projectV2":{"view":{"filter":` + tc.filter + `}}}}}`
-				}
-				reads++
-				query, sent := variables["query"]
-				if sent != (tc.want != nil) || query != tc.want {
-					t.Errorf("query %v, sent %v; want %v", query, sent, tc.want)
-				}
-				return 200, page(nil, "")
-			})
-			tr := trackerOf(t, c)
-			if _, err := tr.Tickets(context.Background(), nil, 0); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := trackerOf(t, c).Listing(context.Background(), ""); err != nil {
-				t.Fatal(err)
-			}
-			if views != 1 || reads != 2 {
-				t.Fatalf("%d view reads, %d item reads", views, reads)
-			}
-		})
-	}
-}
-
-func TestMissingViewSaysWhichSetting(t *testing.T) {
+func TestFilterIsSentAsBuilt(t *testing.T) {
 	p := issuesProvider()
-	p.View = 3
-	c, _ := conformClient(t, "", p, func(*http.Request) (int, string) {
-		return 200, `{"data":{"organization":{"projectV2":{"view":null}}},"errors":[{"type":"NOT_FOUND","path":["organization","projectV2","view"],"message":"` + githubText + `"}]}`
+	p.Repos = workfile.Names{"app"}
+	p.SkipStatuses = workfile.Names{"Backlog", "On hold"}
+	p.Scope = "label:blocked"
+	want := githubIssuesFilter(p)
+	var sent []any
+	c, _ := conformClient(t, "", p, func(r *http.Request) (int, string) {
+		sent = append(sent, requestBody(t, r)["variables"].(map[string]any)["query"])
+		return 200, page(nil, "")
 	})
-	_, err := trackerOf(t, c).Tickets(context.Background(), nil, 0)
-	if err == nil || strings.Contains(err.Error(), githubText) || !strings.Contains(err.Error(), "view 3") || !strings.Contains(err.Error(), "check the view setting") {
-		t.Fatalf("got %v", err)
+	tr := trackerOf(t, c)
+	if _, err := tr.Tickets(context.Background(), nil, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tr.Listing(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if want != `repo:example-team/app -status:Backlog,"On hold" label:blocked` {
+		t.Fatalf("filter %q", want)
+	}
+	if len(sent) != 2 || sent[0] != want || sent[1] != want {
+		t.Fatalf("sent %v; want %q twice", sent, want)
 	}
 }
 
-// viewServer is a made-up project 7 whose view 3 shows label:blocked. Tests can
-// change what the view shows, and fail either of its two reads.
-type viewServer struct {
-	mu                     sync.Mutex
-	shown                  []int
-	filterReads, itemReads int
-	failFilter, failItems  bool
-}
-
-func (v *viewServer) handle(t *testing.T) func(*http.Request) (int, string) {
-	on := projectItems(false, projectItem(7, "example-team", "Done", false))
-	return func(r *http.Request) (int, string) {
-		body := requestBody(t, r)
-		query := body["query"].(string)
-		v.mu.Lock()
-		defer v.mu.Unlock()
-		switch {
-		case isKeyRead(query):
-			return 200, keyRead(t, body, map[string]string{"app#1": issue("app", 1, on), "app#2": issue("app", 2, on)})
-		case strings.Contains(query, "view(number"):
-			v.filterReads++
-			if v.failFilter {
-				return 400, `{}`
-			}
-			return 200, `{"data":{"organization":{"projectV2":{"view":{"filter":"label:blocked"}}}}}`
+func TestNoFilterIsSentWhenNothingNarrows(t *testing.T) {
+	c, _ := conformClient(t, "", issuesProvider(), func(r *http.Request) (int, string) {
+		if q, sent := requestBody(t, r)["variables"].(map[string]any)["query"]; sent {
+			t.Errorf("sent %v", q)
 		}
-		v.itemReads++
-		if v.failItems {
-			return 400, `{}`
-		}
-		var items []string
-		for _, n := range v.shown {
-			items = append(items, boardItem("ISSUE", "Done", false, issue("app", n, "")))
-		}
-		return 200, page(items, "")
+		return 200, page(nil, "")
+	})
+	if _, err := trackerOf(t, c).Listing(context.Background(), ""); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func (v *viewServer) reads() (int, int) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.filterReads, v.itemReads
-}
-
-func viewClient(t *testing.T, v *viewServer) (*Client, tracker) {
-	t.Helper()
+func TestOutOfScopeItemsAreDropped(t *testing.T) {
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	p := issuesProvider()
-	p.View = 3
-	c, _ := conformClient(t, "", p, v.handle(t))
-	return c, trackerOf(t, c)
-}
-
-func hidden(t *testing.T, tr tracker, key string) bool {
-	t.Helper()
-	tickets, err := tr.Tickets(context.Background(), []string{key}, 0)
+	p.Repos = workfile.Names{"app"}
+	p.SkipStatuses = workfile.Names{"Backlog"}
+	closed := func(days int) string {
+		return fmt.Sprintf(`"closedAt":%q`, now.AddDate(0, 0, -days).Format(time.RFC3339))
+	}
+	c, _ := conformClient(t, "", p, func(*http.Request) (int, string) {
+		return 200, page([]string{
+			boardItem("ISSUE", "In review", false, issue("app", 1, "")),
+			boardItem("ISSUE", "Done", false, issue("app", 2, closed(3))),
+			boardItem("ISSUE", "Done", false, issue("app", 3, closed(30))),
+			boardItem("ISSUE", "Backlog", false, issue("app", 4, "")),
+			boardItem("ISSUE", "In review", false, issue("other", 5, "")),
+		}, "")
+	})
+	c.Now = func() time.Time { return now }
+	tr := trackerOf(t, c)
+	tickets, err := tr.Tickets(context.Background(), nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return one(t, tickets).OutOfScope
-}
-
-func TestKeyReadsReadTheViewOnce(t *testing.T) {
-	v := &viewServer{shown: []int{1}}
-	_, tr := viewClient(t, v)
-	if hidden(t, tr, "app#1") {
-		t.Error("app#1 is in the view")
+	listing, err := tr.Listing(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !hidden(t, tr, "app#2") {
-		t.Error("app#2 is not in the view")
+	var keys, listed []string
+	for _, ticket := range tickets {
+		keys = append(keys, ticket.Key)
 	}
-	if filters, items := v.reads(); filters != 1 || items != 1 {
-		t.Fatalf("%d filter reads and %d item reads; want 1 of each", filters, items)
+	for _, entry := range listing {
+		listed = append(listed, entry.Key)
 	}
-}
-
-func TestKeyReadsAtOnceReadTheViewOnce(t *testing.T) {
-	v := &viewServer{shown: []int{1}}
-	c, _ := viewClient(t, v)
-	var reads sync.WaitGroup
-	for range 8 {
-		reads.Go(func() {
-			tickets, err := trackerOf(t, c).Tickets(context.Background(), []string{"app#1"}, 0)
-			if err != nil || len(tickets) != 1 || tickets[0].OutOfScope {
-				t.Errorf("%+v, %v", tickets, err)
-			}
-		})
-	}
-	reads.Wait()
-	if filters, items := v.reads(); filters != 1 || items != 1 {
-		t.Fatalf("%d filter reads and %d item reads; want 1 of each", filters, items)
+	if want := []string{"app#1", "app#2"}; !slices.Equal(keys, want) || !slices.Equal(listed, want) {
+		t.Fatalf("tickets %v, listing %v; want %v", keys, listed, want)
 	}
 }
 
-func TestRememberedViewExpires(t *testing.T) {
-	v := &viewServer{shown: []int{1}}
-	c, tr := viewClient(t, v)
-	start := c.Now()
-	if hidden(t, tr, "app#1") {
-		t.Fatal("app#1 is in the view")
-	}
-	v.mu.Lock()
-	v.shown = nil
-	v.mu.Unlock()
-	c.Now = func() time.Time { return start.Add(viewMemory - time.Second) }
-	if hidden(t, tr, "app#1") {
-		t.Error("the view was read again too soon")
-	}
-	if filters, items := v.reads(); filters != 1 || items != 1 {
-		t.Fatalf("before expiry: %d filter reads and %d item reads", filters, items)
-	}
-	c.Now = func() time.Time { return start.Add(viewMemory) }
-	if !hidden(t, tr, "app#1") {
-		t.Error("a ticket that left the view was still shown after expiry")
-	}
-	if filters, items := v.reads(); filters != 2 || items != 2 {
-		t.Fatalf("after expiry: %d filter reads and %d item reads", filters, items)
-	}
-}
-
-func TestFailedViewReadIsNotRemembered(t *testing.T) {
-	ctx := context.Background()
-	t.Run("filter", func(t *testing.T) {
-		v := &viewServer{shown: []int{1}, failFilter: true}
-		_, tr := viewClient(t, v)
-		if _, err := tr.Tickets(ctx, []string{"app#1"}, 0); err == nil {
-			t.Fatal("a failed view read gave no error")
-		}
-		v.mu.Lock()
-		v.failFilter = false
-		v.mu.Unlock()
-		if hidden(t, tr, "app#1") {
-			t.Error("app#1 is in the view")
-		}
-		if filters, _ := v.reads(); filters != 2 {
-			t.Fatalf("%d filter reads; want a retry", filters)
-		}
-	})
-	t.Run("shown tickets", func(t *testing.T) {
-		v := &viewServer{shown: []int{1}, failItems: true}
-		_, tr := viewClient(t, v)
-		if _, err := tr.Tickets(ctx, []string{"app#1"}, 0); err == nil {
-			t.Fatal("a failed view read gave no error")
-		}
-		v.mu.Lock()
-		v.failItems = false
-		v.mu.Unlock()
-		if hidden(t, tr, "app#1") {
-			t.Error("app#1 is in the view")
-		}
-		if _, items := v.reads(); items != 2 {
-			t.Fatalf("%d item reads; want a retry", items)
-		}
-	})
-}
-
-func TestListingScopeReplacesTheView(t *testing.T) {
+func TestLimitCountsOnlyItemsInScope(t *testing.T) {
 	p := issuesProvider()
-	p.View = 3
+	p.SkipStatuses = workfile.Names{"Backlog"}
+	c, _ := conformClient(t, "", p, func(*http.Request) (int, string) {
+		return 200, page([]string{
+			boardItem("ISSUE", "Backlog", false, issue("app", 1, "")),
+			boardItem("ISSUE", "Done", false, issue("app", 2, "")),
+		}, "")
+	})
+	tickets, err := trackerOf(t, c).Tickets(context.Background(), nil, 1)
+	if err != nil || len(tickets) != 1 || tickets[0].Key != "app#2" {
+		t.Fatalf("%+v, %v", tickets, err)
+	}
+}
+
+func TestKeyedLookupOfSkippedStatusIsOutOfScope(t *testing.T) {
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	p := issuesProvider()
+	p.Repos = workfile.Names{"app"}
+	p.SkipStatuses = workfile.Names{"Backlog"}
+	on := func(status string) string { return projectItems(false, projectItem(7, "example-team", status, false)) }
+	old := fmt.Sprintf(`"closedAt":%q`, now.AddDate(0, 0, -40).Format(time.RFC3339))
+	issues := map[string]string{
+		"app#1":   issue("app", 1, on("Backlog")),
+		"app#2":   issue("app", 2, on("In review")),
+		"app#3":   issue("app", 3, on("Done")+","+old),
+		"other#4": issue("other", 4, on("In review")),
+	}
+	c, _ := conformClient(t, "", p, func(r *http.Request) (int, string) {
+		return 200, keyRead(t, requestBody(t, r), issues)
+	})
+	c.Now = func() time.Time { return now }
+	tickets, err := trackerOf(t, c).Tickets(context.Background(), []string{"app#1", "app#2", "app#3", "other#4"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, ticket := range tickets {
+		got[ticket.Key] = ticket.OutOfScope
+	}
+	want := map[string]bool{"app#1": true, "app#2": false, "app#3": true, "other#4": true}
+	if !maps.Equal(got, want) {
+		t.Fatalf("out of scope %v; want %v", got, want)
+	}
+}
+
+func TestListingScopeReplacesTheExtraFilter(t *testing.T) {
+	p := issuesProvider()
+	p.Repos = workfile.Names{"app"}
+	p.Scope = "label:blocked"
 	c, rec := conformClient(t, "", p, func(r *http.Request) (int, string) {
 		variables := requestBody(t, r)["variables"].(map[string]any)
-		if variables["query"] != `status:"🕰 Backlog"` {
+		if variables["query"] != `repo:example-team/app label:bug` {
 			t.Errorf("sent %v", variables["query"])
 		}
 		return 200, page(nil, "")
 	})
-	if _, err := trackerOf(t, c).Listing(context.Background(), `status:"🕰 Backlog"`); err != nil {
+	if _, err := trackerOf(t, c).Listing(context.Background(), `label:bug`); err != nil {
 		t.Fatal(err)
 	}
 	if rec.count() != 1 {
-		t.Errorf("%d requests; a given scope needs no view", rec.count())
+		t.Errorf("%d requests", rec.count())
+	}
+}
+
+func TestGitHubIssuesFilter(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    workfile.Provider
+		want string
+	}{
+		{"one repo", workfile.Provider{Org: "example-team", Repos: workfile.Names{"web"}}, "repo:example-team/web"},
+		// By owner decision repo: is sent for a single repo only. GitHub does not
+		// document comma lists for it.
+		{"two repos and skips", workfile.Provider{Org: "example-team", Repos: workfile.Names{"web", "api"}, SkipStatuses: workfile.Names{"Backlog", "On hold"}}, `-status:Backlog,"On hold"`},
+		{"all and scope", workfile.Provider{Org: "example-team", Repos: workfile.Names{"all"}, Scope: "label:bug"}, "label:bug"},
+		{"all, nothing else", workfile.Provider{Org: "example-team", Repos: workfile.Names{"all"}}, ""},
+		{"one repo, skip, scope", workfile.Provider{Org: "example-team", Repos: workfile.Names{"web"}, SkipStatuses: workfile.Names{"Backlog"}, Scope: "label:bug,feature"}, "repo:example-team/web -status:Backlog label:bug,feature"},
+		{"status with a quote is left to inScope", workfile.Provider{Org: "example-team", Repos: workfile.Names{"all"}, SkipStatuses: workfile.Names{`Say "no"`, "Later"}}, "-status:Later"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := githubIssuesFilter(tc.p); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestInScope(t *testing.T) {
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	ago := func(days int) *time.Time { c := now.AddDate(0, 0, -days); return &c }
+	p := workfile.Provider{Repos: workfile.Names{"web", "api"}, SkipStatuses: workfile.Names{"Backlog"}, KeepDoneFor: "14d"}
+	all := workfile.Provider{Repos: workfile.Names{"all"}, KeepDoneFor: "2w"}
+	for _, tc := range []struct {
+		name   string
+		p      workfile.Provider
+		repo   string
+		status string
+		closed *time.Time
+		want   bool
+	}{
+		{"listed repo", p, "web", "Doing", nil, true},
+		{"listed repo, other case", p, "API", "Doing", nil, true},
+		{"unlisted repo", p, "mobile", "Doing", nil, false},
+		{"all repos", all, "mobile", "Doing", nil, true},
+		{"skipped status", p, "web", "backlog", nil, false},
+		{"no status", p, "web", "", nil, true},
+		{"closed inside the window", p, "web", "Done", ago(13), true},
+		{"closed on the edge", p, "web", "Done", ago(14), true},
+		{"closed outside the window", p, "web", "Done", ago(15), false},
+		{"weeks window inside", all, "web", "Done", ago(13), true},
+		{"weeks window outside", all, "web", "Done", ago(15), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inScope(tc.p, tc.repo, tc.status, tc.closed, now); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -571,9 +541,6 @@ func TestOnlyMineAddsAssignee(t *testing.T) {
 		c, _ := conformClient(t, "", p, func(r *http.Request) (int, string) {
 			body := requestBody(t, r)
 			variables := body["variables"].(map[string]any)
-			if strings.Contains(body["query"].(string), "view(number") {
-				return 200, `{"data":{"organization":{"projectV2":{"view":{"filter":"label:blocked"}}}}}`
-			}
 			sent = variables["query"]
 			return 200, page(nil, "")
 		})
@@ -602,14 +569,14 @@ func TestOnlyMineAddsAssignee(t *testing.T) {
 		return sent
 	}
 	viewed := issuesProvider()
-	viewed.View = 3
+	viewed.Scope = "label:blocked"
 	for _, tc := range []struct {
 		name, me string
 		p        workfile.Provider
 		want     string
 	}{
 		{"token owner", "", issuesProvider(), "assignee:@me"},
-		{"with a view", "", viewed, "label:blocked assignee:@me"},
+		{"with a scope", "", viewed, "label:blocked assignee:@me"},
 		{"named connection", "issues: alice", issuesProvider(), "assignee:alice"},
 		{"github default", "github: bob", issuesProvider(), "assignee:bob"},
 	} {

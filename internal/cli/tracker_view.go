@@ -13,11 +13,11 @@ import (
 )
 
 func (m *trackerModel) render() string {
-	lines := []string{m.header()}
+	lines := append(m.t.scopeLines(m.e.w, m.width-2*len(ticketIndent)), m.header())
 	rows := m.listRows()
 	list := m.listLines()
 	lines = append(lines, list[:min(rows, len(list))]...)
-	for len(lines) < rows+1 {
+	for len(lines) < rows+m.topRows() {
 		lines = append(lines, "")
 	}
 	main := strings.Split(m.pane.View(), "\n")

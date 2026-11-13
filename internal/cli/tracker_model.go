@@ -626,7 +626,7 @@ func (m *trackerModel) layout() {
 	m.list.SetSize(m.width, rows)
 	m.pane.SetWidth(left)
 	m.side.SetWidth(right)
-	height := max(1, m.height-rows-2)
+	height := max(1, m.height-rows-1-m.topRows())
 	m.pane.SetHeight(height)
 	m.side.SetHeight(height)
 	m.help.SetWidth(m.width - len(ticketIndent))
@@ -644,11 +644,14 @@ func (m *trackerModel) columns() (left, right int) {
 	return left, m.width - left - 1
 }
 
+// topRows is the rows above the list: the scope line and the header.
+func (m *trackerModel) topRows() int { return 1 + len(m.t.scopeLines(m.e.w, 1)) }
+
 // listRows is the top half, or less when there are few tickets, so the room
 // goes to the ticket. It follows everything read, not the view or the search,
 // so the screen does not jump.
 func (m *trackerModel) listRows() int {
-	half := max(3, (m.height-2)/2)
+	half := max(3, (m.height-1-m.topRows())/2)
 	if len(m.all) > 0 {
 		return min(half, max(3, len(m.all)))
 	}

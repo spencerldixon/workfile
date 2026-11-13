@@ -21,19 +21,15 @@ type githubTracker struct {
 	name string
 }
 
-// viewMemory is how long a view's filter and the tickets it shows are remembered.
-// Opening ticket after ticket reuses them, and a long run such as the tickets browser still
-// sees the view change.
-const viewMemory = 5 * time.Minute
-
 // issuesPerRead is how many issues one aliased key read asks for.
 const issuesPerRead = 50
 
 const githubStatusField = `fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }`
 
-// A list shows little, so it asks for little. A view check needs only the key.
+// A list shows little, so it asks for little. closedAt and the repository let
+// inScope apply the explicit scope.
 const (
-	githubKeyFields     = `number repository { name }`
+	githubKeyFields     = `number repository { name } closedAt`
 	githubListingFields = githubKeyFields + ` title url assignees(first: 1) { nodes { login name } } issueType { name }`
 	githubTicketFields  = githubListingFields + ` body labels(first: 100) { nodes { name } }
 	  closedByPullRequestsReferences(first: 20) { nodes { number repository { name owner { login } } } }`
@@ -88,6 +84,7 @@ func (a githubAssignee) displayName() string {
 type githubIssue struct {
 	Number                         int
 	Title, Body, URL               string
+	ClosedAt                       *time.Time
 	Repository                     struct{ Name string }
 	Assignees                      graphConnection[githubAssignee]
 	Labels                         *graphConnection[label]
@@ -166,9 +163,10 @@ func readProject[T any](ctx context.Context, c githubTracker, token, query strin
 	return *response.Organization.ProjectV2, nil
 }
 
-// items reads the live issues of the project, up to limit when set. Drafts, PRs
-// and items the token cannot see have no issue, so they are skipped.
-func (c githubTracker) items(ctx context.Context, token, fields, query string, limit int) ([]githubItem, error) {
+// items reads the live issues of the project, up to limit when set, that keep
+// accepts. Drafts, PRs and items the token cannot see have no issue, so they
+// are skipped.
+func (c githubTracker) items(ctx context.Context, token, fields, query string, limit int, keep func(githubItem) bool) ([]githubItem, error) {
 	var found []githubItem
 	var after any
 	seen := map[string]bool{}
@@ -191,6 +189,9 @@ func (c githubTracker) items(ctx context.Context, token, fields, query string, l
 			if item.Content.Number == 0 || item.Content.Repository.Name == "" {
 				return nil, errors.New("GitHub returned an issue without a number or repository")
 			}
+			if keep != nil && !keep(item) {
+				continue
+			}
 			found = append(found, item)
 			if limit > 0 && len(found) == limit {
 				return found, nil
@@ -207,75 +208,70 @@ func (c githubTracker) items(ctx context.Context, token, fields, query string, l
 	}
 }
 
-// githubView is what is remembered of a saved view. A filter of "" means the whole
-// project. shown is nil until something needs it, and is never changed once set.
-type githubView struct {
-	read   time.Time
-	filter string
-	shown  map[string]bool
-}
-
-// view is the remembered view, read again if it is too old. A failed read
-// remembers nothing. The caller holds viewLock.
-func (c githubTracker) view(ctx context.Context, token string) (*githubView, error) {
-	if view := c.views[c.name]; view != nil && c.Now().Sub(view.read) < viewMemory {
-		return view, nil
+// githubIssuesFilter builds the GitHub project filter for a tracker
+// connection from its repos, skipped statuses and extra scope.
+//
+// Deviation from the spec table, by owner decision: GitHub documents comma
+// lists for field qualifiers such as -status:, but not for repo:. So repo: is
+// sent only when exactly one repo is listed. For several repos, or all, no
+// repo: qualifier is sent and inScope narrows the repos on our side.
+func githubIssuesFilter(p workfile.Provider) string {
+	var parts []string
+	if len(p.Repos) == 1 && !p.AllRepos() {
+		parts = append(parts, "repo:"+p.Org+"/"+p.Repos[0])
 	}
-	p := c.Workspace.Providers[c.name]
-	const query = `query($org: String!, $project: Int!, $view: Int!) {
-	  organization(login: $org) { projectV2(number: $project) { view(number: $view) { filter } } }
-	}`
-	project, err := readProject[struct{ View *struct{ Filter string } }](ctx, c, token, query, map[string]any{"view": p.View}, 3)
-	if err != nil {
-		return nil, err
-	}
-	if project.View == nil {
-		return nil, fmt.Errorf("cannot find view %d on project %d; check the view setting", p.View, p.Project)
-	}
-	view := &githubView{read: c.Now(), filter: strings.TrimSpace(project.View.Filter)}
-	c.views[c.name] = view
-	return view, nil
-}
-
-// viewFilter is the filter of the configured view, or "" for the whole project.
-// A view with an empty or null filter means the whole project too.
-func (c githubTracker) viewFilter(ctx context.Context, token string) (string, error) {
-	if c.Workspace.Providers[c.name].View == 0 {
-		return "", nil
-	}
-	c.viewLock.Lock()
-	defer c.viewLock.Unlock()
-	view, err := c.view(ctx, token)
-	if err != nil {
-		return "", err
-	}
-	return view.filter, nil
-}
-
-// viewShown is the keys the configured view shows, or nil if it hides nothing.
-// Only a read of the whole view can tell, so it is remembered with the filter.
-func (c githubTracker) viewShown(ctx context.Context, token string) (map[string]bool, error) {
-	if c.Workspace.Providers[c.name].View == 0 {
-		return nil, nil
-	}
-	c.viewLock.Lock()
-	defer c.viewLock.Unlock()
-	view, err := c.view(ctx, token)
-	if err != nil || view.filter == "" {
-		return nil, err
-	}
-	if view.shown == nil {
-		items, err := c.items(ctx, token, githubKeyFields, view.filter, 0)
-		if err != nil {
-			return nil, err
+	var skipped []string
+	for _, status := range p.SkipStatuses {
+		switch {
+		case strings.Contains(status, `"`):
+			// No documented way to quote a quote. inScope still drops it.
+		case strings.ContainsAny(status, " ,:"):
+			skipped = append(skipped, `"`+status+`"`)
+		default:
+			skipped = append(skipped, status)
 		}
-		shown := make(map[string]bool, len(items))
-		for _, item := range items {
-			shown[item.Content.key()] = true
-		}
-		view.shown = shown
 	}
-	return view.shown, nil
+	if len(skipped) > 0 {
+		parts = append(parts, "-status:"+strings.Join(skipped, ","))
+	}
+	if scope := strings.TrimSpace(p.Scope); scope != "" {
+		parts = append(parts, scope)
+	}
+	return strings.Join(parts, " ")
+}
+
+// inScope reports whether an issue falls inside the connection's explicit
+// scope: a listed repo (or all), a status not skipped, and either open or
+// closed within keep_done_for of now. The free-text scope is not checked
+// here; it applies to listings only.
+func inScope(p workfile.Provider, repo, status string, closedAt *time.Time, now time.Time) bool {
+	if !p.AllRepos() && !slices.ContainsFunc(p.Repos, func(r string) bool { return strings.EqualFold(r, repo) }) {
+		return false
+	}
+	if status != "" && slices.ContainsFunc(p.SkipStatuses, func(s string) bool { return strings.EqualFold(strings.TrimSpace(s), strings.TrimSpace(status)) }) {
+		return false
+	}
+	if closedAt != nil && closedAt.Before(now.Add(-keepWindow(p.KeepDoneFor))) {
+		return false
+	}
+	return true
+}
+
+// keepWindow is a keep_done_for such as 14d or 2w as a duration. Validation
+// has already rejected anything else.
+func keepWindow(keep string) time.Duration {
+	if len(keep) < 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(keep[:len(keep)-1])
+	if err != nil {
+		return 0
+	}
+	day := 24 * time.Hour
+	if keep[len(keep)-1] == 'w' {
+		day *= 7
+	}
+	return time.Duration(n) * day
 }
 
 // assignee is the filter value for the person's own account: me.<name> from
@@ -312,10 +308,8 @@ func (c githubTracker) Tickets(ctx context.Context, keys []string, limit int) ([
 }
 
 func (c githubTracker) scope(ctx context.Context, token string, limit int) ([]workfile.Ticket, error) {
-	query, err := c.viewFilter(ctx, token)
-	if err != nil {
-		return nil, err
-	}
+	p := c.Workspace.Providers[c.name]
+	query := githubIssuesFilter(p)
 	if c.Workspace.Settings.OnlyMine {
 		who, err := c.assignee()
 		if err != nil {
@@ -323,7 +317,7 @@ func (c githubTracker) scope(ctx context.Context, token string, limit int) ([]wo
 		}
 		query = strings.TrimSpace(query + " assignee:" + who)
 	}
-	items, err := c.items(ctx, token, githubTicketFields, query, limit)
+	items, err := c.items(ctx, token, githubTicketFields, query, limit, c.keeper(p))
 	if err != nil {
 		return nil, err
 	}
@@ -332,6 +326,14 @@ func (c githubTracker) scope(ctx context.Context, token string, limit int) ([]wo
 		tickets = append(tickets, c.ticket(item.Content.key(), item.Content, item.status(), ""))
 	}
 	return tickets, nil
+}
+
+// keeper is the safety net that drops items outside the explicit scope.
+func (c githubTracker) keeper(p workfile.Provider) func(githubItem) bool {
+	now := c.Now()
+	return func(item githubItem) bool {
+		return inScope(p, item.Content.Repository.Name, item.status(), item.Content.ClosedAt, now)
+	}
 }
 
 // byKey reads the named issues even if the scope hides them. A key that does not
@@ -355,11 +357,7 @@ func (c githubTracker) byKey(ctx context.Context, token string, keys []string) (
 	if err != nil {
 		return nil, err
 	}
-	tickets := slices.Concat(read...)
-	if err := c.markHidden(ctx, token, tickets); err != nil {
-		return nil, err
-	}
-	return tickets, nil
+	return slices.Concat(read...), nil
 }
 
 func (c githubTracker) readIssues(ctx context.Context, token string, keys []string) ([]workfile.Ticket, error) {
@@ -394,7 +392,7 @@ func (c githubTracker) onProject(key string, issue githubIssue) workfile.Ticket 
 	for _, item := range issue.ProjectItems.Nodes {
 		if item.Project.Number == p.Project && strings.EqualFold(item.Project.Owner.Login, p.Org) {
 			t := c.ticket(key, issue, statusName(item.FieldValueByName), "")
-			t.OutOfScope = item.IsArchived
+			t.OutOfScope = item.IsArchived || !inScope(p, issue.Repository.Name, statusName(item.FieldValueByName), issue.ClosedAt, c.Now())
 			return t
 		}
 	}
@@ -404,22 +402,6 @@ func (c githubTracker) onProject(key string, issue githubIssue) workfile.Ticket 
 	t := c.ticket(key, issue, "", fmt.Sprintf("%s is not on project %d", key, p.Project))
 	t.OutOfScope = true
 	return t
-}
-
-// markHidden sets OutOfScope on tickets the configured view filters out. It reads
-// the view only if a ticket is left to check.
-func (c githubTracker) markHidden(ctx context.Context, token string, tickets []workfile.Ticket) error {
-	if !slices.ContainsFunc(tickets, func(t workfile.Ticket) bool { return !t.OutOfScope }) {
-		return nil
-	}
-	shown, err := c.viewShown(ctx, token)
-	if err != nil || shown == nil {
-		return err
-	}
-	for i := range tickets {
-		tickets[i].OutOfScope = tickets[i].OutOfScope || !shown[tickets[i].Key]
-	}
-	return nil
 }
 
 // ticket builds a ticket. problem is why its status cannot be known, if any.
@@ -487,16 +469,14 @@ func (c githubTracker) Listing(ctx context.Context, scope string) ([]workfile.Li
 	if err != nil {
 		return nil, err
 	}
-	if scope == "" {
-		if scope, err = c.viewFilter(ctx, token); err != nil {
-			return nil, fmt.Errorf("%s: %w", c.name, err)
-		}
+	p := c.Workspace.Providers[c.name]
+	if scope != "" {
+		p.Scope = scope
 	}
-	items, err := c.items(ctx, token, githubListingFields, scope, 0)
+	items, err := c.items(ctx, token, githubListingFields, githubIssuesFilter(p), 0, c.keeper(p))
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", c.name, err)
 	}
-	p := c.Workspace.Providers[c.name]
 	listing := make([]workfile.Listing, 0, len(items))
 	for _, item := range items {
 		issue := item.Content
@@ -516,7 +496,7 @@ func (c githubTracker) Identity(ctx context.Context) (string, error) {
 	return githubCodeHost{Client: c.Client, name: c.name}.Identity(ctx)
 }
 
-// Test proves the token can read the project, and the view if one is set.
+// Test proves the token can read the project.
 func (c githubTracker) Test(ctx context.Context) (string, error) {
 	identity, err := c.Identity(ctx)
 	if err != nil {
@@ -534,9 +514,6 @@ func (c githubTracker) Test(ctx context.Context) (string, error) {
 		Items struct{ TotalCount int }
 	}](ctx, c, token, query, nil, 2)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", c.name, err)
-	}
-	if _, err := c.viewFilter(ctx, token); err != nil {
 		return "", fmt.Errorf("%s: %w", c.name, err)
 	}
 	return fmt.Sprintf("%s · %s · %d items", identity, project.Title, project.Items.TotalCount), nil

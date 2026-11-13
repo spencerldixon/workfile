@@ -24,12 +24,12 @@ func (c jiraTracker) Listing(ctx context.Context, scope string) ([]workfile.List
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if scope == "" {
-		scope = p.Scope
+	if scope != "" {
+		p.Scope = scope
 	}
 	// only_mine does not apply here: the list has its own Assigned to me tab, and
 	// needs other people's and unassigned tickets for the rest.
-	condition, order := splitScope(scope)
+	condition, order := jiraSearch(p), jiraOrder(p)
 	issues, err := c.search(ctx, name, base, auth, "("+condition+") ORDER BY "+order, listingFields, 0)
 	if err != nil {
 		return nil, err

@@ -68,7 +68,7 @@ func TestJiraPaginationScopeAndLabelHistory(t *testing.T) {
 		switch r.URL.Path {
 		case "/ex/jira/cloud-example/rest/api/3/search/jql":
 			jql := body["jql"].(string)
-			if strings.Contains(jql, "project = APP") {
+			if strings.Contains(jql, `project in ("APP")`) {
 				// The scoped check that finds named tickets the board would hide.
 				scopedCalls++
 				if !strings.HasSuffix(jql, `AND key in ("APP-1", "APP-2")`) {
@@ -132,7 +132,7 @@ func TestJiraOnlyMineNarrowsListings(t *testing.T) {
 		jql = requestBody(t, r)["jql"].(string)
 		return 200, `{"issues":[],"isLast":true}`
 	})
-	condition, order := splitScope(c.Workspace.Providers["jira"].Scope)
+	condition, order := jiraSearch(c.Workspace.Providers["jira"]), jiraOrder(c.Workspace.Providers["jira"])
 	c.Workspace.Settings.OnlyMine = true
 	if _, err := c.Tickets(context.Background(), nil, 0); err != nil {
 		t.Fatal(err)

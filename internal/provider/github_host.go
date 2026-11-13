@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // githubCodeHost reads pull requests from GitHub. Records is in github.go.
@@ -38,13 +39,21 @@ func (c githubCodeHost) Test(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	repos, err := c.repositories(ctx, p, token)
+	repos, missing, err := c.repositories(ctx, p, token)
 	if err != nil {
 		return "", err
 	}
+	warning := ""
+	if len(missing) > 0 {
+		verb := "is"
+		if len(missing) > 1 {
+			verb = "are"
+		}
+		warning = fmt.Sprintf(" · warning: github.repos lists %s, which %s not in %s or %s archived", strings.Join(missing, ", "), verb, p.Org, verb)
+	}
 	if len(repos) == 0 {
-		return identity + " · connected; no visible active repositories", nil
+		return identity + " · connected; no visible active repositories" + warning, nil
 	}
 	_, err = c.searchPRs(ctx, token, fmt.Sprintf("org:%s is:pr archived:false", p.Org), true)
-	return fmt.Sprintf("%s · %s · %d visible active repositories", identity, p.Org, len(repos)), err
+	return fmt.Sprintf("%s · %s · %d visible active repositories%s", identity, p.Org, len(repos), warning), err
 }

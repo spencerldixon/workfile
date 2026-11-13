@@ -3,8 +3,8 @@
 jira:
   provider: jira
   site: example-team.atlassian.net
-  scope: >-
-    project = APP AND (statusCategory != Done OR resolved >= -14d)
+  projects: [APP]
+  keep_done_for: 14d
   statuses:
     todo: To Do
     doing: In Progress
@@ -18,5 +18,6 @@ github:
   provider: github
   org: example-team
   lookback: 90d
+  repos: [app, api]
   auth:
     token: ${EXAMPLE_GITHUB_TOKEN}

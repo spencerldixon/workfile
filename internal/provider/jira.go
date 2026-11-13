@@ -93,10 +93,39 @@ func splitScope(scope string) (string, string) {
 	return strings.TrimSpace(scope), "updated DESC"
 }
 
-// scope splits a search into its condition and order, narrowing it to the
+// jiraSearch builds the JQL condition for a connection from its projects,
+// skipped statuses, done window and extra scope. It has no ORDER BY: the order
+// comes from jiraOrder.
+func jiraSearch(p workfile.Provider) string {
+	parts := []string{"project in (" + quotedNames(p.Projects) + ")"}
+	if len(p.SkipStatuses) > 0 {
+		parts = append(parts, "status not in ("+quotedNames(p.SkipStatuses)+")")
+	}
+	parts = append(parts, "(statusCategory != Done OR resolved >= -"+p.KeepDoneFor+")")
+	if extra, _ := splitScope(p.Scope); extra != "" {
+		parts = append(parts, "("+extra+")")
+	}
+	return strings.Join(parts, " AND ")
+}
+
+// jiraOrder is the ORDER BY of the extra scope, or the default order.
+func jiraOrder(p workfile.Provider) string {
+	_, order := splitScope(p.Scope)
+	return order
+}
+
+func quotedNames(names []string) string {
+	quoted := make([]string, len(names))
+	for i, name := range names {
+		quoted[i] = strconv.Quote(name)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// scope is the connection's search condition and order, narrowed to the
 // person's own tickets when the workspace says so.
-func (c jiraTracker) scope(scope string) (string, string, error) {
-	condition, order := splitScope(scope)
+func (c jiraTracker) scope(p workfile.Provider) (string, string, error) {
+	condition, order := jiraSearch(p), jiraOrder(p)
 	if c.Workspace.Settings.OnlyMine {
 		assignee, err := c.assignee()
 		if err != nil {
@@ -137,7 +166,7 @@ func (c jiraTracker) Tickets(ctx context.Context, keys []string, limit int) ([]w
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	condition, order, err := c.scope(p.Scope)
+	condition, order, err := c.scope(p)
 	if err != nil {
 		return nil, err
 	}

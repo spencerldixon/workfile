@@ -20,6 +20,8 @@ var credentialPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
 var workspaceNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 var orgPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
 var projectPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+var keepDonePattern = regexp.MustCompile(`^[1-9][0-9]{0,2}[dw]$`)
+var repoNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 var yamlLinePattern = regexp.MustCompile(`\bline [0-9]+`)
 
 // Names accepts either a single Jira status or a list of statuses.

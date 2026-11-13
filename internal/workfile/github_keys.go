@@ -85,10 +85,15 @@ func isWordByte(c byte) bool {
 }
 
 func checkGitHubTracker(name string, p Provider, add func(string, ...any)) {
-	checkGitHub(name, p, add)
+	checkGitHubOrg(name, p, add)
 	if p.Project <= 0 {
 		add("providers.yml: %s.project must be the number of a GitHub project", name)
 	}
+	if len(p.Repos) == 0 {
+		add("providers.yml: %s.repos is required: list the repositories the team's issues are in, such as repos: [web, api], or write repos: all", name)
+	}
+	checkRepoNames(name, p, add)
+	checkKeepDoneFor(name, p, add)
 	if p.DefaultProject != "" && !githubRepoPattern.MatchString(p.DefaultProject) {
 		add("providers.yml: %s.default_project must be a repository name in lower case, such as app", name)
 	}

@@ -585,7 +585,7 @@ func (m *setupModel) rebuild() {
 	}
 	if m.github && m.githubToken != "" {
 		m.values[m.key+"_GITHUB_TOKEN"] = m.githubToken
-		m.w.Providers["github"] = workfile.Provider{Kind: "github", Org: m.org, Auth: map[string]string{"token": ref("_GITHUB_TOKEN")}}
+		m.w.Providers["github"] = workfile.Provider{Kind: "github", Org: m.org, Repos: workfile.Names{"all"}, Auth: map[string]string{"token": ref("_GITHUB_TOKEN")}}
 	}
 	m.client = m.deps.connect(m.w, m.values)
 }
@@ -756,13 +756,15 @@ func (m *setupModel) gotSaved(msg savedMsg) tea.Cmd {
 // setupApply writes the chosen project, stages and people into the workspace.
 func setupApply(w *workfile.Workspace, project string, statuses []string, order []int, people []provider.SetupPerson) {
 	p := w.Providers["jira"]
-	p.Scope = "project = " + strconv.Quote(project)
+	// Task 6 makes setup ask for scope. Until then it writes the required
+	// settings and keeps the status choice as an extra filter.
+	p.Projects, p.KeepDoneFor, p.Scope = workfile.Names{project}, "14d", ""
 	if len(order) < len(statuses) {
 		selected := make([]string, len(order))
 		for i, n := range order {
 			selected[i] = strconv.Quote(statuses[n])
 		}
-		p.Scope += " AND status in (" + strings.Join(selected, ", ") + ")"
+		p.Scope = "status in (" + strings.Join(selected, ", ") + ")"
 	}
 	w.Policy.States = setupStates(statuses, order)
 	w.Policy.Gates = map[string][]workfile.Rule{}

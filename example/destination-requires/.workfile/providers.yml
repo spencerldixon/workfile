@@ -2,7 +2,8 @@
 jira:
   provider: jira
   site: example-team.atlassian.net
-  scope: project = APP
+  projects: [APP]
+  keep_done_for: 14d
   statuses:
     todo: To Do
     ready: Ready

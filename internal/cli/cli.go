@@ -188,7 +188,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 			return fail(err)
 		}
 		if c.ticketKeys {
-			if e.o.keys, err = completeKeys(o.keys, e.w.TrackerKeys(), e.w.Providers[e.w.Policy.Tracker].DefaultProject); err != nil {
+			if e.o.keys, err = completeKeys(o.keys, e.w.TrackerKeys(), e.w.Providers[e.w.Policy.Tracker].KeyProject()); err != nil {
 				return fail(err)
 			}
 		}

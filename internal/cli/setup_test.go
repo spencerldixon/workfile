@@ -432,7 +432,7 @@ func TestSetupStatusesCanBeUntickedAndReordered(t *testing.T) {
 	if strings.Join(w.Policy.States, " ") != "to_do done" || len(w.People) != 2 {
 		t.Fatalf("unexpected workspace: %+v", w)
 	}
-	if w.Providers["jira"].Scope != `project = "APP" AND status in ("To Do", "Done")` {
+	if j := w.Providers["jira"]; len(j.Projects) != 1 || j.Projects[0] != "APP" || j.KeepDoneFor != "14d" || j.Scope != `status in ("To Do", "Done")` {
 		t.Fatalf("unexpected scope: %s", w.Providers["jira"].Scope)
 	}
 	policy, err := os.ReadFile(filepath.Join(root, ".workfile", "policy.yml"))

@@ -79,7 +79,7 @@ func TestGitHubKeysLinks(t *testing.T) {
 
 func TestGitHubCanBeTheTracker(t *testing.T) {
 	w := example(t)
-	p := Provider{Kind: "github", Org: "example-team", Project: 7, View: 3, DefaultProject: "app", Statuses: w.Providers["jira"].Statuses, Auth: w.Providers["github"].Auth}
+	p := Provider{Kind: "github", Org: "example-team", Project: 7, Repos: Names{"web"}, KeepDoneFor: "14d", DefaultProject: "app", Statuses: w.Providers["jira"].Statuses, Auth: w.Providers["github"].Auth}
 	delete(w.Providers, "jira")
 	w.Providers["issues"] = p
 	w.Policy.Tracker = "issues"
@@ -109,7 +109,7 @@ func TestGitHubTrackerSettingsAreChecked(t *testing.T) {
 		}
 	}
 	var got []string
-	checkGitHubTracker("issues", Provider{Org: "example-team", Project: 7, DefaultProject: "my.app-2_x"}, func(format string, args ...any) { got = append(got, format) })
+	checkGitHubTracker("issues", Provider{Org: "example-team", Project: 7, Repos: Names{"web"}, KeepDoneFor: "14d", DefaultProject: "my.app-2_x"}, func(format string, args ...any) { got = append(got, format) })
 	if len(got) != 0 {
 		t.Errorf("sound settings rejected: %q", got)
 	}

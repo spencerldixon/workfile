@@ -54,7 +54,7 @@ func tracker(ctx context.Context, e env) (int, error) {
 			return 2, err
 		}
 	}
-	printTickets(v, arrangeTickets(all, e.w.Policy, view, me))
+	printTickets(v, e.w, arrangeTickets(all, e.w.Policy, view, me))
 	return 0, nil
 }
 
@@ -129,8 +129,10 @@ func arrangeTickets(all []workfile.Listing, p workfile.Policy, v ticketView, me 
 	return shown
 }
 
-func printTickets(v view, all []workfile.Listing) {
-	v.heading("tickets")
+func printTickets(v view, w *workfile.Workspace, all []workfile.Listing) {
+	v.heading(strings.ToLower(w.TrackerLabel()) + " tickets")
+	v.wrap(scopeText(w, v.width-2), "  ")
+	v.line("")
 	if len(all) == 0 {
 		v.wrap(noTickets, "  ")
 		v.line("")

@@ -22,7 +22,8 @@ type tracker interface {
 	Tickets(ctx context.Context, keys []string, limit int) ([]workfile.Ticket, error)
 	// Listing reads the little a ticket list shows, for the whole scope and
 	// everyone in it, so only_mine does not narrow it. A scope, in the tracker's
-	// own query language, replaces the configured one.
+	// own query language, replaces the configured extra filter, not the explicit
+	// projects, repos and statuses.
 	Listing(ctx context.Context, scope string) ([]workfile.Listing, error)
 	// Detail reads one ticket's text and comments. If it cannot return every
 	// comment, it returns the newest.

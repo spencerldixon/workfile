@@ -228,7 +228,11 @@ func TestTrackerWorkWithAnyTrackersShape(t *testing.T) {
 	for _, width := range []int{40, 60, 100} {
 		d := driveTracker(t, f, width, 60)
 		d.wants("example-team/api#1042", "Body of example-team/api#1042", "No date here", "Unassigned")
-		d.refuses("· ·", "Jira", "Story")
+		d.refuses("· ·", "Story")
+		// The tracker is named once, on the scope line under the top of the screen.
+		if rest := strings.Join(strings.Split(d.screen(), "\n")[1:], "\n"); strings.Contains(rest, "Jira") {
+			t.Fatalf("the tracker is named outside the scope line:\n%s", rest)
+		}
 		d.press("down", "o")
 		if !slices.Equal(d.opened, []string{"https://github.example.com/example-team/web#7"}) {
 			t.Fatal(d.opened)
@@ -366,7 +370,7 @@ func TestTrackerListGivesItsSpareRoomToTheTicket(t *testing.T) {
 	for range 80 {
 		f.listing = append(f.listing, f.listing[0])
 	}
-	if d = driveTracker(t, f, 80, 30); d.m.listRows() != 14 {
+	if d = driveTracker(t, f, 80, 30); d.m.listRows() != 13 {
 		t.Fatalf("%d rows, want the top half", d.m.listRows())
 	}
 }
@@ -388,10 +392,10 @@ func TestTrackerFillTheWholeTerminal(t *testing.T) {
 		if len(lines) != size[1] {
 			t.Fatalf("%v: %d lines", size, len(lines))
 		}
-		if w := ansi.StringWidth(lines[0]); w != size[0] {
+		if w := ansi.StringWidth(lines[1]); w != size[0] {
 			t.Fatalf("%v: the header is %d wide", size, w)
 		}
-		if w := ansi.StringWidth(lines[1]); w != size[0] {
+		if w := ansi.StringWidth(lines[2]); w != size[0] {
 			t.Fatalf("%v: the current row is %d wide", size, w)
 		}
 	}
@@ -400,19 +404,19 @@ func TestTrackerFillTheWholeTerminal(t *testing.T) {
 func TestTrackerHighlightTheCurrentRow(t *testing.T) {
 	d := colourTickets(t, trackerSource(), 100, 30)
 	rows := strings.Split(d.screen(), "\n")
-	if !strings.Contains(rows[1], "\x1b[7") || strings.Contains(rows[2], "\x1b[7") {
-		t.Fatalf("%q\n%q", rows[1], rows[2])
+	if !strings.Contains(rows[2], "\x1b[7") || strings.Contains(rows[3], "\x1b[7") {
+		t.Fatalf("%q\n%q", rows[2], rows[3])
 	}
 	d.press("down")
 	rows = strings.Split(d.screen(), "\n")
-	if strings.Contains(rows[1], "\x1b[7") || !strings.Contains(rows[2], "\x1b[7") {
-		t.Fatalf("%q\n%q", rows[1], rows[2])
+	if strings.Contains(rows[2], "\x1b[7") || !strings.Contains(rows[3], "\x1b[7") {
+		t.Fatalf("%q\n%q", rows[2], rows[3])
 	}
 	// Reading the ticket softens the bar, so the focus is plain to see.
 	d.press("tab")
 	rows = strings.Split(d.screen(), "\n")
-	if strings.Contains(rows[2], "\x1b[7") || !strings.Contains(rows[2], "48;5;236") {
-		t.Fatalf("%q", rows[2])
+	if strings.Contains(rows[3], "\x1b[7") || !strings.Contains(rows[3], "48;5;236") {
+		t.Fatalf("%q", rows[3])
 	}
 	// Without colour the marker still says which row it is.
 	plain := driveTracker(t, trackerSource(), 100, 30)
@@ -423,8 +427,8 @@ func TestTrackerUnderlineWhatTheSearchMatched(t *testing.T) {
 	d := colourTickets(t, trackerSource(), 100, 30)
 	d.press("/", "b", "i", "l", "l")
 	rows := strings.Split(d.screen(), "\n")
-	if !regexp.MustCompile(`\x1b\[[0-9;:]*4[;:m0-9]*`).MatchString(rows[1]) || !strings.Contains(ansi.Strip(rows[1]), "billing") {
-		t.Fatalf("%q", rows[1])
+	if !regexp.MustCompile(`\x1b\[[0-9;:]*4[;:m0-9]*`).MatchString(rows[2]) || !strings.Contains(ansi.Strip(rows[2]), "billing") {
+		t.Fatalf("%q", rows[2])
 	}
 }
 
@@ -601,7 +605,7 @@ func TestViewsRunAllThenMeThenEachState(t *testing.T) {
 		t.Fatalf("the default should show everything: %s", listKeys(d))
 	}
 	d.wants("All 4", "Assigned to me", "Todo 1", "Doing 1", "Review 1", "Done 1")
-	head := strings.Split(d.screen(), "\n")[0]
+	head := strings.Split(d.screen(), "\n")[1]
 	at := -1
 	for _, label := range []string{"All", "Assigned to me", "Todo", "Doing", "Review", "Done"} {
 		i := strings.Index(head, label)

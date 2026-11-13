@@ -89,10 +89,36 @@ type Provider struct {
 	Org            string           `yaml:"org"`
 	// Lookback is no longer used: PRs are found by ticket key, however old.
 	// It is still accepted so older providers.yml files load.
-	Lookback string            `yaml:"lookback"`
-	Project  int               `yaml:"project,omitempty"`
-	View     int               `yaml:"view,omitempty"`
-	Auth     map[string]string `yaml:"auth"`
+	Lookback string `yaml:"lookback"`
+	Project  int    `yaml:"project,omitempty"`
+	// View is no longer read. It stays so a providers.yml that still sets it
+	// gets a plain message from validation instead of an unknown-field error.
+	View int `yaml:"view,omitempty"`
+	// Projects are the Jira projects the team works in.
+	Projects Names `yaml:"projects,omitempty"`
+	// SkipStatuses narrows the slice: tickets in these statuses are not read.
+	SkipStatuses Names `yaml:"skip_statuses,omitempty"`
+	// KeepDoneFor is how long finished tickets stay in scope, such as 14d.
+	KeepDoneFor string `yaml:"keep_done_for,omitempty"`
+	// Repos are the repositories the team works in, or [all].
+	Repos Names             `yaml:"repos,omitempty"`
+	Auth  map[string]string `yaml:"auth"`
+}
+
+// AllRepos reports whether repos is exactly [all]: every unarchived repository
+// in the org.
+func (p Provider) AllRepos() bool { return len(p.Repos) == 1 && p.Repos[0] == "all" }
+
+// KeyProject is the project that completes a bare ticket number: default_project,
+// else for Jira the first of projects.
+func (p Provider) KeyProject() string {
+	if p.DefaultProject != "" {
+		return p.DefaultProject
+	}
+	if p.Kind == "jira" && len(p.Projects) > 0 {
+		return p.Projects[0]
+	}
+	return ""
 }
 
 type Workspace struct {

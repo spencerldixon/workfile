@@ -277,7 +277,8 @@ func (s screen) ticketRow(lead, icon string, a workfile.Assessment, tag string, 
 // need it, then tickets out of policy and tickets that cannot be checked.
 func (s statusScreen) printed() string {
 	width := s.width()
-	top := []string{"", s.header(width, quantity(len(s.all), "ticket", "tickets")), ""}
+	top := append([]string{"", s.header(width, quantity(len(s.all), "ticket", "tickets"))}, s.t.scopeLines(s.w, width)...)
+	top = append(top, "")
 	top = append(top, s.summary(s.all, width, s.notes())...)
 	for i, line := range top {
 		top[i] = strings.TrimRight(ticketIndent+line, " ")
@@ -611,7 +612,8 @@ func (m *statusModel) top() []string {
 		tag = "only yours"
 		notes = append([]string{"Only tickets involving you."}, notes...)
 	}
-	lines := []string{m.header(width, tag), ""}
+	lines := append([]string{m.header(width, tag)}, m.t.scopeLines(m.w, width)...)
+	lines = append(lines, "")
 	return append(append(lines, m.summary(m.shown(), width, notes)...), "")
 }
 

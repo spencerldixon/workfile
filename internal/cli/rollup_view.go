@@ -189,7 +189,8 @@ func (h healthScreen) ruleCountWidth() int {
 // tickets fail, then the stages.
 func (h healthScreen) printed() string {
 	width := h.width()
-	top := []string{"", h.header(width), ""}
+	top := append([]string{"", h.header(width)}, h.t.scopeLines(h.w, width)...)
+	top = append(top, "")
 	top = append(top, h.summary(width)...)
 	for i, line := range top {
 		top[i] = strings.TrimRight(ticketIndent+line, " ")
@@ -403,7 +404,8 @@ func (m *healthModel) inner() int { return m.v.width - 2*len(ticketIndent) }
 // top is everything above the list: the header and the summary.
 func (m *healthModel) top() []string {
 	width := m.inner()
-	lines := []string{m.header(width), ""}
+	lines := append([]string{m.header(width)}, m.t.scopeLines(m.w, width)...)
+	lines = append(lines, "")
 	return append(append(lines, m.summary(width)...), "")
 }
 

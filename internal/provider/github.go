@@ -68,7 +68,7 @@ const prFields = `
 
 // Discovery only needs the fields used to link a PR to a ticket. Fetch expensive
 // label and review connections only for PRs that appear in the report.
-const discoveryFields = `id title headRefName state body`
+const discoveryFields = `id title headRefName state body repository { name }`
 
 const searchQuery = `query($q: String!, $after: String, $first: Int!) {
   search(query: $q, type: ISSUE, first: $first, after: $after) {
@@ -89,8 +89,16 @@ func nextCursor(info pageInfo, seen map[string]bool) (string, error) {
 	return info.EndCursor, nil
 }
 
-func (c *Client) repositories(ctx context.Context, p workfile.Provider, token string) ([]string, error) {
-	var names []string
+// listedRepo reports whether the code host reads a repository: it is listed in
+// repos (ignoring case, name without org), or repos is all.
+func listedRepo(p workfile.Provider, repo string) bool {
+	return p.AllRepos() || slices.ContainsFunc(p.Repos, func(r string) bool { return strings.EqualFold(r, repo) })
+}
+
+// repositories lists the org's unarchived repositories, narrowed to the listed
+// ones unless repos is all. missing names each listed repo that was not found
+// or is archived.
+func (c *Client) repositories(ctx context.Context, p workfile.Provider, token string) (names, missing []string, err error) {
 	var after any
 	seen := map[string]bool{}
 	for {
@@ -103,23 +111,23 @@ func (c *Client) repositories(ctx context.Context, p workfile.Provider, token st
 			}
 		}
 		if err := c.graph(ctx, token, repositoryQuery, map[string]any{"org": p.Org, "after": after}, &response); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if response.Organization == nil {
-			return nil, errors.New("organisation not found or not visible to this token")
+			return nil, nil, errors.New("organisation not found or not visible to this token")
 		}
 		page := response.Organization.Repositories
 		if page.Nodes == nil {
-			return nil, errors.New("GitHub returned no repository list")
+			return nil, nil, errors.New("GitHub returned no repository list")
 		}
 		for _, repo := range page.Nodes {
-			if !repo.IsArchived {
+			if !repo.IsArchived && listedRepo(p, repo.Name) {
 				names = append(names, repo.Name)
 			}
 		}
 		cursor, err := nextCursor(page.PageInfo, seen)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if cursor == "" {
 			break
@@ -127,7 +135,15 @@ func (c *Client) repositories(ctx context.Context, p workfile.Provider, token st
 		after = cursor
 	}
 	slices.Sort(names)
-	return slices.Compact(names), nil
+	names = slices.Compact(names)
+	if !p.AllRepos() {
+		for _, repo := range p.Repos {
+			if !slices.ContainsFunc(names, func(n string) bool { return strings.EqualFold(n, repo) }) {
+				missing = append(missing, repo)
+			}
+		}
+	}
+	return names, missing, nil
 }
 
 // searchPRs follows the pages of one PR search. A probe reads one PR with all
@@ -253,7 +269,7 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 	for _, t := range tickets {
 		if len(t.LinkedPRs) > 0 {
 			for _, ref := range t.LinkedPRs {
-				if _, _, _, ok := splitRef(p.Org, ref); !ok {
+				if repo, _, _, ok := splitRef(p.Org, ref); !ok || !listedRepo(p, repo) {
 					continue
 				}
 				if !slices.Contains(byRef[ref], t.Key) {
@@ -290,7 +306,7 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 	seen := map[string]bool{}
 	for _, prs := range results {
 		for _, pr := range prs {
-			if seen[pr.ID] {
+			if seen[pr.ID] || pr.Repository.Name != "" && !listedRepo(p, pr.Repository.Name) {
 				continue
 			}
 			seen[pr.ID] = true
@@ -325,6 +341,10 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 	}
 	linked := map[string][]workfile.Record{}
 	for i, record := range records {
+		// A last check on the PR as read, whatever found it.
+		if !listedRepo(p, strings.TrimPrefix(record.Repository, p.Org+"/")) {
+			continue
+		}
 		for _, key := range matched[i].keys {
 			linked[key] = append(linked[key], record)
 		}
