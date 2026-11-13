@@ -62,7 +62,7 @@ func TestImportRules(t *testing.T) {
 				t.Errorf("%s imports %s: use the v2 packages under charm.land", name, imp)
 			case strings.HasPrefix(imp, "charm.land/") && name != "internal/cli":
 				t.Errorf("%s imports %s: only internal/cli may import Charm packages", name, imp)
-			case imp == "net/http" && name != "internal/provider":
+			case imp == "net/http" && name != "internal/provider" && slices.Contains(p.Imports, imp): // tests may fake a transport
 				t.Errorf("%s imports net/http: only internal/provider may", name)
 			case strings.HasPrefix(imp, module+"internal/"):
 				rules, known := allowed[name]

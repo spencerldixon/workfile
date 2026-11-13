@@ -16,7 +16,7 @@
       "required": ["schema_version", "command", "policy_hash", "observed_at", "exit_code", "coverage", "summary", "warnings", "tickets"],
       "properties": {
         "schema_version": {"const": 1},
-        "command": {"enum": ["health", "status"]},
+        "command": {"enum": ["status"]},
         "policy_hash": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
         "observed_at": {"type": "string", "format": "date-time"},
         "exit_code": {"enum": [0, 1, 2]},
