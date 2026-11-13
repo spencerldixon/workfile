@@ -32,7 +32,6 @@ func TestDefaultProjectIsNotAllowedOnGitHub(t *testing.T) {
 func queuedWorkflow(t *testing.T) *Workspace {
 	t.Helper()
 	w := example(t)
-	w.Automations = nil // a different workflow: the example's automations do not apply
 	w.Policy.States = []string{"todo", "review", "queued", "done"}
 	w.Policy.Transitions = map[string]Transition{
 		"todo":   {To: []string{"review"}},

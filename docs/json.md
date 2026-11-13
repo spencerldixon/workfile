@@ -139,12 +139,3 @@ check again before you move anything.
 ```sh
 wf prove --json || exit 1   # fail CI when a path skips a gate
 ```
-
-## Automation events
-
-An automation's command or agent gets `WORKFILE_EVENT`: the path of a JSON file
-with `schema_version` `1`, an `event` object (the `automation`, the `trigger`,
-when it fired as `at`, the `ticket` and `stage`, `to` for a `ready` trigger, and
-`provider`, `record` and `record_url` for a trigger about PRs), and a `ticket`
-object in the same format as one ticket of a report. See
-[Automations](automations.md).

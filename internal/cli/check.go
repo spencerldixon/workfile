@@ -27,7 +27,7 @@ func checkArgs(o options) error {
 
 // checkMove answers one question, for an agent or a person: may this ticket
 // move to that stage right now? It reads the ticket fresh and asks the policy.
-// Agents run it before they move a ticket, so an automation can never move
+// Agents run it before they move a ticket, so a script can never move
 // work the team's gates do not allow. Exit 0 yes, 1 no, 2 cannot check.
 func checkMove(ctx context.Context, e env) (int, error) {
 	v, w, client, o := e.view, e.w, e.client, e.o

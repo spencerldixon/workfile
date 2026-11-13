@@ -22,7 +22,7 @@ type githubTracker struct {
 }
 
 // viewMemory is how long a view's filter and the tickets it shows are remembered.
-// Opening ticket after ticket reuses them, and a long run such as wf watch still
+// Opening ticket after ticket reuses them, and a long run such as the tickets browser still
 // sees the view change.
 const viewMemory = 5 * time.Minute
 

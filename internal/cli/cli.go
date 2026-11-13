@@ -9,7 +9,6 @@ import (
 	"io"
 	"slices"
 	"strings"
-	"time"
 
 	"workfile/internal/provider"
 	"workfile/internal/workfile"
@@ -26,19 +25,6 @@ Usage: wf <command> [options]
   check KEY --to STAGE   Ask whether a ticket may move to a stage now (exit 0 yes, 1 no)
   prove                 Check the policy for paths that skip a gate (exit 0 sound, 1 not)
   test [PROVIDER ...]    Test all provider connections, or named instances
-
-Automations ("when this happens to my work, do that"):
-  automations           List your automations and anything stopping them
-  automations init      Create your private automations file for this workspace
-  automations trust     Approve the actions in your shared automations file
-  watch                 Check your work every 2 minutes and fire automations
-
-Options for automations and watch:
-  --all                 automations: everyone's shared automations, read only
-  --log ID              automations: show the latest run log for an automation
-  --once                watch: check once, then exit (for cron or launchd)
-  --interval 5m         watch: time between checks (default 2m, at least 1m)
-  --dry-run             watch: show what would run; run nothing
 
 Options for tickets:
   --view NAME           Start on all, me or a state in your policy (left and right to switch)
@@ -70,7 +56,6 @@ Examples:
   wf tickets --view me
   wf check APP-42 --to done
   wf prove
-  wf watch --dry-run
   wf test github
 
 Output is for people by default. Use --json for scripts and agents.
@@ -84,12 +69,10 @@ type options struct {
 	all, me, failing, help, version bool
 	json, evidence                  bool
 	limitSet                        bool
-	// check, automations and watch
-	to, log      string
-	once, dryRun bool
+	// check
+	to string
 	// tickets
 	scope, view string
-	interval    time.Duration
 }
 
 // listing is true when health names tickets instead of summarising.
@@ -132,15 +115,13 @@ type env struct {
 // commands is every wf command. To add one, write <name>.go with its command
 // value, list it here, and describe it in help.
 var commands = map[string]command{
-	"setup":       setupCommand,
-	"health":      healthCommand,
-	"status":      statusCommand,
-	"tickets":     ticketsCommand,
-	"check":       checkCommand,
-	"prove":       proveCommand,
-	"test":        testCommand,
-	"automations": automationsCommand,
-	"watch":       watchCommand,
+	"setup":   setupCommand,
+	"health":  healthCommand,
+	"status":  statusCommand,
+	"tickets": ticketsCommand,
+	"check":   checkCommand,
+	"prove":   proveCommand,
+	"test":    testCommand,
 }
 
 func Run(ctx context.Context, args []string, out, errOut io.Writer, version string) int {
@@ -215,12 +196,8 @@ func parse(args []string) (options, error) {
 	fs.BoolVar(&o.help, "h", false, "")
 	fs.BoolVar(&o.version, "version", false, "")
 	fs.StringVar(&o.to, "to", "", "")
-	fs.StringVar(&o.log, "log", "", "")
-	fs.BoolVar(&o.once, "once", false, "")
-	fs.BoolVar(&o.dryRun, "dry-run", false, "")
 	fs.StringVar(&o.scope, "scope", "", "")
 	fs.StringVar(&o.view, "view", "", "")
-	fs.DurationVar(&o.interval, "interval", 2*time.Minute, "")
 	// The standard flag package stops at positional arguments; collect options first.
 	var flags, positionals []string
 	for i := 0; i < len(args); i++ {

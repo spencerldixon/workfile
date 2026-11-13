@@ -300,3 +300,29 @@ func TestRollupCountsGatesWherePathRequiresThem(t *testing.T) {
 		t.Fatalf("%+v", r.Stages)
 	}
 }
+
+// An old .workfile/automations/ folder is ignored, even when its files would
+// no longer be valid.
+func TestAutomationsFolderIsIgnored(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".workfile")
+	if err := os.MkdirAll(filepath.Join(dir, "automations"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"policy.yml", "providers.yml", "people.yml"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "example", ".workfile", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := "automations:\n  - id: x\n    on: {enters: nowhere}\n    run: [echo]\n"
+	if err := os.WriteFile(filepath.Join(dir, "automations", "alice.yml"), []byte(old), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(root); err != nil {
+		t.Fatalf("a workspace with an automations folder should load: %v", err)
+	}
+}

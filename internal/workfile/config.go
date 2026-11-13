@@ -17,6 +17,7 @@ import (
 var namePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 var ruleIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]*$`)
 var credentialPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
+var workspaceNamePattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 var orgPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
 var projectPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 var yamlLinePattern = regexp.MustCompile(`\bline [0-9]+`)
@@ -74,9 +75,6 @@ func Load(start string) (*Workspace, error) {
 		return nil, err
 	}
 	if err = ReadYAML(filepath.Join(dir, "people.yml"), &w.People, true); err != nil {
-		return nil, err
-	}
-	if err = w.loadSharedAutomations(); err != nil {
 		return nil, err
 	}
 	if err = w.validate(); err != nil {
@@ -334,18 +332,16 @@ func (w *Workspace) validate() error {
 		}
 		p.Gates[gate] = rules
 	}
-	// Automations refer to stages and providers, so they are checked last.
-	if len(problems) == 0 {
-		for _, f := range w.Automations {
-			problems = append(problems, w.CheckAutomations(f)...)
-		}
-	}
 	if len(problems) > 0 {
 		slices.Sort(problems)
 		return errors.New(strings.Join(slices.Compact(problems), "\n  "))
 	}
 	return nil
 }
+
+// ValidName reports whether a workspace name is safe to use as a folder name.
+// The name comes from the repository, so it must never climb out of a folder.
+func ValidName(name string) bool { return len(name) <= 64 && workspaceNamePattern.MatchString(name) }
 
 func SortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))

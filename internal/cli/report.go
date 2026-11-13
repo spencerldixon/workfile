@@ -82,8 +82,7 @@ func writeReport(out io.Writer, w *workfile.Workspace, all []workfile.Assessment
 	return encodeCleanJSON(out, r)
 }
 
-// ticketReport is one ticket in the `wf status --json` format. Automations
-// hand the same format to their actions.
+// ticketReport is one ticket in the `wf status --json` format.
 func ticketReport(a workfile.Assessment) reportTicket {
 	statuses := []string{"cannot_check", "out_of_policy", "needs_work", "ready", "done"}
 	t := reportTicket{Key: a.Ticket.Key, Title: a.Ticket.Title, URL: a.Ticket.URL, State: a.Ticket.State, Status: statuses[group(a)], Error: a.Ticket.Error, Records: []reportRecord{}, EntryChecks: append([]workfile.Check{}, a.Earlier...), Routes: []reportRoute{}, Unmet: []workfile.Reason{}}

@@ -21,8 +21,7 @@ var allowed = map[string][]string{
 	"internal/provider":     {"internal/workfile"},
 	"internal/board":        {"internal/workfile"},
 	"internal/snapshot":     {"internal/workfile"},
-	"internal/automation":   {"internal/workfile"},
-	"internal/cli":          {"internal/workfile", "internal/provider", "internal/board", "internal/snapshot", "internal/automation"},
+	"internal/cli":          {"internal/workfile", "internal/provider", "internal/board", "internal/snapshot"},
 	"internal/architecture": {},
 }
 

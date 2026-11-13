@@ -4,8 +4,8 @@ package workfile
 import "slices"
 
 type Policy struct {
-	// Name identifies the workspace across clones and computers. Personal files,
-	// such as private automations, are kept under it. It is not part of the
+	// Name identifies the workspace across clones and computers. It keys the person's
+	// settings and --since snapshots. It is not part of the
 	// policy hash: renaming a workspace does not change its rules.
 	Name        string                `yaml:"name" json:"-"`
 	Tracker     string                `yaml:"tracker"`
@@ -100,8 +100,6 @@ type Workspace struct {
 	Policy    Policy
 	Providers map[string]Provider
 	People    map[string]map[string]string
-	// Automations are the shared files in .workfile/automations/, one per person.
-	Automations []*AutomationFile
 	// Settings are the person's own, from ~/.config/workfile/<name>/config.yml.
 	Settings WorkspaceSettings
 }
@@ -130,8 +128,7 @@ type Ticket struct {
 
 type Record struct {
 	ID, URL, Title, Summary string
-	// Head is the latest commit, so an agent can tell whether a PR changed
-	// after its automation fired.
+	// Head is the latest commit, so a check can tell whether a PR changed.
 	Head        string
 	Repository  string
 	People      []string
