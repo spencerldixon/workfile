@@ -107,11 +107,11 @@ func TestHealthScreenNarrowOpensOnePaneAtATime(t *testing.T) {
 
 func TestHealthPrintedIsPlainAndListsRules(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
-	_, out, _ := invoke(t, boardFixture(), "health")
+	_, out, _ := invoke(t, boardFixture(), "status")
 	if strings.Contains(out, "\x1b") {
 		t.Fatalf("plain output has escapes: %q", out)
 	}
-	for _, want := range []string{"1 of 4 tickets are out of policy (25%).", "Gates", "failing of tickets that must pass", "Description: at least 100 characters", "Stages", "Next  wf health --gate"} {
+	for _, want := range []string{"1 of 4 tickets are out of policy (25%).", "Gates", "failing of tickets that must pass", "Description: at least 100 characters", "Stages", "Next  wf status --gate"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q\n%s", want, out)
 		}

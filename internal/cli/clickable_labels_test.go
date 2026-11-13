@@ -18,7 +18,7 @@ func TestStatusLinksTicketsTitlesAndPRs(t *testing.T) {
 	for _, width := range []int{40, 60, 110} {
 		var out bytes.Buffer
 		v := view{out: &out, width: width, links: true}
-		v.statusReport(w, []workfile.Assessment{w.Assess(ticket)}, options{command: "status"})
+		v.statusReport(w, []workfile.Assessment{w.Assess(ticket)}, options{command: "status", me: true})
 		text := out.String()
 		if width == 110 && !strings.Contains(text, v.link(ticket.Title, ticket.URL)) {
 			t.Fatalf("the ticket title is not clickable:\n%s", text)

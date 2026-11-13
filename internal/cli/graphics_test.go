@@ -25,7 +25,7 @@ func pngBytes(t *testing.T, width, height int) []byte {
 	return b.Bytes()
 }
 
-func graphicTickets(t *testing.T, f *fakeSource, width, height int) *ticketsDriver {
+func graphicTickets(t *testing.T, f *fakeSource, width, height int) *trackerDriver {
 	t.Helper()
 	return driveWith(t, f, width, height, testGraphics, options{})
 }
@@ -135,7 +135,7 @@ func TestTitleImageFallsBackWhenItCannotDrawWell(t *testing.T) {
 }
 
 func TestTicketsDrawImagesInline(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{"a1": pngBytes(t, 320, 160)}
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: imageBlocks("a1")}
 	d := graphicTickets(t, f, 100, 60)
@@ -153,7 +153,7 @@ func TestTicketsDrawImagesInline(t *testing.T) {
 }
 
 func TestTicketsNameAnImageTheyCannotDraw(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{"bad": []byte("not a picture")}
 	blocks := append(imageBlocks("bad", "gone"), workfile.Block{Kind: workfile.BlockImage, Name: "elsewhere.png"})
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: append(blocks, para("Text still here")...)}
@@ -168,7 +168,7 @@ func TestTicketsNameAnImageTheyCannotDraw(t *testing.T) {
 }
 
 func TestTicketsRetryAFailedImageOnRefresh(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{}
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: imageBlocks("a1")}
 	d := graphicTickets(t, f, 100, 60)
@@ -185,7 +185,7 @@ func TestTicketsRetryAFailedImageOnRefresh(t *testing.T) {
 }
 
 func TestTicketsFindImagesInReplies(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{"a1": pngBytes(t, 32, 32)}
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", CommentTotal: 2, Comments: []workfile.Comment{{Author: "Alice", Replies: []workfile.Comment{{Author: "Bob", Body: imageBlocks("a1")}}}}}
 	graphicTickets(t, f, 100, 60)
@@ -195,10 +195,10 @@ func TestTicketsFindImagesInReplies(t *testing.T) {
 }
 
 func TestTicketsReadNoImagesWithoutGraphics(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{"a1": pngBytes(t, 32, 32)}
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: imageBlocks("a1")}
-	d := driveTickets(t, f, 100, 60)
+	d := driveTracker(t, f, 100, 60)
 	d.wants("a1.png")
 	if len(f.imageReads) != 0 || len(d.raw) != 0 {
 		t.Fatalf("read %v, sent %d", f.imageReads, len(d.raw))
@@ -206,7 +206,7 @@ func TestTicketsReadNoImagesWithoutGraphics(t *testing.T) {
 }
 
 func TestTicketsLimitImagesPerTicket(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{}
 	var names []string
 	for i := range maxTicketImages + 4 {
@@ -222,7 +222,7 @@ func TestTicketsLimitImagesPerTicket(t *testing.T) {
 }
 
 func TestTicketsReplaceImagesOnResize(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{"a1": pngBytes(t, 1200, 300)}
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: imageBlocks("a1")}
 	d := graphicTickets(t, f, 120, 60)
@@ -239,26 +239,26 @@ func TestTicketsReplaceImagesOnResize(t *testing.T) {
 }
 
 func TestTicketsDrawLargeTitlesWhereTheyFit(t *testing.T) {
-	d := graphicTickets(t, ticketsSource(), 100, 60)
+	d := graphicTickets(t, trackerSource(), 100, 60)
 	if d.m.titles["APP-1"] == nil || !strings.ContainsRune(d.pane(), kitty.Placeholder) {
 		t.Fatalf("no title image:\n%s", d.pane())
 	}
 	if strings.Contains(d.pane(), "Fix redirect loop") {
 		t.Fatalf("the title is drawn twice:\n%s", d.pane())
 	}
-	d = graphicTickets(t, ticketsSource(), 30, 60)
+	d = graphicTickets(t, trackerSource(), 30, 60)
 	d.wants("Fix redirect loop")
 
 	g := testGraphics
 	g.hasInk = false
-	d = driveWith(t, ticketsSource(), 100, 60, g, options{})
+	d = driveWith(t, trackerSource(), 100, 60, g, options{})
 	if !strings.Contains(d.pane(), "Fix redirect loop") {
 		t.Fatal("without the text colour the title should be plain bold")
 	}
 }
 
 func TestTicketsRecycleImageIDs(t *testing.T) {
-	d := graphicTickets(t, ticketsSource(), 100, 60)
+	d := graphicTickets(t, trackerSource(), 100, 60)
 	d.m.images["old"] = &ticketPicture{picture: picture{id: firstImageID}}
 	d.m.nextID = lastImageID
 	if id := d.m.allocate(); id != lastImageID {
@@ -273,7 +273,7 @@ func TestTicketsRecycleImageIDs(t *testing.T) {
 }
 
 func TestTicketsForgetImagesOnQuit(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.images = map[string][]byte{"a1": pngBytes(t, 32, 32)}
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: imageBlocks("a1")}
 	d := graphicTickets(t, f, 100, 60)

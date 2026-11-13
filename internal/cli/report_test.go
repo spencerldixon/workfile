@@ -20,12 +20,9 @@ func TestJSONReportSchemaAndPlainSafety(t *testing.T) {
 	tk := fixtureTicket("APP-42", "review", strings.Repeat("x", 120))
 	tk.Title = "Settings\x1b\n"
 	tk.Records = map[string][]workfile.Record{"github": {{ID: "api#1", URL: "https://github.com/example-team/api/pull/1", Facts: workfile.Facts{"checks": "success", "labels": []string{}, "approvals": []workfile.Actor{}}}}}
-	for _, command := range []string{"status", "health"} {
+	for _, command := range []string{"status"} {
 		code, out, errOut := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, command, "--json")
 		wantCode := 1
-		if command == "health" {
-			wantCode = 0
-		}
 		if code != wantCode || errOut != "" || strings.Contains(out, "\x1b") {
 			t.Fatalf("%d %s %s", code, out, errOut)
 		}
@@ -55,13 +52,13 @@ func TestJSONReportSchemaAndPlainSafety(t *testing.T) {
 }
 
 func TestJSONErrorsEmptyAndMissingTickets(t *testing.T) {
-	for _, args := range [][]string{{"status", "--json", "--limit", "0"}, {"status", "--json", "--unknown"}, {"test", "--json"}, {"status", "--json", "APP-404"}} {
+	for _, args := range [][]string{{"status", "--json", "--limit", "0"}, {"status", "--json", "--unknown"}, {"setup", "--json"}, {"status", "--json", "APP-404"}} {
 		code, out, _ := invoke(t, &fakeSource{}, args...)
 		if code != 2 || !json.Valid([]byte(out)) {
 			t.Fatalf("%v: %d %s", args, code, out)
 		}
 	}
-	code, out, _ := invoke(t, &fakeSource{}, "health", "--json")
+	code, out, _ := invoke(t, &fakeSource{}, "status", "--json")
 	var r machineReport
 	if code != 0 || json.Unmarshal([]byte(out), &r) != nil || r.Tickets == nil || r.Warnings == nil {
 		t.Fatalf("empty report: %d %s", code, out)
@@ -107,7 +104,7 @@ func TestEvidenceFitsNarrowPlainTerminals(t *testing.T) {
 func TestJSONFilteringAndUnknownEvidence(t *testing.T) {
 	tk := fixtureTicket("APP-42", "review", strings.Repeat("x", 120))
 	tk.Records = map[string][]workfile.Record{"github": {{ID: "api#1", Facts: workfile.Facts{"checks": "success", "labels": []string{}}, Unavailable: map[string]string{"approvals": "Review evidence unavailable"}}}}
-	code, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "health", "--gate", "code_review", "--json")
+	code, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status", "--gate", "code_review", "--json")
 	var r machineReport
 	if code != 2 || json.Unmarshal([]byte(out), &r) != nil || r.Summary["cannot_check"] != 1 || len(r.Tickets) != 1 || r.Tickets[0].Status != "cannot_check" {
 		t.Fatalf("%d %s", code, out)

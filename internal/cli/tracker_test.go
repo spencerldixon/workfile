@@ -18,9 +18,9 @@ import (
 	"workfile/internal/workfile"
 )
 
-type ticketsDriver struct {
+type trackerDriver struct {
 	t             *testing.T
-	m             *ticketsModel
+	m             *trackerModel
 	width, height int
 	quit          bool
 	opened        []string
@@ -31,7 +31,7 @@ func para(text string) []workfile.Block {
 	return []workfile.Block{{Kind: workfile.BlockParagraph, Spans: []workfile.Span{{Text: text}}}}
 }
 
-func ticketsSource() *fakeSource {
+func trackerSource() *fakeSource {
 	f := &fakeSource{details: map[string]workfile.Detail{}}
 	for _, l := range []struct{ key, title, status, state, who string }{
 		{"APP-1", "Fix redirect loop on expired login", "To Do", "todo", "Alice"},
@@ -50,19 +50,19 @@ func ticketsSource() *fakeSource {
 	return f
 }
 
-func driveTickets(t *testing.T, f *fakeSource, width, height int) *ticketsDriver {
+func driveTracker(t *testing.T, f *fakeSource, width, height int) *trackerDriver {
 	t.Helper()
 	return driveWith(t, f, width, height, graphics{}, options{})
 }
 
-func driveWith(t *testing.T, f *fakeSource, width, height int, g graphics, o options) *ticketsDriver {
+func driveWith(t *testing.T, f *fakeSource, width, height int, g graphics, o options) *trackerDriver {
 	t.Helper()
 	w, err := workfile.Load("../../example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := env{view: view{out: &bytes.Buffer{}, width: width, tint: &tintCache{}}, w: w, client: f, o: o, errOut: io.Discard}
-	d := &ticketsDriver{t: t, m: newTicketsModel(context.Background(), e), width: width, height: height}
+	d := &trackerDriver{t: t, m: newTrackerModel(context.Background(), e), width: width, height: height}
 	d.m.pause = 0
 	d.m.gfx = g
 	d.m.open = func(target string) error { d.opened = append(d.opened, target); return nil }
@@ -71,14 +71,14 @@ func driveWith(t *testing.T, f *fakeSource, width, height int, g graphics, o opt
 	return d
 }
 
-func (d *ticketsDriver) send(msg tea.Msg) {
+func (d *trackerDriver) send(msg tea.Msg) {
 	d.t.Helper()
 	_, cmd := d.m.Update(msg)
 	d.run(cmd)
 	d.check()
 }
 
-func (d *ticketsDriver) run(cmd tea.Cmd) {
+func (d *trackerDriver) run(cmd tea.Cmd) {
 	d.t.Helper()
 	if cmd == nil {
 		return
@@ -101,7 +101,7 @@ func (d *ticketsDriver) run(cmd tea.Cmd) {
 	}
 }
 
-func (d *ticketsDriver) press(keys ...string) {
+func (d *trackerDriver) press(keys ...string) {
 	d.t.Helper()
 	for _, k := range keys {
 		d.send(keyPress(k))
@@ -128,7 +128,7 @@ func keyPress(k string) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: []rune(k)[0], Text: k}
 }
 
-func (d *ticketsDriver) check() {
+func (d *trackerDriver) check() {
 	d.t.Helper()
 	lines := strings.Split(d.m.render(), "\n")
 	if len(lines) > d.height {
@@ -141,15 +141,15 @@ func (d *ticketsDriver) check() {
 	}
 }
 
-func (d *ticketsDriver) screen() string { return d.m.render() }
+func (d *trackerDriver) screen() string { return d.m.render() }
 
 // pane is all the ticket text, including what is scrolled out of sight.
-func (d *ticketsDriver) pane() string {
+func (d *trackerDriver) pane() string {
 	main, side := d.m.ticketText()
 	return main + side
 }
 
-func (d *ticketsDriver) wants(texts ...string) {
+func (d *trackerDriver) wants(texts ...string) {
 	d.t.Helper()
 	for _, text := range texts {
 		if !strings.Contains(d.screen(), text) {
@@ -158,7 +158,7 @@ func (d *ticketsDriver) wants(texts ...string) {
 	}
 }
 
-func (d *ticketsDriver) refuses(texts ...string) {
+func (d *trackerDriver) refuses(texts ...string) {
 	d.t.Helper()
 	for _, text := range texts {
 		if strings.Contains(d.screen(), text) {
@@ -167,16 +167,16 @@ func (d *ticketsDriver) refuses(texts ...string) {
 	}
 }
 
-func TestTicketsShowJiraAndWorkfileTogether(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerShowJiraAndWorkfileTogether(t *testing.T) {
+	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: para("Why this matters"), CommentTotal: 2, Comments: []workfile.Comment{{Author: "Alice", Created: time.Now().Add(-48 * time.Hour), Body: para("Looks good")}}}
-	d := driveTickets(t, f, 100, 60)
+	d := driveTracker(t, f, 100, 60)
 	d.wants("4 of 4", "APP-1", "APP-4", "Why this matters", "Alice", "Looks good", "Comments (2)", "Showing 1 of 2", "doing")
 }
 
-func TestTicketsFitEveryTerminal(t *testing.T) {
+func TestTrackerFitEveryTerminal(t *testing.T) {
 	for _, size := range [][2]int{{40, 24}, {60, 24}, {40, 10}, {60, 12}, {140, 40}} {
-		f := ticketsSource()
+		f := trackerSource()
 		f.listing[0].Title = strings.Repeat("A very long ticket title ", 8)
 		f.listing[0].Assignee = "Someone With An Extremely Long Name"
 		long := "https://example.com/" + strings.Repeat("x", 90)
@@ -189,21 +189,21 @@ func TestTicketsFitEveryTerminal(t *testing.T) {
 			{Kind: workfile.BlockRule},
 			{Kind: workfile.BlockImage, Name: strings.Repeat("n", 90) + ".png"},
 		}}
-		d := driveTickets(t, f, size[0], size[1])
+		d := driveTracker(t, f, size[0], size[1])
 		d.press("tab", "down", "tab", "/", "a", "esc", "down")
 		d.width++
 		d.send(tea.WindowSizeMsg{Width: d.width, Height: size[1]})
 	}
 }
 
-func TestTicketsFitWithColourAndPanels(t *testing.T) {
+func TestTrackerFitWithColourAndPanels(t *testing.T) {
 	for _, width := range []int{40, 60} {
-		f := ticketsSource()
+		f := trackerSource()
 		long := "https://example.com/" + strings.Repeat("x", 90)
 		f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: []workfile.Block{
 			{Kind: workfile.BlockParagraph, Spans: []workfile.Span{{Text: strings.Repeat("bold words ", 20), Bold: true}, {Text: long, Link: long}, {Text: "code", Code: true}, {Text: "slanted", Italic: true}}},
 		}}
-		d := driveTickets(t, f, width, 40)
+		d := driveTracker(t, f, width, 40)
 		d.m.v.color, d.m.v.links = true, true
 		d.m.t = newTheme(true, "48;5;236")
 		d.m.help = d.m.t.help()
@@ -218,7 +218,7 @@ func TestTicketsFitWithColourAndPanels(t *testing.T) {
 
 // A tracker with no ticket types and keys that look nothing like Jira's must
 // work the same, because the screen treats every field as the tracker's text.
-func TestTicketsWorkWithAnyTrackersShape(t *testing.T) {
+func TestTrackerWorkWithAnyTrackersShape(t *testing.T) {
 	f := &fakeSource{details: map[string]workfile.Detail{}}
 	for _, key := range []string{"example-team/api#1042", "example-team/web#7"} {
 		f.listing = append(f.listing, workfile.Listing{Key: key, Title: "Issue " + key, Status: "open", URL: "https://github.example.com/" + key})
@@ -226,7 +226,7 @@ func TestTicketsWorkWithAnyTrackersShape(t *testing.T) {
 		f.details[key] = workfile.Detail{Key: key, Body: para("Body of " + key), CommentTotal: 1, Comments: []workfile.Comment{{Author: "Alice", Body: para("No date here")}}}
 	}
 	for _, width := range []int{40, 60, 100} {
-		d := driveTickets(t, f, width, 60)
+		d := driveTracker(t, f, width, 60)
 		d.wants("example-team/api#1042", "Body of example-team/api#1042", "No date here", "Unassigned")
 		d.refuses("· ·", "Jira", "Story")
 		d.press("down", "o")
@@ -236,8 +236,8 @@ func TestTicketsWorkWithAnyTrackersShape(t *testing.T) {
 	}
 }
 
-func TestTicketsLettersInSearchNeverFireShortcuts(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 80, 24)
+func TestTrackerLettersInSearchNeverFireShortcuts(t *testing.T) {
+	d := driveTracker(t, trackerSource(), 80, 24)
 	d.press("/", "q", "o", "r")
 	if d.quit || len(d.opened) != 0 {
 		t.Fatalf("a shortcut fired while searching: quit %v, opened %v", d.quit, d.opened)
@@ -245,8 +245,8 @@ func TestTicketsLettersInSearchNeverFireShortcuts(t *testing.T) {
 	d.wants("/ qor")
 }
 
-func TestTicketsFuzzySearch(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 80, 40)
+func TestTrackerFuzzySearch(t *testing.T) {
+	d := driveTracker(t, trackerSource(), 80, 40)
 	d.press("/", "b", "i", "l", "l")
 	d.wants("1 of 4", "APP-4")
 	d.refuses("APP-2  ")
@@ -256,16 +256,16 @@ func TestTicketsFuzzySearch(t *testing.T) {
 	d.wants("4 of 4", "APP-2")
 }
 
-func TestTicketsSearchWithNoMatchesSaysSo(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 80, 24)
+func TestTrackerSearchWithNoMatchesSaysSo(t *testing.T) {
+	d := driveTracker(t, trackerSource(), 80, 24)
 	d.press("/", "z", "z", "z", "z")
 	d.wants("No tickets match", "0 of 4")
 }
 
-func TestTicketsEmptyScopeSaysSo(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerEmptyScopeSaysSo(t *testing.T) {
+	f := trackerSource()
 	f.listing = nil
-	d := driveTickets(t, f, 80, 24)
+	d := driveTracker(t, f, 80, 24)
 	d.wants("No tickets in your scope")
 	d.press("o", "r", "tab", "down", "/", "x")
 	if len(d.opened) != 0 {
@@ -273,17 +273,17 @@ func TestTicketsEmptyScopeSaysSo(t *testing.T) {
 	}
 }
 
-func TestTicketsEmptyTicketIsCalm(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerEmptyTicketIsCalm(t *testing.T) {
+	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1"}
 	f.listing[0].Assignee = ""
-	d := driveTickets(t, f, 80, 60)
+	d := driveTracker(t, f, 80, 60)
 	d.wants("No description", "No comments", "Unassigned")
 }
 
-func TestTicketsReadOnlyTheTicketYouStopOn(t *testing.T) {
-	f := ticketsSource()
-	d := driveTickets(t, f, 80, 24)
+func TestTrackerReadOnlyTheTicketYouStopOn(t *testing.T) {
+	f := trackerSource()
+	d := driveTracker(t, f, 80, 24)
 	f.detailReads, f.policyReads = nil, nil
 	var pending []tea.Cmd
 	for range 3 {
@@ -298,9 +298,9 @@ func TestTicketsReadOnlyTheTicketYouStopOn(t *testing.T) {
 	}
 }
 
-func TestTicketsCacheUntilRefresh(t *testing.T) {
-	f := ticketsSource()
-	d := driveTickets(t, f, 80, 24)
+func TestTrackerCacheUntilRefresh(t *testing.T) {
+	f := trackerSource()
+	d := driveTracker(t, f, 80, 24)
 	d.press("down", "up", "down", "up")
 	if !slices.Equal(f.detailReads, []string{"APP-1", "APP-2"}) {
 		t.Fatalf("read %v", f.detailReads)
@@ -311,9 +311,9 @@ func TestTicketsCacheUntilRefresh(t *testing.T) {
 	}
 }
 
-func TestTicketsLateReplyNeverDrawsOverTheNewTicket(t *testing.T) {
-	f := ticketsSource()
-	d := driveTickets(t, f, 80, 40)
+func TestTrackerLateReplyNeverDrawsOverTheNewTicket(t *testing.T) {
+	f := trackerSource()
+	d := driveTracker(t, f, 80, 40)
 	d.press("r") // leaves a fresh read of APP-1
 	_, slow := d.m.Update(keyPress("r"))
 	d.press("down")
@@ -324,8 +324,8 @@ func TestTicketsLateReplyNeverDrawsOverTheNewTicket(t *testing.T) {
 	d.wants("Body of APP-2")
 }
 
-func TestTicketsOpenInTheBrowser(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 80, 24)
+func TestTrackerOpenInTheBrowser(t *testing.T) {
+	d := driveTracker(t, trackerSource(), 80, 24)
 	d.press("down", "o")
 	d.press("tab", "o")
 	want := "https://example.atlassian.net/browse/APP-2"
@@ -337,10 +337,10 @@ func TestTicketsOpenInTheBrowser(t *testing.T) {
 	d.wants("Cannot open the browser")
 }
 
-func TestTicketsFocusScrollsTheTicket(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerFocusScrollsTheTicket(t *testing.T) {
+	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: para(strings.Repeat("words go here ", 300))}
-	d := driveTickets(t, f, 60, 24)
+	d := driveTracker(t, f, 60, 24)
 	d.press("tab", "down", "down")
 	if d.m.pane.YOffset() == 0 {
 		t.Fatal("the ticket did not scroll")
@@ -357,23 +357,23 @@ func TestTicketsFocusScrollsTheTicket(t *testing.T) {
 	}
 }
 
-func TestTicketsListGivesItsSpareRoomToTheTicket(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 80, 30)
+func TestTrackerListGivesItsSpareRoomToTheTicket(t *testing.T) {
+	d := driveTracker(t, trackerSource(), 80, 30)
 	if d.m.listRows() != 4 {
 		t.Fatalf("%d rows for 4 tickets", d.m.listRows())
 	}
-	f := ticketsSource()
+	f := trackerSource()
 	for range 80 {
 		f.listing = append(f.listing, f.listing[0])
 	}
-	if d = driveTickets(t, f, 80, 30); d.m.listRows() != 14 {
+	if d = driveTracker(t, f, 80, 30); d.m.listRows() != 14 {
 		t.Fatalf("%d rows, want the top half", d.m.listRows())
 	}
 }
 
-func colourTickets(t *testing.T, f *fakeSource, width, height int) *ticketsDriver {
+func colourTickets(t *testing.T, f *fakeSource, width, height int) *trackerDriver {
 	t.Helper()
-	d := driveTickets(t, f, width, height)
+	d := driveTracker(t, f, width, height)
 	d.m.v.color, d.m.v.links = true, true
 	d.m.t = newTheme(true, "48;5;236")
 	d.m.help = d.m.t.help()
@@ -381,9 +381,9 @@ func colourTickets(t *testing.T, f *fakeSource, width, height int) *ticketsDrive
 	return d
 }
 
-func TestTicketsFillTheWholeTerminal(t *testing.T) {
+func TestTrackerFillTheWholeTerminal(t *testing.T) {
 	for _, size := range [][2]int{{80, 24}, {120, 40}, {200, 50}, {300, 70}} {
-		d := colourTickets(t, ticketsSource(), size[0], size[1])
+		d := colourTickets(t, trackerSource(), size[0], size[1])
 		lines := strings.Split(d.screen(), "\n")
 		if len(lines) != size[1] {
 			t.Fatalf("%v: %d lines", size, len(lines))
@@ -397,8 +397,8 @@ func TestTicketsFillTheWholeTerminal(t *testing.T) {
 	}
 }
 
-func TestTicketsHighlightTheCurrentRow(t *testing.T) {
-	d := colourTickets(t, ticketsSource(), 100, 30)
+func TestTrackerHighlightTheCurrentRow(t *testing.T) {
+	d := colourTickets(t, trackerSource(), 100, 30)
 	rows := strings.Split(d.screen(), "\n")
 	if !strings.Contains(rows[1], "\x1b[7") || strings.Contains(rows[2], "\x1b[7") {
 		t.Fatalf("%q\n%q", rows[1], rows[2])
@@ -415,12 +415,12 @@ func TestTicketsHighlightTheCurrentRow(t *testing.T) {
 		t.Fatalf("%q", rows[2])
 	}
 	// Without colour the marker still says which row it is.
-	plain := driveTickets(t, ticketsSource(), 100, 30)
+	plain := driveTracker(t, trackerSource(), 100, 30)
 	plain.wants("▸ APP-1")
 }
 
-func TestTicketsUnderlineWhatTheSearchMatched(t *testing.T) {
-	d := colourTickets(t, ticketsSource(), 100, 30)
+func TestTrackerUnderlineWhatTheSearchMatched(t *testing.T) {
+	d := colourTickets(t, trackerSource(), 100, 30)
 	d.press("/", "b", "i", "l", "l")
 	rows := strings.Split(d.screen(), "\n")
 	if !regexp.MustCompile(`\x1b\[[0-9;:]*4[;:m0-9]*`).MatchString(rows[1]) || !strings.Contains(ansi.Strip(rows[1]), "billing") {
@@ -428,40 +428,40 @@ func TestTicketsUnderlineWhatTheSearchMatched(t *testing.T) {
 	}
 }
 
-func TestTicketsUseBothColumnsOnWideTerminals(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerUseBothColumnsOnWideTerminals(t *testing.T) {
+	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: para(strings.Repeat("A long description goes on. ", 200))}
-	d := driveTickets(t, f, 160, 30)
+	d := driveTracker(t, f, 160, 30)
 	d.wants("A long description", "NEEDS ATTENTION", "WHERE IT IS")
-	narrow := driveTickets(t, f, 90, 30)
+	narrow := driveTracker(t, f, 90, 30)
 	narrow.refuses("A long description")
 }
 
-func TestTicketsKeepBlockersInViewWhileReading(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerKeepBlockersInViewWhileReading(t *testing.T) {
+	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: para(strings.Repeat("A long description goes on. ", 400))}
-	d := driveTickets(t, f, 160, 40)
+	d := driveTracker(t, f, 160, 40)
 	d.press("tab", "down", "down", "down")
 	d.wants("NEEDS ATTENTION")
 }
 
-func TestTicketsShowScrollPosition(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerShowScrollPosition(t *testing.T) {
+	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: para(strings.Repeat("A long description goes on. ", 400))}
-	d := driveTickets(t, f, 80, 24)
+	d := driveTracker(t, f, 80, 24)
 	d.wants("0%")
-	short := driveTickets(t, ticketsSource(), 160, 60)
+	short := driveTracker(t, trackerSource(), 160, 60)
 	short.refuses("0%")
 }
 
-func TestTicketsNestComments(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerNestComments(t *testing.T) {
+	f := trackerSource()
 	f.listing[0].Assignee = ""
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", CommentTotal: 3, Comments: []workfile.Comment{{
 		Author: "Alice", Body: para("Top level"),
 		Replies: []workfile.Comment{{Author: "Bob", Body: para("A reply"), Replies: []workfile.Comment{{Author: "Charlie", Body: para("A reply to it")}}}},
 	}}}
-	d := driveTickets(t, f, 100, 70)
+	d := driveTracker(t, f, 100, 70)
 	indent := func(text string) int {
 		for _, line := range strings.Split(d.pane(), "\n") {
 			if i := strings.Index(line, text); i >= 0 {
@@ -479,7 +479,7 @@ func TestTicketsNestComments(t *testing.T) {
 }
 
 func TestEachCommentIsABlockAndRepliesSitInside(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", CommentTotal: 3, Comments: []workfile.Comment{
 		{Author: "Alice", Body: para("First"), Replies: []workfile.Comment{{Author: "Bob", Body: para("A reply")}}},
 		{Author: "Charlie", Body: para("Second")},
@@ -527,15 +527,15 @@ func TestDeepRepliesKeepRoomOnNarrowTerminals(t *testing.T) {
 		deep = workfile.Comment{Author: "Bob", Body: para("nested"), Replies: []workfile.Comment{deep}}
 	}
 	for _, width := range []int{21, 40, 60} {
-		f := ticketsSource()
+		f := trackerSource()
 		f.details["APP-1"] = workfile.Detail{Key: "APP-1", CommentTotal: 9, Comments: []workfile.Comment{deep}}
-		d := driveTickets(t, f, width, 200)
+		d := driveTracker(t, f, width, 200)
 		d.wants("Charlie")
 	}
 }
 
 func TestEnterReadsTheTicketAndTabComesBack(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 80, 24)
+	d := driveTracker(t, trackerSource(), 80, 24)
 	d.press("enter")
 	if !d.m.onTicket {
 		t.Fatal("enter should read the ticket")
@@ -560,14 +560,14 @@ func TestEnterReadsTheTicketAndTabComesBack(t *testing.T) {
 	}
 }
 
-func TestTicketsFollowThePipeline(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerFollowThePipeline(t *testing.T) {
+	f := trackerSource()
 	byKey := func(key, state string) workfile.Listing {
 		return workfile.Listing{Key: key, Title: key, State: state, Status: state}
 	}
 	f.listing = []workfile.Listing{byKey("APP-9", "done"), byKey("APP-8", ""), byKey("APP-7", "review"), byKey("APP-6", "todo"), byKey("APP-5", "doing"), byKey("APP-4", "todo")}
 	want := []string{"APP-6", "APP-4", "APP-5", "APP-7", "APP-9", "APP-8"}
-	d := driveTickets(t, f, 80, 30)
+	d := driveTracker(t, f, 80, 30)
 	var got []string
 	for _, item := range d.m.list.Items() {
 		got = append(got, item.(ticketItem).Key)
@@ -575,7 +575,7 @@ func TestTicketsFollowThePipeline(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("%v", got)
 	}
-	_, out, _ := invoke(t, f, "tickets")
+	_, out, _ := invoke(t, f, "tracker")
 	at := -1
 	for _, key := range want {
 		i := strings.Index(out, key)
@@ -586,7 +586,7 @@ func TestTicketsFollowThePipeline(t *testing.T) {
 	}
 }
 
-func listKeys(d *ticketsDriver) string {
+func listKeys(d *trackerDriver) string {
 	var keys []string
 	for _, item := range d.m.list.VisibleItems() {
 		keys = append(keys, item.(ticketItem).Key)
@@ -595,8 +595,8 @@ func listKeys(d *ticketsDriver) string {
 }
 
 func TestViewsRunAllThenMeThenEachState(t *testing.T) {
-	f := ticketsSource()
-	d := driveTickets(t, f, 100, 30)
+	f := trackerSource()
+	d := driveTracker(t, f, 100, 30)
 	if listKeys(d) != "APP-1 APP-2 APP-3 APP-4" {
 		t.Fatalf("the default should show everything: %s", listKeys(d))
 	}
@@ -626,7 +626,7 @@ func TestViewsRunAllThenMeThenEachState(t *testing.T) {
 }
 
 func TestViewsMarkTheCurrentTabWithoutColour(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 100, 30)
+	d := driveTracker(t, trackerSource(), 100, 30)
 	d.wants("[All 4]")
 	d.press("right")
 	d.wants("[Assigned to me 1]")
@@ -634,7 +634,7 @@ func TestViewsMarkTheCurrentTabWithoutColour(t *testing.T) {
 }
 
 func TestViewsWorkFromTheTicketAndKeepItsFocus(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 100, 30)
+	d := driveTracker(t, trackerSource(), 100, 30)
 	d.press("enter", "right")
 	if !d.m.onTicket || listKeys(d) != "APP-2" {
 		t.Fatalf("%v %s", d.m.onTicket, listKeys(d))
@@ -642,7 +642,7 @@ func TestViewsWorkFromTheTicketAndKeepItsFocus(t *testing.T) {
 }
 
 func TestArrowsStayInTheSearchWhileTyping(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 100, 30)
+	d := driveTracker(t, trackerSource(), 100, 30)
 	d.press("/", "b", "right", "left")
 	if d.m.view != 0 {
 		t.Fatalf("the view moved to %d while typing", d.m.view)
@@ -650,9 +650,9 @@ func TestArrowsStayInTheSearchWhileTyping(t *testing.T) {
 }
 
 func TestSearchWorksInsideAView(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.listing[1].State = "review"
-	d := driveTickets(t, f, 100, 30)
+	d := driveTracker(t, f, 100, 30)
 	d.press("left", "left", "/", "c", "l", "e", "a", "r", "enter")
 	if listKeys(d) != "APP-3" {
 		t.Fatal(listKeys(d))
@@ -661,7 +661,7 @@ func TestSearchWorksInsideAView(t *testing.T) {
 }
 
 func TestViewsKeepTheCurrentTicketWhenItIsStillThere(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 100, 30)
+	d := driveTracker(t, trackerSource(), 100, 30)
 	d.press("down", "right")
 	if item, _ := d.m.selected(); item.Key != "APP-2" {
 		t.Fatalf("moved to %s", item.Key)
@@ -669,8 +669,8 @@ func TestViewsKeepTheCurrentTicketWhenItIsStillThere(t *testing.T) {
 }
 
 func TestMeAsksWhoYouAreOnlyWhenNeededAndOnce(t *testing.T) {
-	f := ticketsSource()
-	d := driveTickets(t, f, 100, 30)
+	f := trackerSource()
+	d := driveTracker(t, f, 100, 30)
 	if f.identities != 0 {
 		t.Fatal("nobody asked who you are yet")
 	}
@@ -681,9 +681,9 @@ func TestMeAsksWhoYouAreOnlyWhenNeededAndOnce(t *testing.T) {
 }
 
 func TestAnEmptyViewSaysSo(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.listing = f.listing[:1]
-	d := driveTickets(t, f, 100, 30)
+	d := driveTracker(t, f, 100, 30)
 	d.press("right")
 	d.wants("Nothing assigned to you")
 	d.press("left", "left")
@@ -691,16 +691,16 @@ func TestAnEmptyViewSaysSo(t *testing.T) {
 }
 
 func TestUnmappedTicketsShowOnlyInAll(t *testing.T) {
-	f := ticketsSource()
+	f := trackerSource()
 	f.listing[0].State = ""
-	d := driveTickets(t, f, 100, 30)
+	d := driveTracker(t, f, 100, 30)
 	d.wants("All 4", "Todo 0")
 }
 
-func TestTicketsSayWhenTheyCannotTellWhoYouAre(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerSayWhenTheyCannotTellWhoYouAre(t *testing.T) {
+	f := trackerSource()
 	f.identityErr = errors.New("provider returned HTTP 401")
-	d := driveTickets(t, f, 100, 30)
+	d := driveTracker(t, f, 100, 30)
 	d.press("right")
 	d.wants("Cannot tell who you are")
 	d.press("left")
@@ -715,7 +715,7 @@ func TestTicketsSayWhenTheyCannotTellWhoYouAre(t *testing.T) {
 }
 
 func TestAssignedToMeIsATabEvenWithOnlyMine(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 100, 30)
+	d := driveTracker(t, trackerSource(), 100, 30)
 	d.m.e.w.Settings.OnlyMine = true
 	d.press("right")
 	d.wants("[Assigned to me 1]")
@@ -725,18 +725,18 @@ func TestAssignedToMeIsATabEvenWithOnlyMine(t *testing.T) {
 }
 
 func TestAssignedToMeCanBeWhereYouStart(t *testing.T) {
-	d := driveWith(t, ticketsSource(), 100, 30, graphics{}, options{view: "me"})
+	d := driveWith(t, trackerSource(), 100, 30, graphics{}, options{view: "me"})
 	if listKeys(d) != "APP-2" {
 		t.Fatal(listKeys(d))
 	}
 	d.wants("[Assigned to me 1]")
-	_, out, _ := invoke(t, ticketsSource(), "tickets", "--view", "me")
+	_, out, _ := invoke(t, trackerSource(), "tracker", "--view", "me")
 	if !strings.Contains(out, "APP-2") || strings.Contains(out, "APP-1") {
 		t.Fatal(out)
 	}
-	f := ticketsSource()
+	f := trackerSource()
 	f.identityErr = errors.New("provider returned HTTP 401")
-	if code, _, errOut := invoke(t, f, "tickets", "--view", "me"); code != 2 || !strings.Contains(errOut, "401") {
+	if code, _, errOut := invoke(t, f, "tracker", "--view", "me"); code != 2 || !strings.Contains(errOut, "401") {
 		t.Fatalf("%d %q", code, errOut)
 	}
 	d = driveWith(t, f, 100, 30, graphics{}, options{view: "me"})
@@ -746,7 +746,7 @@ func TestAssignedToMeCanBeWhereYouStart(t *testing.T) {
 }
 
 func TestUnassignedTicketsAppearInAllAndTheirState(t *testing.T) {
-	d := driveTickets(t, ticketsSource(), 100, 30)
+	d := driveTracker(t, trackerSource(), 100, 30)
 	d.wants("Unassigned")
 	d.press("left", "left")
 	if listKeys(d) != "APP-3" {
@@ -756,44 +756,42 @@ func TestUnassignedTicketsAppearInAllAndTheirState(t *testing.T) {
 }
 
 func TestViewOptionPicksWhereYouStart(t *testing.T) {
-	d := driveWith(t, ticketsSource(), 100, 30, graphics{}, options{view: "review"})
+	d := driveWith(t, trackerSource(), 100, 30, graphics{}, options{view: "review"})
 	if listKeys(d) != "APP-3" {
 		t.Fatal(listKeys(d))
 	}
-	_, out, _ := invoke(t, ticketsSource(), "tickets", "--view", "todo")
+	_, out, _ := invoke(t, trackerSource(), "tracker", "--view", "todo")
 	if !strings.Contains(out, "APP-1") || strings.Contains(out, "APP-2") {
 		t.Fatal(out)
 	}
 	for _, view := range []string{"all", "me", "doing", "Done"} {
-		if code, _, errOut := invoke(t, ticketsSource(), "tickets", "--view", view); code != 0 {
+		if code, _, errOut := invoke(t, trackerSource(), "tracker", "--view", view); code != 0 {
 			t.Errorf("%s: %s", view, errOut)
 		}
 	}
-	code, _, errOut := invoke(t, ticketsSource(), "tickets", "--view", "sideways")
+	code, _, errOut := invoke(t, trackerSource(), "tracker", "--view", "sideways")
 	if code != 2 || !strings.Contains(errOut, "all, me, todo, doing, review, done") {
 		t.Fatalf("%d %q", code, errOut)
 	}
 }
 
-func TestTicketsAskTheTrackerForTheirScope(t *testing.T) {
-	f := ticketsSource()
-	if code, _, errOut := invoke(t, f, "tickets", "--scope", "project = EXAMPLE"); code != 0 {
-		t.Fatalf("%d %s", code, errOut)
-	}
-	if f.scope != "project = EXAMPLE" {
-		t.Fatal(f.scope)
+func TestTrackerRejectsScopeOption(t *testing.T) {
+	f := trackerSource()
+	code, _, errOut := invoke(t, f, "tracker", "--scope", "project = EXAMPLE")
+	if code != 2 || !strings.Contains(errOut, "unknown option --scope") {
+		t.Fatalf("%d %q", code, errOut)
 	}
 }
 
-func TestTicketsRunInARealProgram(t *testing.T) {
+func TestTrackerRunInARealProgram(t *testing.T) {
 	w, err := workfile.Load("../../example")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	e := env{view: view{out: io.Discard, width: 80, tint: &tintCache{}}, w: w, client: ticketsSource(), errOut: io.Discard}
-	m := newTicketsModel(ctx, e)
+	e := env{view: view{out: io.Discard, width: 80, tint: &tintCache{}}, w: w, client: trackerSource(), errOut: io.Discard}
+	m := newTrackerModel(ctx, e)
 	m.pause = 0
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithWindowSize(80, 24))
 	go func() {
@@ -810,29 +808,29 @@ func TestTicketsRunInARealProgram(t *testing.T) {
 	}
 }
 
-func TestTicketsShowFailedReadsInWords(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerShowFailedReadsInWords(t *testing.T) {
+	f := trackerSource()
 	f.detailErr = errors.New("provider returned HTTP 403")
-	d := driveTickets(t, f, 80, 40)
+	d := driveTracker(t, f, 80, 40)
 	d.wants("Cannot read this ticket", "HTTP 403", "doing")
 
-	f = ticketsSource()
+	f = trackerSource()
 	f.policyErr = errors.New("provider returned HTTP 500")
-	d = driveTickets(t, f, 80, 40)
+	d = driveTracker(t, f, 80, 40)
 	d.wants("Cannot check the policy", "HTTP 500", "Body of APP-1")
 }
 
-func TestTicketsListFailureEndsTheScreenWithTheReason(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerListFailureEndsTheScreenWithTheReason(t *testing.T) {
+	f := trackerSource()
 	f.listingErr = errors.New("cannot reach provider")
-	d := driveTickets(t, f, 80, 24)
+	d := driveTracker(t, f, 80, 24)
 	if !d.quit || d.m.fatal == nil {
 		t.Fatalf("quit %v, fatal %v", d.quit, d.m.fatal)
 	}
 }
 
-func TestTicketsTextCannotInjectEscapes(t *testing.T) {
-	f := ticketsSource()
+func TestTrackerTextCannotInjectEscapes(t *testing.T) {
+	f := trackerSource()
 	f.listing[0].Title = "Title \x1b]52;c;ZXZpbA==\x07 end"
 	f.listing[0].Assignee = "Alice\x1b[2J"
 	evil := "\x1b]0;owned\x07"
@@ -841,15 +839,15 @@ func TestTicketsTextCannotInjectEscapes(t *testing.T) {
 		{Kind: workfile.BlockImage, Name: "file" + evil + ".png"},
 		{Kind: workfile.BlockTable, Rows: [][]string{{"cell" + evil}}},
 	}, CommentTotal: 1, Comments: []workfile.Comment{{Author: "Bob" + evil, Body: para("reply" + evil)}}}
-	d := driveTickets(t, f, 100, 60)
+	d := driveTracker(t, f, 100, 60)
 	if strings.Contains(d.screen(), "\x1b") {
 		t.Fatalf("an escape reached the screen: %q", d.screen())
 	}
 	d.wants("body", "reply")
 }
 
-func TestTicketsPlainOutputHasTheSameFacts(t *testing.T) {
-	code, out, errOut := invoke(t, ticketsSource(), "tickets")
+func TestTrackerPlainOutputHasTheSameFacts(t *testing.T) {
+	code, out, errOut := invoke(t, trackerSource(), "tracker")
 	if code != 0 || errOut != "" {
 		t.Fatalf("%d %q", code, errOut)
 	}
@@ -861,19 +859,19 @@ func TestTicketsPlainOutputHasTheSameFacts(t *testing.T) {
 	if strings.Contains(out, "\x1b") {
 		t.Fatalf("escape in plain output: %q", out)
 	}
-	f := ticketsSource()
+	f := trackerSource()
 	f.listing = nil
-	if _, out, _ = invoke(t, f, "tickets"); !strings.Contains(out, "No tickets in your scope") {
+	if _, out, _ = invoke(t, f, "tracker"); !strings.Contains(out, "No tickets in your scope") {
 		t.Fatal(out)
 	}
 	f.listingErr = errors.New("cannot reach provider")
-	if code, _, errOut = invoke(t, f, "tickets"); code != 2 || !strings.Contains(errOut, "cannot reach provider") {
+	if code, _, errOut = invoke(t, f, "tracker"); code != 2 || !strings.Contains(errOut, "cannot reach provider") {
 		t.Fatalf("%d %q", code, errOut)
 	}
 }
 
-func TestTicketsTakesNoArguments(t *testing.T) {
-	for _, args := range [][]string{{"tickets", "APP-1"}, {"tickets", "--json"}, {"tickets", "--me"}, {"tickets", "--limit", "5"}, {"tickets", "--hide-done"}, {"status", "--scope", "x"}, {"health", "--view", "done"}} {
+func TestTrackerTakesNoArguments(t *testing.T) {
+	for _, args := range [][]string{{"tracker", "APP-1"}, {"tracker", "--json"}, {"tracker", "--me"}, {"tracker", "--limit", "5"}, {"tracker", "--hide-done"}, {"tracker", "--scope", "x"}, {"status", "--scope", "x"}, {"status", "--view", "done"}} {
 		if _, err := parse(args); err == nil {
 			t.Errorf("%v: want an error", args)
 		}

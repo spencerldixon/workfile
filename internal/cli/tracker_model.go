@@ -26,7 +26,7 @@ func (i ticketItem) FilterValue() string {
 	return i.Key + " " + i.Title + " " + i.Assignee + " " + i.Status
 }
 
-type ticketRow struct{ m *ticketsModel }
+type ticketRow struct{ m *trackerModel }
 
 func (ticketRow) Height() int                         { return 1 }
 func (ticketRow) Spacing() int                        { return 0 }
@@ -98,7 +98,7 @@ type ticketPicture struct {
 	width int
 }
 
-const cannotFindMe = "Cannot tell who you are. Check your connection with wf test."
+const cannotFindMe = "Cannot tell who you are. Check your connection with wf setup --test."
 
 // wideTickets is the width from which the ticket and Workfile's view sit side
 // by side.
@@ -108,10 +108,10 @@ type ticketKeys struct {
 	Move, View, Search, Read, Focus, Refresh, Open, Quit, Keep, Clear key.Binding
 }
 
-// ticketsModel is the `wf tickets` screen: a list of the scope above the
+// trackerModel is the `wf tracker` screen: a list of the scope above the
 // selected ticket. The list is read once. A ticket is read only after the
 // selection rests on it, and then kept for the session.
-type ticketsModel struct {
+type trackerModel struct {
 	ctx           context.Context
 	e             env
 	v             view
@@ -149,9 +149,9 @@ type ticketsModel struct {
 	now           func() time.Time
 }
 
-func newTicketsModel(ctx context.Context, e env) *ticketsModel {
+func newTrackerModel(ctx context.Context, e env) *trackerModel {
 	t := newTheme(e.view.color, e.view.laneBackground())
-	m := &ticketsModel{ctx: ctx, e: e, v: e.view, t: t, width: e.view.width, height: 24, reads: map[string]*ticketRead{}, counts: map[ticketView]int{}, images: map[string]*ticketPicture{}, titles: map[string]*ticketPicture{}, tried: map[string]bool{}, nextID: firstImageID, pause: 200 * time.Millisecond, now: time.Now, spin: spinner.New(spinner.WithSpinner(spinner.MiniDot)), pane: viewport.New(), side: viewport.New(), help: t.help()}
+	m := &trackerModel{ctx: ctx, e: e, v: e.view, t: t, width: e.view.width, height: 24, reads: map[string]*ticketRead{}, counts: map[ticketView]int{}, images: map[string]*ticketPicture{}, titles: map[string]*ticketPicture{}, tried: map[string]bool{}, nextID: firstImageID, pause: 200 * time.Millisecond, now: time.Now, spin: spinner.New(spinner.WithSpinner(spinner.MiniDot)), pane: viewport.New(), side: viewport.New(), help: t.help()}
 	m.open = func(target string) error { return openBrowser(ctx, target) }
 	m.keys = ticketKeys{
 		Move:    key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
@@ -181,10 +181,10 @@ func newTicketsModel(ctx context.Context, e env) *ticketsModel {
 	return m
 }
 
-func (m *ticketsModel) Init() tea.Cmd {
+func (m *trackerModel) Init() tea.Cmd {
 	e, ctx, wantsMe := m.e, m.ctx, m.shownView().me
 	return tea.Batch(m.startSpinner(), func() tea.Msg {
-		all, err := e.client.Listing(ctx, e.o.scope)
+		all, err := e.client.Listing(ctx, "")
 		if err != nil || !wantsMe {
 			return ticketListMsg{all: all, err: err}
 		}
@@ -193,7 +193,7 @@ func (m *ticketsModel) Init() tea.Cmd {
 	})
 }
 
-func (m *ticketsModel) startSpinner() tea.Cmd {
+func (m *trackerModel) startSpinner() tea.Cmd {
 	if m.spinning {
 		return nil
 	}
@@ -201,7 +201,7 @@ func (m *ticketsModel) startSpinner() tea.Cmd {
 	return m.spin.Tick
 }
 
-func (m *ticketsModel) busy() bool {
+func (m *trackerModel) busy() bool {
 	if !m.loaded {
 		return true
 	}
@@ -209,7 +209,7 @@ func (m *ticketsModel) busy() bool {
 	return r != nil && r.pending()
 }
 
-func (m *ticketsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(20, msg.Width), max(10, msg.Height)
@@ -279,7 +279,7 @@ func (m *ticketsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, m.updateList(msg)
 }
 
-func (m *ticketsModel) listed(msg ticketListMsg) tea.Cmd {
+func (m *trackerModel) listed(msg ticketListMsg) tea.Cmd {
 	if msg.err != nil {
 		m.fatal = msg.err
 		return tea.Quit
@@ -292,15 +292,15 @@ func (m *ticketsModel) listed(msg ticketListMsg) tea.Cmd {
 	return m.showTickets()
 }
 
-func (m *ticketsModel) views() []ticketView {
+func (m *trackerModel) views() []ticketView {
 	return ticketViews(m.e.w.Policy)
 }
 
-func (m *ticketsModel) shownView() ticketView { return m.views()[m.view] }
+func (m *trackerModel) shownView() ticketView { return m.views()[m.view] }
 
 // findMe asks who "me" is the first time Assigned to me needs it, and never if it
 // never does. A failed answer is asked again on the next visit.
-func (m *ticketsModel) findMe() tea.Cmd {
+func (m *trackerModel) findMe() tea.Cmd {
 	if !m.shownView().me || m.me != "" || m.findingMe {
 		return nil
 	}
@@ -313,7 +313,7 @@ func (m *ticketsModel) findMe() tea.Cmd {
 }
 
 // showTickets fills the list, staying on the current ticket if it is still there.
-func (m *ticketsModel) showTickets() tea.Cmd {
+func (m *trackerModel) showTickets() tea.Cmd {
 	shown := arrangeTickets(m.all, m.e.w.Policy, m.shownView(), m.me)
 	m.total = len(shown)
 	for _, view := range m.views() {
@@ -337,13 +337,13 @@ func (m *ticketsModel) showTickets() tea.Cmd {
 
 // updateList passes a message to the list, then follows the selection, which a
 // key or a search result may have moved.
-func (m *ticketsModel) updateList(msg tea.Msg) tea.Cmd {
+func (m *trackerModel) updateList(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return tea.Batch(cmd, m.follow())
 }
 
-func (m *ticketsModel) selected() (ticketItem, bool) {
+func (m *trackerModel) selected() (ticketItem, bool) {
 	item, ok := m.list.SelectedItem().(ticketItem)
 	return item, ok
 }
@@ -351,7 +351,7 @@ func (m *ticketsModel) selected() (ticketItem, bool) {
 // follow shows the selected ticket at once, with what is known, and waits for
 // the selection to rest before reading it, so moving down the list reads
 // nothing. A read still running for the ticket left behind is cancelled.
-func (m *ticketsModel) follow() tea.Cmd {
+func (m *trackerModel) follow() tea.Cmd {
 	item, ok := m.selected()
 	if item.Key == m.current {
 		return nil
@@ -375,7 +375,7 @@ func (m *ticketsModel) follow() tea.Cmd {
 
 // read starts the reads for one ticket: its text from the tracker, and the policy's
 // view of it. Each draws when it arrives.
-func (m *ticketsModel) read(ticket string) tea.Cmd {
+func (m *trackerModel) read(ticket string) tea.Cmd {
 	if m.reads[ticket] != nil {
 		return nil
 	}
@@ -409,7 +409,7 @@ func readPolicy(ctx context.Context, e env, ticket string) (workfile.Assessment,
 	return e.w.Assess(found[0]), nil
 }
 
-func (m *ticketsModel) key(msg tea.KeyPressMsg) tea.Cmd {
+func (m *trackerModel) key(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "ctrl+c" {
 		return m.quit()
 	}
@@ -474,14 +474,14 @@ func (m *ticketsModel) key(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 // quit frees the terminal's copies of the images on the way out.
-func (m *ticketsModel) quit() tea.Cmd {
+func (m *trackerModel) quit() tea.Cmd {
 	if held := m.forgetAll(); held != "" {
 		return tea.Sequence(tea.Raw(held), tea.Quit)
 	}
 	return tea.Quit
 }
 
-func (m *ticketsModel) forgetAll() string {
+func (m *trackerModel) forgetAll() string {
 	var b strings.Builder
 	for _, held := range []map[string]*ticketPicture{m.images, m.titles} {
 		for _, p := range held {
@@ -493,7 +493,7 @@ func (m *ticketsModel) forgetAll() string {
 
 // allocate gives the next image id. Ids run out at lastImageID and start again,
 // which drops the image that held the id, so it is read again if it comes back.
-func (m *ticketsModel) allocate() int {
+func (m *trackerModel) allocate() int {
 	id := m.nextID
 	m.nextID++
 	if m.nextID > lastImageID {
@@ -515,7 +515,7 @@ func (m *ticketsModel) allocate() int {
 
 // loadImages reads the images of one ticket, only when the terminal can show
 // them. An image that fails stays a named link.
-func (m *ticketsModel) loadImages(d workfile.Detail) tea.Cmd {
+func (m *trackerModel) loadImages(d workfile.Detail) tea.Cmd {
 	if !m.gfx.on {
 		return nil
 	}
@@ -547,7 +547,7 @@ func commentText(comments []workfile.Comment) []workfile.Block {
 	return blocks
 }
 
-func (m *ticketsModel) showImage(msg ticketImageMsg) tea.Cmd {
+func (m *trackerModel) showImage(msg ticketImageMsg) tea.Cmd {
 	if msg.err != nil || m.images[msg.attachment] != nil {
 		return nil
 	}
@@ -572,7 +572,7 @@ func sendPicture(img image.Image, p picture) tea.Cmd {
 
 // loadTitle draws the large title for a ticket, when the terminal can show it
 // and it is not drawn already for this width.
-func (m *ticketsModel) loadTitle(item ticketItem) tea.Cmd {
+func (m *trackerModel) loadTitle(item ticketItem) tea.Cmd {
 	width := m.textWidth()
 	if !m.gfx.on || !m.gfx.hasInk || item.Key == "" || width < minTitleWidth {
 		return nil
@@ -587,7 +587,7 @@ func (m *ticketsModel) loadTitle(item ticketItem) tea.Cmd {
 	}
 }
 
-func (m *ticketsModel) showTitle(msg ticketTitleMsg) tea.Cmd {
+func (m *trackerModel) showTitle(msg ticketTitleMsg) tea.Cmd {
 	if !msg.ok {
 		return nil
 	}
@@ -603,7 +603,7 @@ func (m *ticketsModel) showTitle(msg ticketTitleMsg) tea.Cmd {
 
 // resizeImages gives each image the cells it fills at the new width. The
 // terminal keeps the image itself, so only the placement changes.
-func (m *ticketsModel) resizeImages() tea.Cmd {
+func (m *trackerModel) resizeImages() tea.Cmd {
 	var b strings.Builder
 	for _, p := range m.images {
 		cols, rows := fitCells(p.size.X, p.size.Y, m.gfx, m.imageWidth())
@@ -620,7 +620,7 @@ func (m *ticketsModel) resizeImages() tea.Cmd {
 
 // layout gives the list the top half and the ticket the rest, edge to edge. The
 // header and the help line take one row each.
-func (m *ticketsModel) layout() {
+func (m *trackerModel) layout() {
 	rows := m.listRows()
 	left, right := m.columns()
 	m.list.SetSize(m.width, rows)
@@ -636,7 +636,7 @@ func (m *ticketsModel) layout() {
 // columns splits the ticket on wide terminals: its text at a comfortable
 // length, with the rest of the width for Workfile's view, which stays in sight
 // while the text scrolls. Narrow terminals stack them, so right is 0.
-func (m *ticketsModel) columns() (left, right int) {
+func (m *trackerModel) columns() (left, right int) {
 	if m.width < wideTickets {
 		return m.width, 0
 	}
@@ -647,7 +647,7 @@ func (m *ticketsModel) columns() (left, right int) {
 // listRows is the top half, or less when there are few tickets, so the room
 // goes to the ticket. It follows everything read, not the view or the search,
 // so the screen does not jump.
-func (m *ticketsModel) listRows() int {
+func (m *trackerModel) listRows() int {
 	half := max(3, (m.height-2)/2)
 	if len(m.all) > 0 {
 		return min(half, max(3, len(m.all)))
@@ -655,7 +655,7 @@ func (m *ticketsModel) listRows() int {
 	return half
 }
 
-func (m *ticketsModel) fill(top bool) {
+func (m *trackerModel) fill(top bool) {
 	main, side := m.ticketText()
 	m.pane.SetContent(main)
 	m.side.SetContent(side)
@@ -665,13 +665,13 @@ func (m *ticketsModel) fill(top bool) {
 	m.side.SetYOffset(m.pane.YOffset())
 }
 
-func (m *ticketsModel) View() tea.View {
+func (m *trackerModel) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	return v
 }
 
-func (m *ticketsModel) helpKeys() []key.Binding {
+func (m *trackerModel) helpKeys() []key.Binding {
 	if m.list.SettingFilter() {
 		return []key.Binding{m.keys.Keep, m.keys.Clear}
 	}

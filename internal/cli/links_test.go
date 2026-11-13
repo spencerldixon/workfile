@@ -19,11 +19,11 @@ func TestLinksAcrossViewsAndInstances(t *testing.T) {
 	done := ticket
 	done.State = "done"
 	for _, o := range []options{
-		{command: "status"},
+		{command: "status", me: true},
 		{command: "status", keys: []string{ticket.Key}},
 		{command: "status", me: true},
-		{command: "health", stage: ticket.State},
-		{command: "health", gate: "code_review"},
+		{command: "status", stage: ticket.State},
+		{command: "status", gate: "code_review"},
 	} {
 		for _, width := range []int{40, 60, 110} {
 			var out bytes.Buffer
@@ -32,11 +32,7 @@ func TestLinksAcrossViewsAndInstances(t *testing.T) {
 			if o.gate != "" {
 				shown = []workfile.Assessment{w.Assess(done)}
 			}
-			if o.command == "health" {
-				v.healthReport(w, shown, o)
-			} else {
-				v.statusReport(w, shown, o)
-			}
+			v.statusReport(w, shown, o)
 			text := out.String()
 			if !strings.Contains(text, "\x1b]8;;"+ticket.URL+"\x1b\\") {
 				t.Fatalf("missing ticket hyperlink for %+v at %d:\n%s", o, width, text)

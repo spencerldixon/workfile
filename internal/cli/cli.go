@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -14,53 +15,55 @@ import (
 	"workfile/internal/workfile"
 )
 
-const help = `workfile — clear expectations for how work moves
+// helpText is the text of wf --help, ending with what to do next from dir.
+func helpText(dir string) string {
+	return `wf - where your work really is, and what it needs
 
 Usage: wf <command> [options]
 
-  setup                 Connect providers and create a starter .workfile/
-  health [KEY ...]       Summarise policy health by gate and stage
-  status [KEY ...]       Show all stages, or the full picture for named tickets
-  tickets               Browse tickets in scope: read each one with what Workfile knows
-  check KEY --to STAGE   Ask whether a ticket may move to a stage now (exit 0 yes, 1 no)
-  lint                  Check the policy for mistakes and paths that skip a gate (exit 0 sound, 1 not)
-  test [PROVIDER ...]    Test all provider connections, or named instances
+  setup                       Connect your tools and write .workfile/
+  tracker                     Your tracker, scoped to the team: browse and read tickets
+  status [TICKET ...]         Where work is, and what it needs
+  check TICKET --to STAGE     May this ticket move now? (exit 0 yes, 1 no, 2 cannot tell)
+  lint                        Is the policy sound? Proves your invariants
 
-Options for tickets:
-  --view NAME           Start on all, me or a state in your policy (left and right to switch)
-  --scope QUERY         Replace the configured scope, in your tracker's own query language
+Options for status:
+  --me                        Your work: assigned to you, or PRs you opened or must review
+  --user NAME                 The same for someone in people.yml
+  --gate NAME                 Tickets failing this gate
+  --stage NAME                Tickets in this stage that are out of policy
+  --failing                   Only tickets that need attention
+  --limit N                   Check up to N tickets
+  --all                       Check every ticket in scope
+  --evidence                  Show the evidence for each requirement
 
-Filters for health and status:
-  --limit N             Check up to N tickets (default 25; health checks every ticket unless set)
-  --all                 Check every ticket in scope
-  --me                  Tickets assigned to you, or PRs you opened or must review
-  --user NAME           The same filter for someone in people.yml
-  --failing             Show only violations, blocked tickets, and errors
-
-Filters for health only (list the failing tickets):
-  --gate NAME           Tickets failing this gate
-  --stage NAME          Tickets in this stage that are out of policy
+Options for tracker:
+  --view all|me|STAGE         Start on this view (left and right to switch)
 
 Options:
-  --json                Emit a versioned machine-readable report (health/status/check/lint)
-  --evidence            Show observed evidence for each requirement (health/status)
-  --dir DIR             Find .workfile/ from DIR or its parents (default .)
-  --version             Print the installed version
-  -h, --help            Show this help
+  --test [NAME ...]           setup: test your connections, or the named ones
+  --json                      Machine-readable output (status, check, lint)
+  --dir DIR                   Find .workfile/ from DIR or its parents (default .)
+  --version                   Print the installed version
+  -h, --help                  Show this help
 
-Examples:
-  wf health
-  wf health --gate code_review --stage done
-  wf status --me
-  wf status APP-42
-  wf tickets --view me
-  wf check APP-42 --to done
-  wf lint
-  wf test github
+` + nextStep(dir) + "\n"
+}
 
-Output is for people by default. Use --json for scripts and agents.
-Set NO_COLOR to disable colour.
-`
+// nextStep is the closing line of the help: set up, or try status.
+func nextStep(dir string) string {
+	found, err := workfile.Find(dir)
+	if err != nil {
+		return "No .workfile/ here. Start with: wf setup"
+	}
+	shown := found
+	if abs, err := filepath.Abs(dir); err == nil {
+		if rel, err := filepath.Rel(abs, found); err == nil {
+			shown = rel
+		}
+	}
+	return "Using " + clean(shown) + ". Try: wf status --me"
+}
 
 type options struct {
 	command, dir, user, gate, stage string
@@ -71,16 +74,18 @@ type options struct {
 	limitSet                        bool
 	// check
 	to string
-	// tickets
-	scope, view string
+	// tracker
+	view string
+	// setup
+	test bool
+	// note is printed to errOut when an old command name was used.
+	note string
 }
-
-// listing is true when health names tickets instead of summarising.
-func (o options) listing() bool { return len(o.keys) > 0 || o.gate != "" || o.stage != "" }
 
 // limited is false when every ticket in scope is checked.
 func (o options) limited() bool {
-	return !o.all && len(o.keys) == 0 && (o.command != "health" || o.limitSet)
+	mode := o.statusMode()
+	return !o.all && len(o.keys) == 0 && ((mode != modeRollup && mode != modeListing) || o.limitSet)
 }
 
 type source interface {
@@ -110,19 +115,33 @@ type env struct {
 	client source
 	o      options
 	errOut io.Writer
+	// connect opens the providers of a workspace. A noWorkspace command that
+	// reads tickets, such as setup --test, calls it after loading one itself.
+	connect func(*workfile.Workspace) source
 }
 
 // commands is every wf command. To add one, write <name>.go with its command
 // value, list it here, and describe it in help.
 var commands = map[string]command{
 	"setup":   setupCommand,
-	"health":  healthCommand,
+	"tracker": trackerCommand,
 	"status":  statusCommand,
-	"tickets": ticketsCommand,
 	"check":   checkCommand,
 	"lint":    lintCommand,
-	"prove":   proveCommand, // temporary alias, replaced by the alias table
-	"test":    testCommand,
+}
+
+// alias keeps an old command name working for one release.
+type alias struct {
+	to   string
+	set  func(*options) // flags the old name implied
+	note string         // printed to errOut
+}
+
+var aliases = map[string]alias{
+	"health":  {to: "status", note: "health is now status"},
+	"test":    {to: "setup", set: func(o *options) { o.test = true }, note: "test is now setup --test"},
+	"prove":   {to: "lint", note: "prove is now lint"},
+	"tickets": {to: "tracker", note: "tickets is now tracker"},
 }
 
 func Run(ctx context.Context, args []string, out, errOut io.Writer, version string) int {
@@ -156,11 +175,14 @@ func run(ctx context.Context, args []string, out, errOut io.Writer, version stri
 		return 0
 	}
 	if o.help || o.command == "" {
-		fmt.Fprint(out, help)
+		fmt.Fprint(out, helpText(o.dir))
 		return 0
 	}
+	if o.note != "" {
+		fmt.Fprintf(errOut, "wf: %s. The old name will stop working in a later release.\n", o.note)
+	}
 	c := commands[o.command]
-	e := env{view: view, o: o, errOut: errOut}
+	e := env{view: view, o: o, errOut: errOut, connect: connect}
 	if !c.noWorkspace {
 		if e.w, err = workfile.Load(o.dir); err != nil {
 			return fail(err)
@@ -197,8 +219,8 @@ func parse(args []string) (options, error) {
 	fs.BoolVar(&o.help, "h", false, "")
 	fs.BoolVar(&o.version, "version", false, "")
 	fs.StringVar(&o.to, "to", "", "")
-	fs.StringVar(&o.scope, "scope", "", "")
 	fs.StringVar(&o.view, "view", "", "")
+	fs.BoolVar(&o.test, "test", false, "")
 	// The standard flag package stops at positional arguments; collect options first.
 	var flags, positionals []string
 	for i := 0; i < len(args); i++ {
@@ -247,6 +269,12 @@ func parse(args []string) (options, error) {
 	}
 	if o.command == "" {
 		return o, nil
+	}
+	if a, ok := aliases[o.command]; ok {
+		o.command, o.note = a.to, a.note
+		if a.set != nil {
+			a.set(&o)
+		}
 	}
 	c, ok := commands[o.command]
 	if !ok {

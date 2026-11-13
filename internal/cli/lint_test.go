@@ -141,7 +141,7 @@ func TestLintTakesNoTickets(t *testing.T) {
 	if code, _, errOut := invoke(t, &fakeSource{}, "lint", "--dir", t.TempDir()); code != 2 || !strings.Contains(errOut, "no .workfile/ found") {
 		t.Fatalf("%d %s", code, errOut)
 	}
-	if !slices.Contains(strings.Fields(help), "lint") {
+	if !slices.Contains(strings.Fields(helpText(".")), "lint") {
 		t.Fatal("help must list lint")
 	}
 }

@@ -59,7 +59,7 @@ func selected(a workfile.Assessment, o options) bool {
 			return false
 		}
 	}
-	if o.command == "health" && o.listing() && a.Ticket.Error == "" && !a.Violation() {
+	if o.statusMode() == modeListing && a.Ticket.Error == "" && !a.Violation() {
 		return false
 	}
 	return true

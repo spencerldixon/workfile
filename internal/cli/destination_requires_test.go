@@ -31,7 +31,7 @@ func TestDestinationRequirementsReachStatusJSONAndHealth(t *testing.T) {
 		}
 	}
 	f.tickets[0].State = "done"
-	code, out, errOut = invoke(t, f, "health", "--json", "--dir", "../../example/destination-requires")
+	code, out, errOut = invoke(t, f, "status", "--json", "--dir", "../../example/destination-requires")
 	if code != 0 || errOut != "" || json.Unmarshal([]byte(out), &report) != nil || report.Summary["in_policy"] != 1 {
 		t.Fatalf("shortcut was marked out of policy: %d %s", code, out)
 	}

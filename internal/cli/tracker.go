@@ -12,39 +12,39 @@ import (
 	"workfile/internal/workfile"
 )
 
-var ticketsCommand = command{
-	flags: []string{"dir", "scope", "view"},
+var trackerCommand = command{
+	flags: []string{"dir", "view"},
 	args: func(o options) error {
 		if len(o.keys) > 0 {
-			return errors.New("tickets takes no positional arguments; search for a ticket with / on the screen")
+			return errors.New("tracker takes no positional arguments; search for a ticket with / on the screen")
 		}
 		return nil
 	},
-	run: tickets,
+	run: tracker,
 }
 
-// tickets answers "what is this ticket, and what does it need?" It only reads:
+// tracker answers "what is this ticket, and what does it need?" It only reads:
 // the tracker's ticket, plus what the policy says about it. In a terminal it is
 // a Bubble Tea screen; piped, it prints a plain list.
-func tickets(ctx context.Context, e env) (int, error) {
+func tracker(ctx context.Context, e env) (int, error) {
 	v := e.view
 	view, err := pickView(e.o, e.w.Policy)
 	if err != nil {
 		return 2, err
 	}
 	if v.color && isTerminal(os.Stdin) && isTerminal(v.out) {
-		m := newTicketsModel(ctx, e)
+		m := newTrackerModel(ctx, e)
 		m.gfx = detectGraphics()
 		final, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(v.out)).Run()
 		if err != nil && ctx.Err() == nil {
 			return 2, err
 		}
-		if m, ok := final.(*ticketsModel); ok && m.fatal != nil {
+		if m, ok := final.(*trackerModel); ok && m.fatal != nil {
 			return 2, m.fatal
 		}
 		return 0, nil
 	}
-	all, err := e.client.Listing(ctx, e.o.scope)
+	all, err := e.client.Listing(ctx, "")
 	if err != nil {
 		return 2, err
 	}

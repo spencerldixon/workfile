@@ -118,7 +118,7 @@ func TestStatusPrintedIsPlainAndFits(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	for _, width := range []int{40, 60, 100} {
 		t.Setenv("COLUMNS", strconv.Itoa(width))
-		_, out, _ := invoke(t, boardFixture(), "status")
+		_, out, _ := invoke(t, bobsBoardFixture(), "status", "--user", "bob")
 		if strings.Contains(out, "\x1b") {
 			t.Fatalf("plain output has escapes: %q", out)
 		}

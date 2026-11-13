@@ -96,7 +96,7 @@ func invoke(t *testing.T, f *fakeSource, args ...string) (int, string, string) {
 }
 
 func TestOnlyThreeCommandsAndInvalidOptions(t *testing.T) {
-	for _, args := range [][]string{{"validate"}, {"providers"}, {"status", "--why"}, {"status", "--limit", "0"}, {"status", "--me", "--user", "bob"}, {"test", "--all"}, {"status", "../secret"}} {
+	for _, args := range [][]string{{"validate"}, {"providers"}, {"status", "--why"}, {"status", "--limit", "0"}, {"status", "--me", "--user", "bob"}, {"setup", "--all"}, {"status", "../secret"}} {
 		code, _, err := invoke(t, &fakeSource{}, args...)
 		if code != 2 || err == "" {
 			t.Fatalf("%v: %d %q", args, code, err)
@@ -115,17 +115,21 @@ func TestOnlyThreeCommandsAndInvalidOptions(t *testing.T) {
 
 func TestStatusIncludesCompletedTicketsAndHealthOnlyViolations(t *testing.T) {
 	f := &fakeSource{tickets: []workfile.Ticket{fixtureTicket("APP-1", "todo", "short"), fixtureTicket("APP-2", "done", "short")}}
-	code, out, _ := invoke(t, f, "status")
+	for i := range f.tickets {
+		f.tickets[i].Assignee = "example-bob-account-id"
+	}
+	code, out, _ := invoke(t, f, "status", "--user", "bob")
 	if code != 1 || !strings.Contains(out, "APP-1") || !strings.Contains(out, "APP-2") || !strings.Contains(out, "Needs work") || !strings.Contains(out, "Out of policy") {
 		t.Fatalf("%d\n%s", code, out)
 	}
-	code, out, _ = invoke(t, f, "health", "--stage", "done")
+	code, out, _ = invoke(t, f, "status", "--stage", "done")
 	if code != 1 || strings.Contains(out, "APP-1") || !strings.Contains(out, "APP-2") {
 		t.Fatalf("%d\n%s", code, out)
 	}
 	f.tickets = f.tickets[:1]
-	code, out, _ = invoke(t, f, "health")
-	if code != 0 || !strings.Contains(out, "in policy") || strings.Contains(out, "Gates") {
+	// A ticket that is only blocked still exits 1: status counts blocked work.
+	code, out, _ = invoke(t, f, "status")
+	if code != 1 || !strings.Contains(out, "in policy") || strings.Contains(out, "Gates") {
 		t.Fatalf("%d\n%s", code, out)
 	}
 }
@@ -139,11 +143,11 @@ func TestHealthSummaryIsInPipelineOrderWithPercentages(t *testing.T) {
 	for i := range 30 {
 		f.tickets = append(f.tickets, fixtureTicket(fmt.Sprintf("APP-%d", i+10), "todo", strings.Repeat("x", 120)))
 	}
-	code, out, _ := invoke(t, f, "health")
+	code, out, _ := invoke(t, f, "status")
 	if code != 1 || f.limit != 0 {
 		t.Fatalf("code %d, fetch limit %d (health checks everything by default)\n%s", code, f.limit, out)
 	}
-	for _, want := range []string{"2 of 34 tickets are out of policy", "34 tickets", "Gates", "Stages", "Description: at least 100 characters", "%", "wf health --gate"} {
+	for _, want := range []string{"2 of 34 tickets are out of policy", "34 tickets", "Gates", "Stages", "Description: at least 100 characters", "%", "wf status --gate"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q\n%s", want, out)
 		}
@@ -160,7 +164,7 @@ func TestHealthSummaryIsInPipelineOrderWithPercentages(t *testing.T) {
 		}
 		last = at
 	}
-	_, out, _ = invoke(t, f, "health", "--limit", "5")
+	_, out, _ = invoke(t, f, "status", "--limit", "5")
 	if f.limit != 5 || !strings.Contains(out, "sample") {
 		t.Fatalf("an explicit limit must be flagged as a sample (fetch limit %d)\n%s", f.limit, out)
 	}
@@ -168,15 +172,15 @@ func TestHealthSummaryIsInPipelineOrderWithPercentages(t *testing.T) {
 
 func TestHealthDrillDownFilters(t *testing.T) {
 	f := &fakeSource{tickets: []workfile.Ticket{fixtureTicket("APP-1", "todo", "short"), fixtureTicket("APP-2", "done", "short")}}
-	_, out, _ := invoke(t, f, "health", "--gate", "refinement")
+	_, out, _ := invoke(t, f, "status", "--gate", "refinement")
 	if !strings.Contains(out, "APP-2") || strings.Contains(out, "APP-1") || strings.Contains(out, "pull request:") {
 		t.Fatalf("%s", out)
 	}
-	_, out, _ = invoke(t, f, "health", "--gate", "code_review", "--stage", "done")
+	_, out, _ = invoke(t, f, "status", "--gate", "code_review", "--stage", "done")
 	if strings.Contains(out, "APP-2") {
 		t.Fatalf("APP-2 does not fail code_review:\n%s", out)
 	}
-	for _, args := range [][]string{{"health", "--gate", "nope"}, {"health", "--stage", "nope"}, {"status", "--gate", "refinement"}} {
+	for _, args := range [][]string{{"status", "--gate", "nope"}, {"status", "--stage", "nope"}} {
 		if code, _, err := invoke(t, f, args...); code != 2 || err == "" {
 			t.Fatalf("%v: %d %q", args, code, err)
 		}
@@ -231,12 +235,12 @@ func TestMeMatchesPRAuthorsAndRequestedReviewers(t *testing.T) {
 
 func TestConnectionsContinueAfterFailure(t *testing.T) {
 	f := &fakeSource{testErrors: map[string]error{"github": errors.New("token expired")}}
-	code, out, _ := invoke(t, f, "test")
-	if code != 2 || !slices.Equal(f.tested, []string{"github", "jira"}) || !strings.Contains(out, "token expired") || !strings.Contains(out, "✓ jira") {
+	code, out, _ := invoke(t, f, "setup", "--test")
+	if code != 1 || !slices.Equal(f.tested, []string{"github", "jira"}) || !strings.Contains(out, "token expired") || !strings.Contains(out, "✓ jira") {
 		t.Fatalf("%d %v %s", code, f.tested, out)
 	}
 	f.tested = nil
-	code, _, _ = invoke(t, f, "test", "jira")
+	code, _, _ = invoke(t, f, "setup", "--test", "jira")
 	if code != 0 || !slices.Equal(f.tested, []string{"jira"}) {
 		t.Fatal("named connection not respected")
 	}
@@ -245,7 +249,7 @@ func TestConnectionsContinueAfterFailure(t *testing.T) {
 func TestUnmappedTicketIsAnError(t *testing.T) {
 	tk := fixtureTicket("APP-42", "", "")
 	tk.Error = "Unmapped Jira status"
-	code, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "health")
+	code, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status")
 	if code != 2 || !strings.Contains(out, "1 more could not be checked") {
 		t.Fatalf("%d %s", code, out)
 	}
@@ -289,9 +293,19 @@ func boardFixture() *fakeSource {
 	return &fakeSource{tickets: []workfile.Ticket{fixtureTicket("APP-61", "todo", long), doing, review, fixtureTicket("APP-70", "done", "short")}}
 }
 
+// bobsBoardFixture is boardFixture with every ticket assigned to Bob, so his
+// own-work screen shows the whole board.
+func bobsBoardFixture() *fakeSource {
+	f := boardFixture()
+	for i := range f.tickets {
+		f.tickets[i].Assignee = "example-bob-account-id"
+	}
+	return f
+}
+
 func TestStatusGroupsTicketsByWhatToDo(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
-	_, out, _ := invoke(t, boardFixture(), "status")
+	_, out, _ := invoke(t, bobsBoardFixture(), "status", "--user", "bob")
 	last := -1
 	for _, want := range []string{"1 ticket can move on, 2 need work and 1 is out of policy.", "Ready to move", "APP-61", "Needs work", "Link at least 1 PR", "APP-57", "Out of policy", "APP-70"} {
 		at := strings.Index(out, want)
@@ -382,7 +396,7 @@ func TestLanesTintWhenTheTerminalAnswers(t *testing.T) {
 
 func TestGateReportShowsRulesAndStages(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
-	_, out, _ := invoke(t, boardFixture(), "health", "--gate", "refinement")
+	_, out, _ := invoke(t, boardFixture(), "status", "--gate", "refinement")
 	for _, want := range []string{"gate refinement", "REFINEMENT", "tickets that must pass this gate fail it", "Description: at least 100 characters", "WHERE THEY ARE", "DONE · 1 ticket"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q\n%s", want, out)
@@ -391,7 +405,7 @@ func TestGateReportShowsRulesAndStages(t *testing.T) {
 	if strings.Contains(out, "pull request:") {
 		t.Fatalf("only the named gate's reasons belong here\n%s", out)
 	}
-	_, out, _ = invoke(t, boardFixture(), "health", "--gate", "code_review")
+	_, out, _ = invoke(t, boardFixture(), "status", "--gate", "code_review")
 	if !strings.Contains(out, "✓ All") && !strings.Contains(out, "No ticket has to pass") {
 		t.Fatalf("a passing gate says so\n%s", out)
 	}
@@ -402,7 +416,7 @@ func TestBoardsFitNarrowTerminals(t *testing.T) {
 	t.Setenv("WORKFILE_CONFIG_FILE", t.TempDir()+"/absent.yml")
 	for _, width := range []string{"40", "60"} {
 		t.Setenv("COLUMNS", width)
-		for _, args := range [][]string{{"status"}, {"status", "--user", "bob"}, {"health", "--gate", "refinement"}, {"health", "--stage", "review"}, {"health"}} {
+		for _, args := range [][]string{{"status"}, {"status", "--user", "bob"}, {"status", "--gate", "refinement"}, {"status", "--stage", "review"}} {
 			_, out, _ := invoke(t, boardFixture(), args...)
 			for _, line := range strings.Split(out, "\n") {
 				if limit, _ := strconv.Atoi(width); runewidth.StringWidth(line) > limit {
@@ -423,7 +437,7 @@ func TestStatusWordsFixesLikeTheTicketView(t *testing.T) {
 	tk := fixtureTicket("APP-57", "done", "short")
 	tk.Title, tk.Assignee = "Improve account settings", "example-bob-account-id"
 	tk.Records = map[string][]workfile.Record{"github": {pr("api#31", 31), pr("api#18", 18)}}
-	_, board, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status")
+	_, board, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status", "--user", "bob")
 	_, single, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{tk}}, "status", "APP-57")
 	for _, fix := range []string{"Expand the description to at least 100 characters", "Get at least 1 approval"} {
 		if !strings.Contains(board, fix) || !strings.Contains(single, fix) {
@@ -439,8 +453,7 @@ func TestStatusWordsFixesLikeTheTicketView(t *testing.T) {
 
 func TestEveryCommandIsInHelpAndTakesItsOwnFlags(t *testing.T) {
 	for name, c := range commands {
-		// prove is a hidden alias for lint until the alias table replaces it.
-		if name != "prove" && !strings.Contains(help, "\n  "+name+" ") {
+		if !strings.Contains(helpText("."), "\n  "+name+" ") {
 			t.Errorf("%s is not described in help", name)
 		}
 		if c.run == nil {
@@ -453,7 +466,7 @@ func TestEveryCommandIsInHelpAndTakesItsOwnFlags(t *testing.T) {
 }
 
 func TestParseRejectsAnotherCommandsFlag(t *testing.T) {
-	for _, args := range [][]string{{"status", "--gate", "code_review"}, {"test", "--json"}, {"setup", "--me"}} {
+	for _, args := range [][]string{{"check", "--gate", "code_review"}, {"setup", "--json"}, {"lint", "--me"}} {
 		_, err := parse(args)
 		if err == nil || !strings.Contains(err.Error(), "is not an option for wf "+args[0]) {
 			t.Errorf("%v: %v", args, err)

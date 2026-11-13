@@ -12,7 +12,7 @@ import (
 	"workfile/internal/workfile"
 )
 
-func (m *ticketsModel) render() string {
+func (m *trackerModel) render() string {
 	lines := []string{m.header()}
 	rows := m.listRows()
 	list := m.listLines()
@@ -33,7 +33,7 @@ func (m *ticketsModel) render() string {
 
 // tab draws one view's name. The current one stands out by more than colour.
 // The Assigned to me count is left out until it is known who "me" is.
-func (m *ticketsModel) tab(view ticketView, counts bool) string {
+func (m *trackerModel) tab(view ticketView, counts bool) string {
 	label := view.label()
 	if counts && (!view.me || m.me != "") {
 		label += fmt.Sprintf(" %d", m.counts[view])
@@ -49,7 +49,7 @@ func (m *ticketsModel) tab(view ticketView, counts bool) string {
 
 // tabs fits the views into room. Narrow terminals drop the counts first, then
 // the other views, so the current one is always named.
-func (m *ticketsModel) tabs(room int) string {
+func (m *trackerModel) tabs(room int) string {
 	row := func(counts bool) string {
 		var tabs []string
 		for _, view := range m.views() {
@@ -68,7 +68,7 @@ func (m *ticketsModel) tabs(room int) string {
 
 // header says what the list holds: the views, the search, and how many tickets
 // of the view the search leaves. It runs the full width.
-func (m *ticketsModel) header() string {
+func (m *trackerModel) header() string {
 	right := ""
 	if m.loaded {
 		right = fmt.Sprintf("%d of %d", len(m.list.VisibleItems()), m.total)
@@ -101,7 +101,7 @@ func (m *ticketsModel) header() string {
 
 // footer is the keys, and how far through the ticket the reader is when it does
 // not all fit.
-func (m *ticketsModel) footer() string {
+func (m *trackerModel) footer() string {
 	right := ""
 	if m.pane.TotalLineCount() > m.pane.VisibleLineCount() {
 		right = fmt.Sprintf("%d%%", int(m.pane.ScrollPercent()*100))
@@ -117,7 +117,7 @@ func (m *ticketsModel) footer() string {
 	return ticketIndent + left + strings.Repeat(" ", max(1, gap)) + m.t.dim(right)
 }
 
-func (m *ticketsModel) listLines() []string {
+func (m *trackerModel) listLines() []string {
 	message := func(text string) []string { return fit(text, ticketIndent, ticketIndent, m.width-len(ticketIndent)) }
 	switch {
 	case !m.loaded:
@@ -133,7 +133,7 @@ func (m *ticketsModel) listLines() []string {
 }
 
 // emptyView says why a view has nothing in it.
-func (m *ticketsModel) emptyView() string {
+func (m *trackerModel) emptyView() string {
 	view := m.shownView()
 	switch {
 	case view.me && m.findingMe:
@@ -150,7 +150,7 @@ func (m *ticketsModel) emptyView() string {
 // room, and the status and assignee sit at the right edge. Narrow terminals drop
 // the assignee, then the status, so the key and title stay readable. The current
 // row is a bright bar while the list has focus and a soft one otherwise.
-func (m *ticketsModel) row(item ticketItem, selected bool, matches []int) string {
+func (m *trackerModel) row(item ticketItem, selected bool, matches []int) string {
 	const whoWidth = 16
 	margin := len(ticketIndent)
 	width := m.width - margin
@@ -212,7 +212,7 @@ func (m *ticketsModel) row(item ticketItem, selected bool, matches []int) string
 
 // paint styles text, underlining the characters a search matched. offset is
 // where text starts in the words the search looked at.
-func (m *ticketsModel) paint(text string, offset int, hits map[int]bool, st lipgloss.Style) string {
+func (m *trackerModel) paint(text string, offset int, hits map[int]bool, st lipgloss.Style) string {
 	if !m.t.color {
 		return text
 	}
@@ -245,13 +245,13 @@ func (m *ticketsModel) paint(text string, offset int, hits map[int]bool, st lipg
 const minCommentWidth = 24
 
 // textWidth is the room for text inside the ticket's panels.
-func (m *ticketsModel) textWidth() int {
+func (m *trackerModel) textWidth() int {
 	left, _ := m.columns()
 	return max(10, left-4)
 }
 
 // imageWidth leaves room for an image inside a comment or a reply.
-func (m *ticketsModel) imageWidth() int { return max(1, m.textWidth()-6) }
+func (m *trackerModel) imageWidth() int { return max(1, m.textWidth()-6) }
 
 // fit wraps styled text to width, breaking long words, and indents it.
 func fit(text, first, rest string, width int) []string {
@@ -285,7 +285,7 @@ func panelBlocks(all [][]string) []ticketBlock {
 
 // sections stacks blocks with a gap between them. Each panel runs to the right
 // edge of its column.
-func (m *ticketsModel) sections(all []ticketBlock, width int) string {
+func (m *trackerModel) sections(all []ticketBlock, width int) string {
 	var lines []string
 	for _, b := range all {
 		if len(b.lines) == 0 {
@@ -309,7 +309,7 @@ func (m *ticketsModel) sections(all []ticketBlock, width int) string {
 // ticketText is the bottom half, as the ticket's column and Workfile's. On a
 // narrow terminal both share one column, with blockers before the description so
 // the next action is on the first screen.
-func (m *ticketsModel) ticketText() (main, side string) {
+func (m *trackerModel) ticketText() (main, side string) {
 	item, ok := m.selected()
 	if !ok {
 		return "", ""
@@ -332,7 +332,7 @@ func (m *ticketsModel) ticketText() (main, side string) {
 }
 
 // ticketBody is the ticket's own text, in the tracker's words.
-func (m *ticketsModel) ticketBody(r *ticketRead) []ticketBlock {
+func (m *trackerModel) ticketBody(r *ticketRead) []ticketBlock {
 	width := m.textWidth()
 	switch {
 	case r == nil || !r.detailDone():
@@ -345,7 +345,7 @@ func (m *ticketsModel) ticketBody(r *ticketRead) []ticketBlock {
 
 // policy is Workfile's view of the ticket: where it is and what it needs, then
 // its PRs and next moves.
-func (m *ticketsModel) policy(r *ticketRead, panel int) (lead, tail [][]string) {
+func (m *trackerModel) policy(r *ticketRead, panel int) (lead, tail [][]string) {
 	width := max(10, panel-4)
 	switch {
 	case r == nil || !r.policyDone():
@@ -361,7 +361,7 @@ func (m *ticketsModel) policy(r *ticketRead, panel int) (lead, tail [][]string) 
 	return [][]string{t.track(), t.attention()}, [][]string{t.pullRequests(), t.nextMoves()}
 }
 
-func (m *ticketsModel) identity(item ticketItem) []string {
+func (m *trackerModel) identity(item ticketItem) []string {
 	width := m.textWidth()
 	var facts string
 	for _, fact := range []string{item.Type, item.Status, assigneeName(item.Listing)} {
@@ -380,7 +380,7 @@ func (m *ticketsModel) identity(item ticketItem) []string {
 	return append(lines, fit(m.t.bold(clean(item.Title)), "", "", width)...)
 }
 
-func (m *ticketsModel) body(d workfile.Detail) []string {
+func (m *trackerModel) body(d workfile.Detail) []string {
 	if len(d.Body) == 0 {
 		return []string{m.t.dim("No description.")}
 	}
@@ -388,7 +388,7 @@ func (m *ticketsModel) body(d workfile.Detail) []string {
 }
 
 // comments is a heading, then a block for each comment.
-func (m *ticketsModel) comments(d workfile.Detail) []ticketBlock {
+func (m *trackerModel) comments(d workfile.Detail) []ticketBlock {
 	if len(d.Comments) == 0 {
 		return []ticketBlock{{lines: []string{m.t.dim("No comments.")}}}
 	}
@@ -413,7 +413,7 @@ func countComments(comments []workfile.Comment) int {
 
 // comment is one comment's block, then a block for each reply, indented so a
 // thread reads at a glance. Deep threads stop indenting, so the text keeps room.
-func (m *ticketsModel) comment(c workfile.Comment, depth int) []ticketBlock {
+func (m *trackerModel) comment(c workfile.Comment, depth int) []ticketBlock {
 	left, _ := m.columns()
 	indent := max(0, min(min(depth, 4)*3, left-minCommentWidth))
 	width := max(10, left-indent-4)
@@ -433,7 +433,7 @@ func (m *ticketsModel) comment(c workfile.Comment, depth int) []ticketBlock {
 
 // blocks draws a ticket's rich text, with a blank line between blocks. Items of
 // one list stay together.
-func (m *ticketsModel) blocks(blocks []workfile.Block, width int) []string {
+func (m *trackerModel) blocks(blocks []workfile.Block, width int) []string {
 	var lines []string
 	for i, b := range blocks {
 		if i > 0 && !(b.Kind == workfile.BlockList && blocks[i-1].Kind == workfile.BlockList) {
@@ -444,7 +444,7 @@ func (m *ticketsModel) blocks(blocks []workfile.Block, width int) []string {
 	return lines
 }
 
-func (m *ticketsModel) block(b workfile.Block, width int) []string {
+func (m *trackerModel) block(b workfile.Block, width int) []string {
 	indent := ""
 	if b.Quoted {
 		indent = "  "
@@ -492,12 +492,12 @@ func (m *ticketsModel) block(b workfile.Block, width int) []string {
 	return fit(text, indent, indent, width)
 }
 
-func (m *ticketsModel) plain(spans []workfile.Span) string {
+func (m *trackerModel) plain(spans []workfile.Span) string {
 	return strings.ReplaceAll(m.plainLines(spans), "\n", " ")
 }
 
 // plainLines is the text of spans, safe to draw, keeping its line breaks.
-func (m *ticketsModel) plainLines(spans []workfile.Span) string {
+func (m *trackerModel) plainLines(spans []workfile.Span) string {
 	var b strings.Builder
 	for _, s := range spans {
 		parts := strings.Split(s.Text, "\n")
@@ -513,7 +513,7 @@ func (m *ticketsModel) plainLines(spans []workfile.Span) string {
 
 // spans styles rich text. Every piece goes through clean, and view.link allows
 // only safe web addresses, so ticket text cannot reach the terminal raw.
-func (m *ticketsModel) spans(spans []workfile.Span) string {
+func (m *trackerModel) spans(spans []workfile.Span) string {
 	var b strings.Builder
 	for _, s := range spans {
 		for i, part := range strings.Split(s.Text, "\n") {
@@ -526,7 +526,7 @@ func (m *ticketsModel) spans(spans []workfile.Span) string {
 	return b.String()
 }
 
-func (m *ticketsModel) span(s workfile.Span, text string) string {
+func (m *trackerModel) span(s workfile.Span, text string) string {
 	if text == "" {
 		return ""
 	}

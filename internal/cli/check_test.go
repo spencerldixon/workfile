@@ -38,7 +38,7 @@ func TestParseNewCommands(t *testing.T) {
 	for _, args := range [][]string{
 		{"check", "APP-1"}, {"check", "--to", "done"}, {"check", "APP-1", "APP-2", "--to", "done"}, {"check", "APP-1", "--to", "done", "--me"},
 		{"watch", "--once"}, {"status", "--once"}, {"status", "--dry-run"},
-		{"health", "--to", "done"},
+		{"status", "--to", "done"},
 	} {
 		if _, err := parse(args); err == nil {
 			t.Errorf("%v: want an error", args)

@@ -35,7 +35,7 @@ func newHealthScreen(v view, w *workfile.Workspace, all []workfile.Assessment, o
 // interactiveHealth reports whether health can take over the terminal: a
 // summary, with colour, and a person at the keyboard.
 func interactiveHealth(v view, o options, all []workfile.Assessment) bool {
-	return !o.listing() && !o.evidence && len(all) > 0 && v.color && isTerminal(os.Stdin) && isTerminal(v.out)
+	return o.statusMode() == modeRollup && !o.evidence && len(all) > 0 && v.color && isTerminal(os.Stdin) && isTerminal(v.out)
 }
 
 // exploreHealth runs the interactive screen until the person quits.
@@ -51,7 +51,7 @@ func exploreHealth(ctx context.Context, v view, w *workfile.Workspace, all []wor
 // header is the top line: the command on the left, how much was checked on
 // the right.
 func (h healthScreen) header(width int) string {
-	left := h.t.bold("workfile") + h.t.dim(" health")
+	left := h.t.bold("workfile") + h.t.dim(" status")
 	tag := quantity(h.r.Checked+h.r.Unchecked, "ticket", "tickets")
 	gap := width - lipgloss.Width(left) - runewidth.StringWidth(tag)
 	if gap < 2 {
@@ -235,7 +235,7 @@ func (h healthScreen) printed() string {
 
 	out += panels(h.t, h.panelWidth(), [][]string{gates, stages})
 	if g := h.worstGate(); g != "" {
-		out += ticketIndent + h.t.dim("Next  ") + "wf health --gate " + g + "\n\n"
+		out += ticketIndent + h.t.dim("Next  ") + "wf status --gate " + g + "\n\n"
 	}
 	return out
 }
@@ -703,7 +703,7 @@ func (v view) gateBoxes(w *workfile.Workspace, all []workfile.Assessment, gate s
 }
 
 func (v view) healthList(w *workfile.Workspace, all []workfile.Assessment, o options) {
-	name := "health"
+	name := "status"
 	if o.gate != "" {
 		name += " · gate " + human(o.gate)
 	}

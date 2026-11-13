@@ -42,7 +42,7 @@ func TestCompleteKeysRejectsJunk(t *testing.T) {
 }
 
 func TestBadKeyIsRejectedBeforeAnyProviderCall(t *testing.T) {
-	for _, args := range [][]string{{"status", "27x13"}, {"health", "27x13"}, {"check", "27x13", "--to", "done"}} {
+	for _, args := range [][]string{{"status", "27x13"}, {"check", "27x13", "--to", "done"}} {
 		f := &fakeSource{}
 		code, _, errOut := invoke(t, f, args...)
 		if code != 2 || !strings.Contains(errOut, "is not a ticket key") || f.keys != nil {

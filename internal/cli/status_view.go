@@ -36,7 +36,7 @@ func newStatusScreen(v view, w *workfile.Workspace, all []workfile.Assessment, o
 // interactiveStatus reports whether status can take over the terminal: the
 // board, with colour, and a person at the keyboard.
 func interactiveStatus(v view, o options, all []workfile.Assessment) bool {
-	return len(o.keys) == 0 && !o.evidence && len(all) > 0 && v.color && isTerminal(os.Stdin) && isTerminal(v.out)
+	return o.statusMode() == modeMine && !o.evidence && len(all) > 0 && v.color && isTerminal(os.Stdin) && isTerminal(v.out)
 }
 
 // exploreStatus runs the interactive screen until the person quits. who is

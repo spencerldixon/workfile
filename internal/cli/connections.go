@@ -6,10 +6,16 @@ import (
 	"workfile/internal/workfile"
 )
 
-var testCommand = command{flags: []string{"dir"}, run: testConnections}
-
+// testConnections is wf setup --test: try each connection, or the named ones.
+// Exit 0 when every connection works, 1 when one fails, and 2 when the
+// workspace cannot be loaded or a name is unknown.
 func testConnections(ctx context.Context, e env) (int, error) {
-	v, w, names := e.view, e.w, e.o.keys
+	v, names := e.view, e.o.keys
+	w, err := workfile.Load(e.o.dir)
+	if err != nil {
+		return 2, err
+	}
+	client := e.connect(w)
 	if len(names) == 0 {
 		names = workfile.SortedKeys(w.Providers)
 	}
@@ -22,11 +28,11 @@ func testConnections(ctx context.Context, e env) (int, error) {
 	v.heading("connections")
 	code := 0
 	for _, name := range names {
-		detail, err := e.client.Test(ctx, name)
+		detail, err := client.Test(ctx, name)
 		if err != nil {
 			v.line("  " + v.paint("31", "✗ "+name))
 			v.wrap(err.Error(), "    ")
-			code = 2
+			code = 1
 		} else {
 			v.line("  " + v.paint("32", "✓ "+name))
 			v.wrap(detail, "    ")

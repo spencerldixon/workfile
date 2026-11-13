@@ -24,17 +24,6 @@ var lintCommand = command{
 	run:         lint,
 }
 
-// proveCommand is a temporary alias for lint, replaced by the alias table.
-var proveCommand = command{
-	flags:       lintCommand.flags,
-	args:        lintCommand.args,
-	noWorkspace: true,
-	run: func(ctx context.Context, e env) (int, error) {
-		fmt.Fprintln(e.errOut, "wf: prove is now lint. The old name will stop working in a later release.")
-		return lint(ctx, e)
-	},
-}
-
 // lint checks the policy itself, not tickets. It reports problems that stop
 // the policy loading, plain mistakes, and then answers: which gates is a
 // ticket in each stage sure to have passed, and do the invariants in

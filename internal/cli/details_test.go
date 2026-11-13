@@ -139,7 +139,7 @@ func TestUnassessedPRsNeverClaimGatePassOrMergeReadiness(t *testing.T) {
 }
 func TestOverviewExplainsEveryUnmetRequirementWithoutFlags(t *testing.T) {
 	_, ticket := detailFixture(t)
-	code, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{ticket}}, "status")
+	code, out, _ := invoke(t, &fakeSource{tickets: []workfile.Ticket{ticket}}, "status", "APP-42")
 	if code != 1 {
 		t.Fatal(code)
 	}

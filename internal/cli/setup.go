@@ -26,15 +26,20 @@ type setupSource interface {
 }
 
 var setupCommand = command{
-	flags: []string{"dir"},
+	flags: []string{"dir", "test"},
 	args: func(o options) error {
-		if len(o.keys) > 0 {
-			return errors.New("setup takes no positional arguments; use --dir to choose a folder")
+		if len(o.keys) > 0 && !o.test {
+			return errors.New("setup takes no positional arguments; use --dir to choose a folder, or --test to name connections")
 		}
 		return nil
 	},
 	noWorkspace: true,
-	run:         func(ctx context.Context, e env) (int, error) { return 0, setup(ctx, e.view, e.o) },
+	run: func(ctx context.Context, e env) (int, error) {
+		if e.o.test {
+			return testConnections(ctx, e)
+		}
+		return 0, setup(ctx, e.view, e.o)
+	},
 }
 
 // setup runs the interactive setup screens. The terminal's background is read
