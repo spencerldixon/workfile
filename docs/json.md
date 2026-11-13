@@ -152,14 +152,12 @@ check again before you move anything.
 | --- | --- |
 | `schema_version` | Currently `1`. |
 | `command` | `lint`. |
-| `policy_hash`, `exit_code` | As in reports. `exit_code` is `1` when there is a problem or an invariant can be skipped. `policy_hash` is empty when the policy did not load. |
+| `policy_hash`, `exit_code` | As in reports. `exit_code` is `1` when there is a problem. Gaps do not change it. `policy_hash` is empty when the policy did not load. |
 | `problems` | Mistakes that stop the policy loading. Always present, maybe empty. Each has `rule`, `severity` (`error`) and `message`. |
-| `warnings` | Plain mistakes in a valid policy, such as `unused-gate` and `no-invariants`. Always present, maybe empty. Each has `rule`, `severity` (`warning`) and `message`. |
-| `invariants` | One entry for each gate under `invariants:`, in pipeline order, then the order listed. Each has `stage`, `gate` and `holds`. |
-| `invariants[].bypass` | When it does not hold: the shortest forward path that reaches `stage` without `gate`, as moves with `from`, `to` and `requires`. Missing when the stage is where tickets start. |
-| `invariants[].fixes` | Moves on that path where requiring `gate` would close every bypass. Missing when no single move does. |
+| `warnings` | Plain mistakes in a valid policy, such as `unused-gate`. Always present, maybe empty. Each has `rule`, `severity` (`warning`) and `message`. |
+| `gaps` | A gate asked for on some moves into a stage but skippable on another. Always present, maybe empty. Each has `stage`, `gate`, `guarded` (the moves that require it) and `open` (the moves that skip it), as moves with `from`, `to` and `requires`. |
 | `guarantees` | One entry per stage in pipeline order: `stage`, and `gates` every forward path to it passes. |
 
 ```sh
-wf lint --json || exit 1   # fail CI when a path skips a gate
+wf lint --json || exit 1   # fail CI when the policy has a problem
 ```

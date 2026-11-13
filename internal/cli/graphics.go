@@ -72,10 +72,18 @@ var terminalGraphics = func() []byte { return askTerminal(graphicsQuery, deviceR
 
 // detectGraphics asks once, before Bubble Tea takes over the terminal.
 // WORKFILE_GRAPHICS=off turns images off, for a terminal that says it can draw
-// them but does not.
+// them but does not. WORKFILE_GRAPHICS=on turns them on for one that can but
+// does not say so.
 func detectGraphics() graphics {
-	if strings.EqualFold(os.Getenv("WORKFILE_GRAPHICS"), "off") {
+	switch strings.ToLower(os.Getenv("WORKFILE_GRAPHICS")) {
+	case "off":
 		return graphics{}
+	case "on":
+		// For a terminal that can draw images but does not answer the query, or
+		// answers too slowly. Anything it did report, such as the cell size, is kept.
+		g := parseGraphics(append([]byte("\x1b_Gi=31;OK\x1b\\"), terminalGraphics()...))
+		g.on = true
+		return g
 	}
 	return parseGraphics(terminalGraphics())
 }

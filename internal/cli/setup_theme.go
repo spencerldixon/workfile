@@ -62,6 +62,9 @@ func (t theme) good(s string) string {
 func (t theme) bad(s string) string {
 	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Foreground(lipgloss.ANSIColor(1)) })
 }
+func (t theme) warn(s string) string {
+	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Foreground(lipgloss.ANSIColor(3)) })
+}
 func (t theme) accent(s string) string {
 	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Bold(true).Foreground(lipgloss.ANSIColor(6)) })
 }

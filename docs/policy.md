@@ -150,22 +150,27 @@ entry gates and any gate named on the return.
 `wf status` lists gates in the order they first appear along your workflow,
 starting from the first stage.
 
-## Invariants: what must always be true
+## `any`: a gate on every move into a stage
 
-Because any one path is enough, a gate on one path promises nothing about the
-others. List what must hold on **every** path under `invariants`, as a stage and
-the gates every forward path to it must pass:
+Because any one route is enough, a gate on one route promises nothing about the
+others. To require a gate on **every** forward move into a stage, wherever it
+starts, use the `any` entry:
 
 ```yaml
-invariants:
-  done: [code_review, merged]
-  release: [code_review]
+transitions:
+  any:
+    to: [queued, done]
+    requires: [code_review]
 ```
 
-`wf lint` checks them, and shows the path that skips a gate when one does. See
-[Lint](usage.md#lint-is-the-policy-sound). Invariants do not
-change how tickets are checked, and they are not part of the policy hash. Each
-stage and gate must exist, and each gate is listed once.
+`any` adds the gates to each existing forward move into the listed stages. It
+does not create moves, and it does not change returns. `any` is not a stage, so
+you cannot name a stage `any`, and it only takes `to` and `requires`. Each stage
+and gate must exist.
+
+`wf lint` lists gates that some routes into a stage skip as possible gaps, and
+`any` is the way to close them. See
+[Lint](usage.md#lint-is-the-policy-sound).
 
 ## Rules
 

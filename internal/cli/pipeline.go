@@ -119,8 +119,12 @@ func (v view) pipeline(p workfile.Policy, a workfile.Assessment) []row {
 	if len(p.States) == 0 {
 		return nil
 	}
-	labels := v.pipelineLabels(p, a)
-	edges := pipelineEdges(p, a)
+	return v.pipelineRows(p, a, v.pipelineLabels(p, a), pipelineEdges(p, a))
+}
+
+// pipelineRows draws the chain, shortcuts and returns for labels and edges the
+// caller has already styled. a only supplies the current stage, if any.
+func (v view) pipelineRows(p workfile.Policy, a workfile.Assessment, labels []cell, edges []pipelineEdge) []row {
 	for _, gap := range []int{5, 3, 1} {
 		var chain row
 		anchors := make([]int, len(labels))

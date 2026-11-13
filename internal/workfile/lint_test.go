@@ -9,14 +9,6 @@ import (
 	"testing"
 )
 
-func moves(path []Move) []string {
-	var names []string
-	for _, m := range path {
-		names = append(names, m.From+"→"+m.To)
-	}
-	return names
-}
-
 func TestGuaranteesKeepOnlyGatesOnEveryPath(t *testing.T) {
 	g := branching(t).Policy.Guarantees()
 	reviewed := []string{"refinement", "linked_pull_requests", "risk_assessment"}
@@ -41,99 +33,122 @@ func TestGuaranteesKeepOnlyGatesOnEveryPath(t *testing.T) {
 	}
 }
 
-func TestProveFindsTheShortestBypassAndTheMovesThatCloseIt(t *testing.T) {
-	p := branching(t).Policy
-	p.Invariants = map[string][]string{"done": {"code_review", "merged"}, "qa": {"code_review"}}
-	results := p.Prove()
-	if len(results) != 3 {
-		t.Fatalf("got %d results", len(results))
-	}
-	// Results follow the pipeline: qa before done, then the listed gate order.
-	if r := results[0]; r.Stage != "qa" || !r.Holds || r.Bypass != nil {
-		t.Fatalf("qa: %+v", r)
-	}
-	broken := results[1]
-	if broken.Stage != "done" || broken.Gate != "code_review" || broken.Holds {
-		t.Fatalf("done: %+v", broken)
-	}
-	want := []string{"intake→triage", "triage→discovery", "discovery→ready", "ready→doing", "doing→review", "review→security", "security→release", "release→done"}
-	if got := moves(broken.Bypass); !slices.Equal(got, want) {
-		t.Fatalf("bypass %v", got)
-	}
-	if got := broken.Bypass[5].Requires; !slices.Equal(got, []string{"threat_model"}) {
-		t.Fatalf("review→security requires %v", got)
-	}
-	// review→done and release→done also lie on reviewed paths, so requiring
-	// code review there would be a second review, not a fix.
-	if got := moves(broken.Fixes); !slices.Equal(got, []string{"review→security", "security→release"}) {
-		t.Fatalf("fixes %v", got)
-	}
-	if r := results[2]; r.Gate != "merged" || !r.Holds {
-		t.Fatalf("merged: %+v", r)
-	}
-}
-
-func TestProveSuggestsNoSingleFixForSeparateBypasses(t *testing.T) {
+func TestGapsFindGatesSomeRoutesSkip(t *testing.T) {
 	p := Policy{
 		States: []string{"todo", "fast", "slow", "done"},
 		Transitions: map[string]Transition{
-			"todo": {Routes: map[string][]string{"fast": nil, "slow": nil, "done": {"review"}}},
-			"fast": {To: []string{"done"}},
+			"todo": {Routes: map[string][]string{"fast": nil, "slow": nil}},
+			"fast": {To: []string{"done"}, Requires: []string{"review"}},
 			"slow": {To: []string{"done"}},
 			"done": {End: true},
 		},
-		Gates:      map[string][]Rule{"review": nil},
-		Invariants: map[string][]string{"done": {"review"}},
+		Gates: map[string][]Rule{"review": nil},
 	}
-	r := p.Prove()[0]
-	if r.Holds || !slices.Equal(moves(r.Bypass), []string{"todo→fast", "fast→done"}) || r.Fixes != nil {
-		t.Fatalf("%+v", r)
+	gaps := p.Gaps()
+	if len(gaps) != 1 || gaps[0].Stage != "done" || gaps[0].Gate != "review" ||
+		len(gaps[0].Guarded) != 1 || gaps[0].Guarded[0].From != "fast" ||
+		len(gaps[0].Open) != 1 || gaps[0].Open[0].From != "slow" {
+		t.Fatalf("%+v", gaps)
 	}
-	// Making both ways round require it closes the hole.
-	p.Transitions["fast"] = Transition{To: []string{"done"}, Requires: []string{"review"}}
+	// Requiring it on every move into done closes it.
 	p.Transitions["slow"] = Transition{To: []string{"done"}, Requires: []string{"review"}}
-	if r := p.Prove()[0]; !r.Holds {
-		t.Fatalf("%+v", r)
+	if gaps := p.Gaps(); len(gaps) != 0 {
+		t.Fatalf("%+v", gaps)
+	}
+	// A gate passed earlier is not skipped later.
+	p.Transitions["todo"] = Transition{Routes: map[string][]string{"fast": {"review"}, "slow": {"review"}}}
+	p.Transitions["fast"] = Transition{To: []string{"done"}}
+	p.Transitions["slow"] = Transition{To: []string{"done"}}
+	if gaps := p.Gaps(); len(gaps) != 0 {
+		t.Fatalf("%+v", gaps)
 	}
 }
 
-func TestTicketsStartBeforeAnyGate(t *testing.T) {
-	p := branching(t).Policy
-	p.Invariants = map[string][]string{"intake": {"refinement"}}
-	r := p.Prove()[0]
-	if r.Holds || len(r.Bypass) != 0 || r.Bypass == nil {
-		t.Fatalf("the first stage needs an empty, non-nil bypass: %+v", r)
-	}
-}
-
-func TestInvariantsAreCheckedAndLeftOutOfTheHash(t *testing.T) {
+func TestAnyAddsGatesToEveryForwardMoveIntoTheStage(t *testing.T) {
 	w := branching(t)
-	before := w.PolicyHash()
-	w.Policy.Invariants = map[string][]string{"done": {"code_review"}}
+	w.Policy.Transitions[AnyStage] = Transition{To: []string{"done"}, Requires: []string{"code_review"}}
 	if err := w.validate(); err != nil {
 		t.Fatal(err)
 	}
-	if w.PolicyHash() != before {
-		t.Fatal("invariants describe the rules; they must not change the hash")
+	// Every path to done now passes code review, wherever the move starts.
+	if got := w.Policy.Guarantees()["done"]; !slices.Contains(got, "code_review") {
+		t.Fatalf("done guarantees %v", got)
 	}
-	for _, bad := range []map[string][]string{
-		{"nowhere": {"code_review"}},
-		{"done": {"missing"}},
-		{"done": {"merged", "merged"}},
-		{"done": {}},
-	} {
-		w.Policy.Invariants = bad
-		if err := w.validate(); err == nil {
-			t.Errorf("%v: want an error", bad)
+	var into int
+	for _, state := range w.Policy.States {
+		for _, route := range w.Policy.Routes(state) {
+			if route.To != "done" {
+				continue
+			}
+			into++
+			if !slices.Contains(route.Requires, "code_review") {
+				t.Errorf("%s -> done skips code_review: %v", state, route.Requires)
+			}
 		}
+	}
+	if into == 0 {
+		t.Fatal("expected moves into done")
+	}
+	// Returns are not entries: going back to an earlier stage is untouched.
+	w.Policy.Transitions[AnyStage] = Transition{To: []string{"intake"}, Requires: []string{"code_review"}}
+	for _, state := range w.Policy.States {
+		for _, route := range w.Policy.Routes(state) {
+			if route.To == "intake" && slices.Contains(route.Requires, "code_review") {
+				t.Errorf("%s -> intake is a return and must not gain gates", state)
+			}
+		}
+	}
+}
+
+func TestAnyDoesNotCreateMovesAndCountsAsUse(t *testing.T) {
+	w := branching(t)
+	before := len(w.Policy.Routes("intake"))
+	w.Policy.Transitions[AnyStage] = Transition{To: []string{"done"}, Requires: []string{"code_review"}}
+	if len(w.Policy.Routes("intake")) != before {
+		t.Fatal("any must only add gates to moves that exist")
+	}
+	for _, f := range w.Policy.Lint() {
+		if f.Rule == "unused-gate" && strings.Contains(f.Message, "code_review") {
+			t.Fatalf("%+v", f)
+		}
+	}
+}
+
+func TestAnyIsValidated(t *testing.T) {
+	for name, entry := range map[string]Transition{
+		"unknown stage": {To: []string{"nowhere"}, Requires: []string{"code_review"}},
+		"unknown gate":  {To: []string{"done"}, Requires: []string{"missing"}},
+		"no gates":      {To: []string{"done"}},
+		"no stages":     {Requires: []string{"code_review"}},
+		"twice":         {To: []string{"done", "done"}, Requires: []string{"code_review"}},
+		"routes":        {To: []string{"done"}, Requires: []string{"code_review"}, Routes: map[string][]string{"done": nil}},
+		"end":           {End: true},
+	} {
+		w := branching(t)
+		w.Policy.Transitions[AnyStage] = entry
+		if err := w.validate(); err == nil {
+			t.Errorf("%s: want an error", name)
+		}
+	}
+	w := branching(t)
+	w.Policy.States = append(w.Policy.States, AnyStage)
+	if err := w.validate(); err == nil {
+		t.Error("a stage called any must be refused")
+	}
+}
+
+func TestInvariantsAreRemoved(t *testing.T) {
+	w := branching(t)
+	w.Policy.Invariants = map[string][]string{"done": {"code_review"}}
+	err := w.validate()
+	if err == nil || !strings.Contains(err.Error(), "invariants has been removed") || !strings.Contains(err.Error(), "any") {
+		t.Fatalf("want a message that points at any, got %v", err)
 	}
 }
 
 func TestLintFindsPlainMistakes(t *testing.T) {
 	clean := branching(t).Policy
-	clean.Invariants = map[string][]string{"done": {"code_review"}}
 	unused := branching(t).Policy
-	unused.Invariants = clean.Invariants
 	unused.Gates = map[string][]Rule{}
 	for name, rules := range clean.Gates {
 		unused.Gates[name] = rules
@@ -146,7 +161,6 @@ func TestLintFindsPlainMistakes(t *testing.T) {
 	}{
 		{"clean", clean, nil},
 		{"unused gate", unused, []Finding{{"unused-gate", "warning", "Gate risk_assessment_extra is defined but no move requires it. Require it on a move, or remove it."}}},
-		{"no invariants", branching(t).Policy, []Finding{{"no-invariants", "warning", "No invariants. Add one, such as done: [code_review], to prove no path skips a gate."}}},
 	} {
 		if got := tc.policy.Lint(); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
@@ -177,7 +191,7 @@ func TestLoadReturnsAPolicyError(t *testing.T) {
 	if !errors.As(err, &pe) || len(pe.Problems) == 0 {
 		t.Fatalf("want a *PolicyError, got %v", err)
 	}
-	if !strings.Contains(pe.Error(), "unknown gate nope") {
+	if !strings.Contains(pe.Error(), "invariants has been removed") {
 		t.Fatal(pe.Error())
 	}
 }

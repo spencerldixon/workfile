@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/mattn/go-runewidth"
+	"charm.land/lipgloss/v2"
 	"workfile/internal/workfile"
 )
 
@@ -26,16 +27,16 @@ var lintCommand = command{
 
 // lint checks the policy itself, not tickets. It reports problems that stop
 // the policy loading, plain mistakes, and then answers: which gates is a
-// ticket in each stage sure to have passed, and do the invariants in
-// policy.yml hold? It reads no provider, so it needs no credentials and runs
-// in CI on a policy change. Exit 0 sound (warnings allowed), 1 a problem or a
-// failing invariant. A missing or unreadable .workfile/ is an error, exit 2.
+// ticket in each stage sure to have passed? It reads no provider, so it needs
+// no credentials and runs in CI on a policy change. Exit 0 sound (warnings
+// allowed, gaps included), 1 a problem. A missing or unreadable .workfile/ is an error, exit 2.
 func lint(_ context.Context, e env) (int, error) {
 	v, o := e.view, e.o
+	v.width = max(v.width, fullWidth(v.out))
 	w, err := workfile.Load(o.dir)
 	var pe *workfile.PolicyError
 	var problems, warnings []workfile.Finding
-	var proofs []workfile.Proof
+	var gaps []workfile.Gap
 	switch {
 	case errors.As(err, &pe):
 		for _, problem := range pe.Problems {
@@ -46,21 +47,20 @@ func lint(_ context.Context, e env) (int, error) {
 		return 0, err
 	default:
 		warnings = w.Policy.Lint()
-		proofs = w.Policy.Prove()
+		gaps = w.Policy.Gaps()
 	}
 	code := 0
 	if len(problems) > 0 {
 		code = 1
 	}
-	for _, proof := range proofs {
-		if !proof.Holds {
-			code = 1
-		}
-	}
 	if o.json {
-		return code, writeLint(v.out, w, problems, warnings, proofs, code)
+		return code, writeLint(v.out, w, problems, warnings, gaps, code)
 	}
-	fmt.Fprint(v.out, newLintModel(v, w, problems, warnings, proofs).render())
+	m := newLintModel(v, w, problems, warnings, gaps)
+	if v.color && isTerminal(v.out) {
+		m.gfx = detectGraphics()
+	}
+	fmt.Fprint(v.out, m.render())
 	return code, nil
 }
 
@@ -76,19 +76,19 @@ type lintReport struct {
 	ExitCode      int                `json:"exit_code"`
 	Problems      []workfile.Finding `json:"problems"`
 	Warnings      []workfile.Finding `json:"warnings"`
-	Invariants    []workfile.Proof   `json:"invariants"`
+	Gaps          []workfile.Gap     `json:"gaps"`
 	Guarantees    []stageGuarantee   `json:"guarantees"`
 }
 
 // writeLint lists guarantees in pipeline order, so array order is meaningful
 // here as in the other reports. w is nil when the policy did not load; the
 // policy hash is then empty and the invariants and guarantees are empty.
-func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfile.Finding, proofs []workfile.Proof, code int) error {
+func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfile.Finding, gaps []workfile.Gap, code int) error {
 	report := lintReport{
 		SchemaVersion: 1, Command: "lint", ExitCode: code,
 		Problems:   append([]workfile.Finding{}, problems...),
 		Warnings:   append([]workfile.Finding{}, warnings...),
-		Invariants: append([]workfile.Proof{}, proofs...),
+		Gaps:       append([]workfile.Gap{}, gaps...),
 		Guarantees: []stageGuarantee{},
 	}
 	if w != nil {
@@ -101,19 +101,20 @@ func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfi
 	return encodeCleanJSON(out, report)
 }
 
-// lintModel draws the answer to `wf lint`: a summary, problems, warnings, each
-// invariant with the path that breaks it, then what each stage guarantees. It
-// is drawn once and printed. w is nil when the policy did not load.
+// lintModel draws the answer to `wf lint`: one verdict, what is wrong, then a
+// grid of which gates guard which stages. It is drawn once and printed, laid out
+// for the width of the terminal. w is nil when the policy did not load.
 type lintModel struct {
 	v                  view
 	t                  theme
 	w                  *workfile.Workspace
 	problems, warnings []workfile.Finding
-	proofs             []workfile.Proof
+	gaps               []workfile.Gap
+	gfx                graphics
 }
 
-func newLintModel(v view, w *workfile.Workspace, problems, warnings []workfile.Finding, proofs []workfile.Proof) *lintModel {
-	return &lintModel{v: v, t: newTheme(v.color, v.laneBackground()), w: w, problems: problems, warnings: warnings, proofs: proofs}
+func newLintModel(v view, w *workfile.Workspace, problems, warnings []workfile.Finding, gaps []workfile.Gap) *lintModel {
+	return &lintModel{v: v, t: newTheme(v.color, ""), w: w, problems: problems, warnings: warnings, gaps: gaps}
 }
 
 func (m *lintModel) Init() tea.Cmd { return nil }
@@ -125,43 +126,36 @@ func (m *lintModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 func (m *lintModel) View() tea.View { return tea.NewView(m.render()) }
 
-func (m *lintModel) panelWidth() int { return max(14, m.v.width-len(ticketIndent)) }
-func (m *lintModel) width() int      { return m.panelWidth() - 4 }
+func (m *lintModel) width() int { return max(14, m.v.width-2*len(ticketIndent)) }
 
+// render joins the sections with a blank line between, on the terminal's own
+// background.
 func (m *lintModel) render() string {
-	return panels(m.t, m.panelWidth(), [][]string{m.summary(), m.findings("PROBLEMS", m.problems, m.t.bad("✗ ")), m.findings("WARNINGS", m.warnings, m.t.dim("! ")), m.invariants(), m.guarantees()})
+	sections := [][]string{
+		m.summary(),
+		m.findings("Problems", m.problems, m.t.bad("✗ ")),
+		m.gapList(),
+		m.findings("Warnings", m.warnings, m.t.warn("! ")),
+		m.flow(),
+	}
+	lines := []string{""}
+	for _, section := range sections {
+		if len(section) == 0 {
+			continue
+		}
+		for _, line := range section {
+			lines = append(lines, strings.TrimRight(ticketIndent+line, " "))
+		}
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n") + "\n"
 }
 
-// wrap breaks text to the panel, indenting every line, then styles each line.
+// wrap breaks text to the screen, indenting every line, then styles each line.
 func (m *lintModel) wrap(text, indent string, style func(string) string) []string {
 	lines := wrapped(text, max(4, m.width()-len(indent)))
 	for i, line := range lines {
 		lines[i] = indent + style(line)
-	}
-	return lines
-}
-
-// pack joins names with sep, breaking lines only between names, so a stage or
-// gate is never split. A continuation line starts with the separator.
-func (m *lintModel) pack(names []string, sep, indent string, style func(string) string) []string {
-	width := max(4, m.width()-len(indent))
-	var joined []string
-	line := ""
-	for _, name := range names {
-		switch {
-		case line == "":
-			line = name
-		case runewidth.StringWidth(line+sep+name) <= width:
-			line += sep + name
-		default:
-			joined = append(joined, line)
-			line = strings.TrimLeft(sep, " ") + name
-		}
-	}
-	joined = append(joined, line)
-	var lines []string
-	for _, line := range joined {
-		lines = append(lines, m.wrap(line, indent, style)...)
 	}
 	return lines
 }
@@ -173,8 +167,7 @@ func (m *lintModel) findings(title string, list []workfile.Finding, icon string)
 	}
 	lines := []string{m.t.bold(title)}
 	for _, f := range list {
-		parts := wrapped(clean(f.Message), max(4, m.width()-2))
-		for i, line := range parts {
+		for i, line := range wrapped(clean(f.Message), max(4, m.width()-2)) {
 			if i == 0 {
 				lines = append(lines, icon+line)
 			} else {
@@ -185,99 +178,163 @@ func (m *lintModel) findings(title string, list []workfile.Finding, icon string)
 	return lines
 }
 
+// summary is the verdict: pass or fail, and why, in the first lines you read.
 func (m *lintModel) summary() []string {
-	lines := []string{m.t.bold("WORKFILE LINT")}
-	if len(m.problems) > 0 {
-		text := quantity(len(m.problems), "problem", "problems") + " in .workfile/. Fix them, then run wf lint again."
-		return append(lines, m.wrap(text, "", m.t.dim)...)
-	}
-	failed := 0
-	for _, proof := range m.proofs {
-		if !proof.Holds {
-			failed++
-		}
-	}
-	text := "Every invariant holds. " + quantity(len(m.proofs), "invariant", "invariants") + " checked."
+	lines := []string{m.t.accent("wf lint"), ""}
 	switch {
-	case len(m.proofs) == 0:
-		text = "No invariants to check."
-	case failed > 0:
-		text = fmt.Sprintf("%d of %s can be skipped.", failed, quantity(len(m.proofs), "invariant", "invariants"))
+	case len(m.problems) > 0:
+		lines = append(lines, m.t.bad("✗ ")+m.t.bold("Fail")+m.t.dim("  "+quantity(len(m.problems), "problem", "problems")+" in .workfile/"))
+		return append(lines, m.wrap("The policy can't be used until these are fixed. Then run wf lint again.", "  ", m.t.dim)...)
+	case len(m.gaps) > 0:
+		lines = append(lines, m.t.warn("! ")+m.t.bold("Pass")+m.t.dim("  "+quantity(len(m.gaps), "gate", "gates")+" can be skipped"))
+		return append(lines, m.wrap("The policy is valid, but a ticket can reach some stages without passing every gate asked for on the way in.", "  ", m.t.dim)...)
 	}
-	return append(lines, m.wrap(text, "", m.t.dim)...)
+	lines = append(lines, m.t.good("✓ ")+m.t.bold("Pass"))
+	return append(lines, m.wrap("Nothing can slip through: every route into a stage passes every gate asked for on the way in.", "  ", m.t.dim)...)
 }
 
-func (m *lintModel) invariants() []string {
-	if len(m.proofs) == 0 {
+// gapList says which gates a ticket can skip. A ticket only needs one route to
+// pass, so this may be on purpose; the section says how to close a gap if not.
+func (m *lintModel) gapList() []string {
+	if len(m.gaps) == 0 {
 		return nil
 	}
-	lines := []string{m.t.bold("INVARIANTS")}
-	for _, proof := range m.proofs {
-		claim := proof.Stage + " requires " + human(proof.Gate)
-		if proof.Holds {
-			lines = append(lines, m.t.good("✓ ")+claim)
-			continue
-		}
-		lines = append(lines, m.t.bad("✗ ")+claim)
-		if len(proof.Bypass) == 0 {
-			lines = append(lines, m.wrap("Tickets start in "+proof.Stage+", before any gate.", "  ", m.t.dim)...)
-			continue
-		}
-		lines = append(lines, m.wrap("A ticket can reach "+proof.Stage+" without it:", "  ", m.t.dim)...)
-		lines = append(lines, m.pack(stages(proof.Bypass), " → ", "  ", plainText)...)
-		fix := "Require " + human(proof.Gate) + " on a move on this path, then run wf lint again."
-		if len(proof.Fixes) > 0 {
-			var moves []string
-			for _, move := range proof.Fixes {
-				moves = append(moves, move.From+" → "+move.To)
+	lines := []string{m.t.bold("Gates that can be skipped")}
+	lines = append(lines, m.wrap("A ticket only needs one route into a stage to pass. If these routes are meant to be alternatives, that's fine. If not, require the gate on the moves shown, or on every move into the stage with an any entry.", "", m.t.dim)...)
+	lines = append(lines, "")
+	for _, gap := range m.gaps {
+		text := gap.Stage + ": " + human(gap.Gate) + " is skipped by " + joinMoves(gap.Open)
+		for i, line := range wrapped(text, max(4, m.width()-2)) {
+			if i == 0 {
+				lines = append(lines, m.t.warn("! ")+line)
+			} else {
+				lines = append(lines, "  "+line)
 			}
-			fix = "Require " + human(proof.Gate) + " on " + strings.Join(moves, " or ") + "."
 		}
-		lines = append(lines, m.wrap(fix, "  ", m.t.dim)...)
 	}
 	return lines
 }
 
-// stages lists the stages a bypass goes through, so it reads like the pipeline.
-func stages(moves []workfile.Move) []string {
-	result := []string{moves[0].From}
+func joinMoves(moves []workfile.Move) string {
+	var names []string
 	for _, move := range moves {
-		result = append(result, move.To)
+		names = append(names, move.From+" → "+move.To)
 	}
-	return result
+	return strings.Join(names, " or ")
 }
 
-func (m *lintModel) guarantees() []string {
-	if m.w == nil {
+// flow draws the policy: stages in order, shortcuts above and returns below.
+// A move is green when it asks for a gate, red when it is a possible gap, and dim when it asks for nothing. A stage with a gap is red.
+func (m *lintModel) flow() []string {
+	if m.w == nil || len(m.problems) > 0 {
 		return nil
 	}
-	lines := []string{m.t.bold("WHAT EACH STAGE GUARANTEES")}
-	lines = append(lines, m.wrap("Every path to the stage passes these gates.", "", m.t.dim)...)
-	guarantees := m.w.Policy.Guarantees()
-	column := 0
-	for _, stage := range m.w.Policy.States {
-		column = max(column, len(stage))
+	p := m.w.Policy
+	edges, broken := m.flowEdges()
+	ends := map[string]bool{}
+	for _, stage := range p.States {
+		ends[stage] = p.Transitions[stage].End
 	}
-	// On a narrow screen the gates go under the stage instead of beside it.
-	indent := strings.Repeat(" ", column+2)
-	if m.width()-len(indent) < 16 {
-		indent = "  "
+	layout := newFlowLayout(p.States, ends, edges, broken)
+	flow := &layout
+	lines := []string{m.t.bold("Flow")}
+	if picture, ok := m.flowPicture(flow); ok {
+		return append(lines, append(picture, m.flowKey()...)...)
 	}
-	for _, stage := range m.w.Policy.States {
-		var names []string
-		for _, gate := range guarantees[stage] {
-			names = append(names, human(gate))
+	v := m.v
+	v.width = m.width() + 10
+	if rows, ok := v.textFlow(flow, m.width()); ok {
+		for _, r := range rows {
+			lines = append(lines, strings.TrimRight(v.render(r), " "))
 		}
-		rows := m.pack(names, " · ", indent, plainText)
-		if len(names) == 0 {
-			rows = m.wrap("nothing", indent, m.t.dim)
-		}
-		if len(indent) == 2 {
-			lines = append(lines, m.t.bold(stage))
-		} else {
-			rows[0] = m.t.bold(stage) + strings.Repeat(" ", len(indent)-len(stage)) + strings.TrimPrefix(rows[0], indent)
-		}
-		lines = append(lines, rows...)
+		return append(lines, m.flowKey()...)
 	}
-	return lines
+	// Too wide for columns: strips of numbered stages.
+	labels := make([]cell, len(p.States))
+	for i, stage := range p.States {
+		labels[i] = styled(stage, "1")
+		if broken[stage] {
+			labels[i] = styled(stage, "1;"+red)
+		}
+	}
+	for _, r := range v.pipelineRows(p, workfile.Assessment{}, labels, edges) {
+		lines = append(lines, v.render(r))
+	}
+	return append(lines, m.flowKey()...)
+}
+
+// flowEdges is the forward moves of the policy, each coloured for what it asks
+// for, and the stages that have a possible gap. Returns are left out: gates
+// guard the way forward.
+func (m *lintModel) flowEdges() ([]pipelineEdge, map[string]bool) {
+	p := m.w.Policy
+	open := map[[2]string]bool{}
+	broken := map[string]bool{}
+	for _, gap := range m.gaps {
+		broken[gap.Stage] = true
+		for _, move := range gap.Open {
+			open[[2]string{move.From, move.To}] = true
+		}
+	}
+	edges := slices.DeleteFunc(pipelineEdges(p, workfile.Assessment{}), pipelineEdge.backward)
+	for i, e := range edges {
+		from, to := p.States[e.from], p.States[e.to]
+		edges[i].color = muted
+		for _, route := range p.Routes(from) {
+			if route.To == to && len(route.Requires) > 0 {
+				edges[i].color = green
+			}
+		}
+		if open[[2]string{from, to}] {
+			edges[i].color = red
+		}
+	}
+	return edges, broken
+}
+
+// flowPicture draws the policy as an image on a terminal that can show one. The
+// picture is the text diagram with nicer clothes, so it needs the same key.
+func (m *lintModel) flowPicture(layout *flowLayout) ([]string, bool) {
+	if !m.v.color {
+		return nil, false
+	}
+	img, rows, ok := flowImage(layout, m.gfx, min(m.width(), 120))
+	if !ok {
+		return nil, false
+	}
+	cols := img.Bounds().Dx() / m.gfx.cellW
+	p := picture{id: lintImageID, cols: cols, rows: rows}
+	sequence, err := transmit(img, p)
+	if err != nil {
+		return nil, false
+	}
+	lines := placeholderRows(p)
+	lines[0] = sequence + lines[0]
+	return lines, true
+}
+
+// flowKey says what the colours of the moves mean. Without colour it says
+// nothing, because it would describe differences nobody can see.
+func (m *lintModel) flowKey() []string {
+	if !m.v.color {
+		return nil
+	}
+	keys := []string{m.t.good("→") + " asks for a gate", m.t.dim("→ asks for nothing")}
+	if len(m.gaps) > 0 {
+		keys = append(keys, m.t.bad("→")+" possible gap")
+	}
+	// The key wraps between entries on a narrow screen.
+	lines := []string{""}
+	line := ""
+	for _, key := range keys {
+		if line != "" && lipgloss.Width(line)+3+lipgloss.Width(key) > m.width() {
+			lines = append(lines, line)
+			line = ""
+		}
+		if line != "" {
+			line += "   "
+		}
+		line += key
+	}
+	return append(lines, line)
 }

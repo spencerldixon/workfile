@@ -67,6 +67,20 @@ func TestGraphicsCanBeTurnedOff(t *testing.T) {
 	}
 }
 
+func TestGraphicsCanBeForcedOn(t *testing.T) {
+	t.Setenv("WORKFILE_GRAPHICS", "on")
+	saved := terminalGraphics
+	defer func() { terminalGraphics = saved }()
+	terminalGraphics = func() []byte { return nil }
+	if g := detectGraphics(); !g.on || g.cellW != 8 || g.cellH != 16 {
+		t.Fatalf("a silent terminal: %+v", g)
+	}
+	terminalGraphics = func() []byte { return []byte("\x1b[6;36;18t\x1b[?62c") }
+	if g := detectGraphics(); !g.on || g.cellW != 18 || g.cellH != 36 {
+		t.Fatalf("a reported cell size is kept: %+v", g)
+	}
+}
+
 func TestPlaceholderRowsAreCellsOfTheRightWidth(t *testing.T) {
 	rows := placeholderRows(picture{id: 42, cols: 12, rows: 3})
 	if len(rows) != 3 {

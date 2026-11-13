@@ -117,7 +117,7 @@ Run `wf` with no command for help.
 | `wf setup` | Connects your tools and writes a starter `.workfile/` folder. `wf setup --test` checks the connections. |
 | `wf status` | Where work is, and what it needs. `--me` for your work, `--since` for what changed. |
 | `wf check TICKET --to STAGE` | May this ticket move now? Exit code `0` yes, `1` no, `2` cannot tell. |
-| `wf lint` | Is the policy sound? Finds plain mistakes and proves no path skips a gate. |
+| `wf lint` | Is the policy sound? Passes or fails, lists possible gaps, and draws your policy. |
 | `wf tracker` | Your tracker, scoped to the team. Browse and read tickets. |
 
 Renamed commands:

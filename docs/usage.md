@@ -336,100 +336,62 @@ wf lint --json
 
 `wf lint` checks the policy itself, not tickets. It reads no provider, so it
 needs no credentials and is quick enough for every CI run. It exits `1` on a
-problem or a broken invariant, and `0` otherwise.
+problem, and `0` otherwise.
 
-The output has these sections. Empty ones are left out:
+It starts with the answer, then shows what to look at:
 
 | Section | What it shows |
 | --- | --- |
+| Verdict | `✓ Pass`, with why nothing can slip through. `! Pass`, with how many gates can be skipped. Or `✗ Fail`, with how many problems. |
 | **Problems** | Mistakes that stop the policy loading, such as an unknown gate. Exit `1`. |
-| **Warnings** | Plain mistakes in a valid policy. Exit `0`. |
-| **Invariants** | For each gate you list under `invariants:`, whether any path skips it. |
-| **What each stage guarantees** | The gates every forward path to the stage passes. |
+| **Gates that can be skipped** | A gate asked for on one route into a stage but not on another. |
+| **Warnings** | Plain mistakes in a valid policy, such as a gate nothing requires. |
+| **Flow** | The stages in order, with forward moves drawn green when they ask for a gate, red when a gate can be skipped, and dim when they ask for nothing. |
+
+Stages at the same point in the workflow, such as two stages that finish a ticket, line up in a column. Stacked stages are ordered, and shortcuts nested, so as few lines as possible cross or run along each other.
+
+Empty sections are left out. On a terminal that can show images (the kitty
+graphics protocol, which `wf` finds by asking the terminal), the flow is a picture
+in your terminal's own text colour. Everywhere else it is text, drawn with box
+characters and colour. A policy with too many stages to read in a picture also
+gets text. Set `WORKFILE_GRAPHICS=off` to always get text, or `WORKFILE_GRAPHICS=on` for a terminal that can draw images but does not say so. With colour off, or
+piped, it is the same shape in text without the colour key.
 
 A typo in a gate name is a problem:
 
 ```text
-  WORKFILE LINT
-  1 problem in .workfile/. Fix them, then run wf lint again.
 
-  PROBLEMS
+  wf lint
+
+  ✗ Fail  1 problem in .workfile/
+    The policy can't be used until these are fixed. Then run wf lint again.
+
+  Problems
   ✗ policy.yml: ready requires unknown gate refinment
 ```
+
+Workfile accepts a ticket's stage when **any one** route into it passes. So a gate
+on one route says nothing about the others. `wf lint` lists these as gates that
+can be skipped. If the routes are meant to be alternatives, such as a security path and a
+QA path with different sign-offs, ignore it. If not, require the gate on the
+moves it names, or on every move into the stage with `any`:
+
+```yaml
+transitions:
+  any:
+    to: [queued, done]
+    requires: [code_review]
+```
+
+See [Writing a policy](policy.md#any-a-gate-on-every-move-into-a-stage).
 
 Warnings today:
 
 | Rule | When |
 | --- | --- |
 | `unused-gate` | A gate is defined but no move requires it. |
-| `no-invariants` | `invariants:` is empty. |
 
-Workfile accepts a ticket's stage when **any one** forward path to it passes. So a
-gate on one path says nothing about the others. Invariants close that gap. Write
-down what must always be true:
-
-```yaml
-# .workfile/policy.yml
-invariants:
-  done: [code_review, merged]
-```
-
-On the [branching example](../example/branching/.workfile/), with that invariant
-added, `wf lint` finds a hole:
-
-```text
-
-  WORKFILE LINT
-  1 of 2 invariants can be skipped.
-
-  INVARIANTS
-  ✗ done requires code review
-    A ticket can reach done without it:
-    intake → triage → discovery → ready → doing → review → security → release → done
-    Require code review on review → security or security → release.
-  ✓ done requires merged
-
-  WHAT EACH STAGE GUARANTEES
-  Every path to the stage passes these gates.
-  intake     nothing
-  triage     nothing
-  discovery  nothing
-  ready      nothing
-  doing      refinement
-  blocked    refinement
-  review     refinement · linked pull requests · risk assessment
-  qa         refinement · linked pull requests · risk assessment · code review
-  security   refinement · linked pull requests · risk assessment · threat model
-  release    refinement · linked pull requests · risk assessment
-  done       refinement · linked pull requests · risk assessment · merged
-  cancelled  nothing
-```
-
-Review → security and security → release are the only moves that lead around code
-review. Requiring it on either closes the hole. If no single move closes every
-path, `wf lint` says to require the gate on a move on the path shown, then run it
-again. Returns (moves back) are left out.
-
-With no invariants, `wf lint` still lists what each stage guarantees. Here is the
-plain example policy:
-
-```text
-
-  WORKFILE LINT
-  No invariants to check.
-
-  WARNINGS
-  ! No invariants. Add one, such as done: [code_review], to prove no path skips a gate.
-
-  WHAT EACH STAGE GUARANTEES
-  Every path to the stage passes these gates.
-  todo    nothing
-  doing   refinement
-  review  refinement · pull request
-  done    refinement · pull request · code review
-```
-
-With `--json` you get `problems`, `warnings`, `invariants` and `guarantees`. See
+With `--json` you get `problems`, `warnings`, `gaps` and `guarantees` (the gates every route into each stage passes). See
 [JSON reports](json.md#lint).
 
 ## Tracker: browse the team's tickets
@@ -567,7 +529,7 @@ commands run. An environment variable beats the file. On macOS and Linux run
 | Code | Meaning |
 | --- | --- |
 | `0` | Status found only ready or done tickets. Check found the move allowed. Lint found nothing wrong. Setup tests passed. |
-| `1` | Status found tickets out of policy or needing work. Check found the move not allowed. Lint found a problem or an invariant that can be skipped. |
+| `1` | Status found tickets out of policy or needing work. Check found the move not allowed. Lint found a problem. |
 | `2` | Bad options or settings, a provider read failed, evidence is unavailable, a status is not in your workflow, or a named ticket is not in your scope. |
 
 If no tickets match, the report says so and exits `0`. Reports only cover the

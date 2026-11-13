@@ -40,7 +40,10 @@ func askTerminal(request string, done func([]byte) bool) []byte {
 	if _, err := tty.WriteString(request); err != nil {
 		return nil
 	}
-	deadline := time.Now().Add(200 * time.Millisecond)
+	// A terminal on another machine, such as a phone, answers slowly. The wait ends
+	// as soon as the last answer arrives, so only a terminal that says nothing
+	// pays the full time.
+	deadline := time.Now().Add(time.Second)
 	var reply []byte
 	for time.Now().Before(deadline) {
 		var ready unix.FdSet

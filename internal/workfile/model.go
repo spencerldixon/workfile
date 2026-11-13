@@ -12,11 +12,15 @@ type Policy struct {
 	States      []string              `yaml:"states"`
 	Transitions map[string]Transition `yaml:"transitions"`
 	Gates       map[string][]Rule     `yaml:"gates"`
-	// Invariants name the gates every forward path to a stage must pass. wf
-	// lint checks them. They describe the rules rather than add to them, so
-	// they are not part of the policy hash.
+	// Invariants was removed. It is still read so a policy that has it gets a
+	// message saying what to use instead, not a generic unknown-field error.
 	Invariants map[string][]string `yaml:"invariants" json:"-"`
 }
+
+// AnyStage is the name of the transitions entry that applies to every stage.
+// Its `to` lists the stages it guards, and its `requires` the gates every
+// forward move into those stages needs, wherever the move starts.
+const AnyStage = "any"
 
 type Transition struct {
 	To                    []string            `yaml:"to"`
@@ -54,6 +58,9 @@ func (p Policy) Routes(state string) []Route {
 		}
 		gates = append(gates, t.RequiresByDestination[target]...)
 		gates = append(gates, t.Routes[target]...)
+		if !back && slices.Contains(p.Transitions[AnyStage].To, target) {
+			gates = append(gates, p.Transitions[AnyStage].Requires...)
+		}
 		routes = append(routes, Route{To: target, Backward: back, Requires: unique(gates)})
 	}
 	return routes
