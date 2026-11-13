@@ -1,7 +1,11 @@
 package workfile
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -122,5 +126,58 @@ func TestInvariantsAreCheckedAndLeftOutOfTheHash(t *testing.T) {
 		if err := w.validate(); err == nil {
 			t.Errorf("%v: want an error", bad)
 		}
+	}
+}
+
+func TestLintFindsPlainMistakes(t *testing.T) {
+	clean := branching(t).Policy
+	clean.Invariants = map[string][]string{"done": {"code_review"}}
+	unused := branching(t).Policy
+	unused.Invariants = clean.Invariants
+	unused.Gates = map[string][]Rule{}
+	for name, rules := range clean.Gates {
+		unused.Gates[name] = rules
+	}
+	unused.Gates["risk_assessment_extra"] = clean.Gates["code_review"]
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+		want   []Finding
+	}{
+		{"clean", clean, nil},
+		{"unused gate", unused, []Finding{{"unused-gate", "warning", "Gate risk_assessment_extra is defined but no move requires it. Require it on a move, or remove it."}}},
+		{"no invariants", branching(t).Policy, []Finding{{"no-invariants", "warning", "No invariants. Add one, such as done: [code_review], to prove no path skips a gate."}}},
+	} {
+		if got := tc.policy.Lint(); !slices.Equal(got, tc.want) {
+			t.Errorf("%s: got %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestLoadReturnsAPolicyError(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".workfile")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"policy.yml", "providers.yml", "people.yml"} {
+		data, err := os.ReadFile(filepath.Join("..", "..", "example", "branching", ".workfile", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "policy.yml" {
+			data = append(data, "\ninvariants:\n  done: [nope]\n"...)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := Load(root)
+	var pe *PolicyError
+	if !errors.As(err, &pe) || len(pe.Problems) == 0 {
+		t.Fatalf("want a *PolicyError, got %v", err)
+	}
+	if !strings.Contains(pe.Error(), "unknown gate nope") {
+		t.Fatal(pe.Error())
 	}
 }

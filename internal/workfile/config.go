@@ -112,6 +112,11 @@ func ReadYAML(path string, target any, optional bool) error {
 	return nil
 }
 
+// PolicyError lists every problem found in the .workfile/ files.
+type PolicyError struct{ Problems []string }
+
+func (e *PolicyError) Error() string { return strings.Join(e.Problems, "\n  ") }
+
 func (w *Workspace) validate() error {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
@@ -334,7 +339,7 @@ func (w *Workspace) validate() error {
 	}
 	if len(problems) > 0 {
 		slices.Sort(problems)
-		return errors.New(strings.Join(slices.Compact(problems), "\n  "))
+		return &PolicyError{Problems: slices.Compact(problems)}
 	}
 	return nil
 }

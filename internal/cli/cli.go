@@ -23,7 +23,7 @@ Usage: wf <command> [options]
   status [KEY ...]       Show all stages, or the full picture for named tickets
   tickets               Browse tickets in scope: read each one with what Workfile knows
   check KEY --to STAGE   Ask whether a ticket may move to a stage now (exit 0 yes, 1 no)
-  prove                 Check the policy for paths that skip a gate (exit 0 sound, 1 not)
+  lint                  Check the policy for mistakes and paths that skip a gate (exit 0 sound, 1 not)
   test [PROVIDER ...]    Test all provider connections, or named instances
 
 Options for tickets:
@@ -42,7 +42,7 @@ Filters for health only (list the failing tickets):
   --stage NAME          Tickets in this stage that are out of policy
 
 Options:
-  --json                Emit a versioned machine-readable report (health/status/check/prove)
+  --json                Emit a versioned machine-readable report (health/status/check/lint)
   --evidence            Show observed evidence for each requirement (health/status)
   --dir DIR             Find .workfile/ from DIR or its parents (default .)
   --version             Print the installed version
@@ -55,7 +55,7 @@ Examples:
   wf status APP-42
   wf tickets --view me
   wf check APP-42 --to done
-  wf prove
+  wf lint
   wf test github
 
 Output is for people by default. Use --json for scripts and agents.
@@ -120,7 +120,8 @@ var commands = map[string]command{
 	"status":  statusCommand,
 	"tickets": ticketsCommand,
 	"check":   checkCommand,
-	"prove":   proveCommand,
+	"lint":    lintCommand,
+	"prove":   proveCommand, // temporary alias, replaced by the alias table
 	"test":    testCommand,
 }
 

@@ -439,7 +439,8 @@ func TestStatusWordsFixesLikeTheTicketView(t *testing.T) {
 
 func TestEveryCommandIsInHelpAndTakesItsOwnFlags(t *testing.T) {
 	for name, c := range commands {
-		if !strings.Contains(help, "\n  "+name+" ") {
+		// prove is a hidden alias for lint until the alias table replaces it.
+		if name != "prove" && !strings.Contains(help, "\n  "+name+" ") {
 			t.Errorf("%s is not described in help", name)
 		}
 		if c.run == nil {
