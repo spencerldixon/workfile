@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"workfile/internal/provider"
+	"workfile/internal/snapshot"
 	"workfile/internal/workfile"
 )
 
@@ -30,6 +31,7 @@ Usage: wf <command> [options]
 Options for status:
   --me                        Your work: assigned to you, or PRs you opened or must review
   --user NAME                 The same for someone in people.yml
+  --since last|12h|1d         What changed since an earlier run on this computer
   --gate NAME                 Tickets failing this gate
   --stage NAME                Tickets in this stage that are out of policy
   --failing                   Only tickets that need attention
@@ -66,12 +68,12 @@ func nextStep(dir string) string {
 }
 
 type options struct {
-	command, dir, user, gate, stage string
-	keys                            []string
-	limit                           int
-	all, me, failing, help, version bool
-	json, evidence                  bool
-	limitSet                        bool
+	command, dir, user, gate, stage, since string
+	keys                                   []string
+	limit                                  int
+	all, me, failing, help, version        bool
+	json, evidence                         bool
+	limitSet                               bool
 	// check
 	to string
 	// tracker
@@ -210,6 +212,7 @@ func parse(args []string) (options, error) {
 	fs.IntVar(&o.limit, "limit", 25, "")
 	fs.StringVar(&o.gate, "gate", "", "")
 	fs.StringVar(&o.stage, "stage", "", "")
+	fs.StringVar(&o.since, "since", "", "")
 	fs.BoolVar(&o.json, "json", false, "")
 	fs.BoolVar(&o.evidence, "evidence", false, "")
 	fs.BoolVar(&o.all, "all", false, "")
@@ -269,6 +272,11 @@ func parse(args []string) (options, error) {
 	}
 	if o.command == "" {
 		return o, nil
+	}
+	if o.since != "" {
+		if _, err := snapshot.ParseSince(o.since); err != nil {
+			return o, err
+		}
 	}
 	if a, ok := aliases[o.command]; ok {
 		o.command, o.note = a.to, a.note

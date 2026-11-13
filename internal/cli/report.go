@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 
+	"workfile/internal/snapshot"
 	"workfile/internal/workfile"
 )
 
@@ -44,6 +45,9 @@ type machineReport struct {
 	Summary       map[string]int `json:"summary"`
 	Warnings      []string       `json:"warnings"`
 	Tickets       []reportTicket `json:"tickets"`
+	// Since and Changes are present only for --since with an earlier snapshot.
+	Since   string             `json:"since,omitempty"`
+	Changes *[]snapshot.Change `json:"changes,omitempty"`
 }
 
 func selected(a workfile.Assessment, o options) bool {
@@ -65,8 +69,13 @@ func selected(a workfile.Assessment, o options) bool {
 	return true
 }
 
-func writeReport(out io.Writer, w *workfile.Workspace, all []workfile.Assessment, o options, warnings []string, code int) error {
+func writeReport(out io.Writer, w *workfile.Workspace, all []workfile.Assessment, o options, warnings []string, code int, cmp *comparison) error {
 	r := machineReport{SchemaVersion: 1, Command: o.command, PolicyHash: w.PolicyHash(), ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), ExitCode: code, Summary: map[string]int{"total": len(all), "cannot_check": 0, "out_of_policy": 0, "needs_work": 0, "ready": 0, "done": 0}, Warnings: append([]string{}, warnings...), Tickets: []reportTicket{}}
+	if cmp != nil && cmp.found {
+		r.Since = cmp.taken.UTC().Format(time.RFC3339)
+		changes := append([]snapshot.Change{}, cmp.changes...)
+		r.Changes = &changes
+	}
 	rollup := w.Rollup(all)
 	r.Summary["checked"] = rollup.Checked
 	r.Summary["in_policy"] = rollup.InPolicy

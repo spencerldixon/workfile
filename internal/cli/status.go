@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
+	"workfile/internal/snapshot"
 	"workfile/internal/workfile"
 )
 
 var statusCommand = command{
-	flags:      slices.Concat(ticketFlags, []string{"gate", "stage"}),
+	flags:      slices.Concat(ticketFlags, []string{"gate", "stage", "since"}),
 	ticketKeys: true,
 	run:        status,
 }
@@ -55,9 +57,10 @@ func status(ctx context.Context, e env) (int, error) {
 		return 2, err
 	}
 	code := r.exitCode(func(a workfile.Assessment) bool { return a.Violation() || a.Blocked() })
+	cmp := rememberRun(e, r.all)
 	switch {
 	case o.json:
-		return code, writeReport(v.out, w, r.all, o, r.warnings, code)
+		return code, writeReport(v.out, w, r.all, o, r.warnings, code, cmp)
 	case interactiveHealth(v, o, r.all):
 		return code, exploreHealth(ctx, v, w, r.all, o)
 	case interactiveStatus(v, o, r.all):
@@ -69,9 +72,34 @@ func status(ctx context.Context, e env) (int, error) {
 		}
 		return code, exploreStatus(ctx, v, w, r.all, o, me)
 	}
+	if cmp != nil {
+		fmt.Fprint(v.out, newSinceModel(v, *cmp, r.all).render())
+	}
 	v.statusReport(w, r.all, o)
 	v.evidenceReport(r.all, o)
 	return code, nil
+}
+
+// rememberRun keeps what this run saw, so a later run can say what changed. With
+// --since it first reads the earlier snapshot and compares it with this run, and
+// returns that comparison. Neither a failed read nor a failed save changes the
+// exit code: each prints one line on stderr.
+func rememberRun(e env, all []workfile.Assessment) *comparison {
+	store := snapshot.Store{Dir: workfile.StateDir(e.w), Now: time.Now, Keep: 8 * 24 * time.Hour}
+	now := snapshot.FromAssessments(e.w.PolicyHash(), store.Now(), all)
+	var cmp *comparison
+	if e.o.since != "" {
+		since, _ := snapshot.ParseSince(e.o.since) // checked when the options were read
+		c, err := compare(store, since, now, e.w.Policy.States)
+		if err != nil {
+			fmt.Fprintf(e.errOut, "wf: could not read snapshots: %s\n", clean(err.Error()))
+		}
+		cmp = &c
+	}
+	if err := store.Save(now); err != nil {
+		fmt.Fprintf(e.errOut, "wf: could not save a snapshot: %s\n", clean(err.Error()))
+	}
+	return cmp
 }
 
 func (v view) statusReport(w *workfile.Workspace, all []workfile.Assessment, o options) {
