@@ -228,3 +228,30 @@ func (t Ticket) Involves(tracker string, who map[string]string) bool {
 	}
 	return false
 }
+
+// Standing is where a ticket stands against the policy, from the most urgent
+// to the least.
+type Standing int
+
+const (
+	CannotCheck Standing = iota // Ticket.Error set
+	OutOfPolicy                 // Violation()
+	Blocked                     // Blocked()
+	NeedsWork                   // has routes, none of the above
+	Done                        // no routes
+)
+
+// Standing classifies the ticket.
+func (a Assessment) Standing() Standing {
+	switch {
+	case a.Ticket.Error != "":
+		return CannotCheck
+	case a.Violation():
+		return OutOfPolicy
+	case a.Blocked():
+		return Blocked
+	case len(a.Routes) > 0:
+		return NeedsWork
+	}
+	return Done
+}

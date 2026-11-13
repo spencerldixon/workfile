@@ -129,18 +129,4 @@ func quantity(n int, singular, plural string) string {
 	return fmt.Sprintf("%d %s", n, plural)
 }
 
-func group(a workfile.Assessment) int {
-	if a.Ticket.Error != "" {
-		return 0
-	}
-	if a.Violation() {
-		return 1
-	}
-	if a.Blocked() {
-		return 2
-	}
-	if len(a.Routes) > 0 {
-		return 3
-	}
-	return 4
-}
+func group(a workfile.Assessment) int { return int(a.Standing()) }

@@ -2,10 +2,9 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"slices"
 
+	"workfile/internal/board"
 	"workfile/internal/workfile"
 )
 
@@ -26,55 +25,34 @@ func assess(ctx context.Context, e env) (checked, error) {
 	var r checked
 	var err error
 	if o.user != "" {
-		person, ok := w.People[o.user]
-		if !ok {
-			return r, fmt.Errorf("%s is not in people.yml", o.user)
-		}
-		r.who = map[string]string{}
-		for name := range w.Providers {
-			if person[name] != "" {
-				r.who[name] = person[name]
-			}
-		}
-		if len(r.who) == 0 {
-			return r, errors.New("that person has no provider identities in people.yml")
+		if r.who, err = board.Person(w, o.user); err != nil {
+			return r, err
 		}
 	} else if o.me {
 		if r.who, err = identity(ctx, w, client); err != nil {
 			return r, err
 		}
 	}
-	limit := o.limit
-	if !o.limited() || r.who != nil {
-		limit = 0
-	}
-	tickets, err := client.Tickets(ctx, o.keys, limit)
-	if err != nil {
-		return r, err
-	}
-	for _, key := range o.keys {
-		if !slices.ContainsFunc(tickets, func(t workfile.Ticket) bool { return t.Key == key }) {
-			fmt.Fprintf(e.errOut, "wf: %s is not visible to your %s token: check the key, or ask for access\n", key, w.TrackerLabel())
-			r.missing = true
+	q := board.Query{Keys: o.keys, Who: r.who}
+	if o.limited() {
+		q.Cut = o.limit
+		if r.who == nil {
+			q.Limit = o.limit
 		}
 	}
-	tickets, r.warnings, err = client.Records(ctx, tickets)
+	res, err := board.Read(ctx, w, client, q)
+	for _, key := range res.Missing {
+		fmt.Fprintf(e.errOut, "wf: %s is not visible to your %s token: check the key, or ask for access\n", key, w.TrackerLabel())
+		r.missing = true
+	}
 	if err != nil {
 		return r, err
 	}
+	r.warnings = res.Warnings
 	for _, warning := range r.warnings {
 		fmt.Fprintln(e.errOut, "wf: "+clean(warning))
 	}
-	if r.who != nil {
-		tickets = slices.DeleteFunc(tickets, func(t workfile.Ticket) bool { return !t.Involves(w.Policy.Tracker, r.who) })
-	}
-	if o.limited() && len(tickets) > o.limit {
-		tickets = tickets[:o.limit]
-	}
-	r.all = make([]workfile.Assessment, len(tickets))
-	for i, ticket := range tickets {
-		r.all[i] = w.Assess(ticket)
-	}
+	r.all = res.Assessments
 	return r, nil
 }
 
