@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -16,7 +14,6 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/mattn/go-runewidth"
 	"workfile/internal/provider"
 	"workfile/internal/workfile"
 )
@@ -34,6 +31,7 @@ const (
 	stepOrg
 	stepGitHubToken
 	stepGitHubTest
+	stepRepos
 	stepProjects
 	stepStatuses
 	stepPeople
@@ -60,28 +58,6 @@ type stageItem struct {
 	on    bool
 }
 
-type projectItem struct{ key, name string }
-
-func (p projectItem) FilterValue() string { return p.key + " " + p.name }
-
-type projectDelegate struct{ t theme }
-
-func (projectDelegate) Height() int                         { return 1 }
-func (projectDelegate) Spacing() int                        { return 0 }
-func (projectDelegate) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
-func (d projectDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
-	p, ok := item.(projectItem)
-	if !ok {
-		return
-	}
-	line := runewidth.Truncate(p.key+"  "+p.name, max(m.Width()-2, 4), "…")
-	if index == m.Index() {
-		fmt.Fprint(w, d.t.accent("› ")+d.t.bold(line))
-		return
-	}
-	fmt.Fprint(w, "  "+line)
-}
-
 // Messages. Network results carry the id of the request that started them, so
 // an answer that arrives after the person went back is ignored.
 type (
@@ -90,6 +66,11 @@ type (
 	testedMsg   struct {
 		id  int
 		err error
+	}
+	reposMsg struct {
+		id    int
+		repos []provider.SetupRepo
+		err   error
 	}
 	projectsMsg struct {
 		id       int
@@ -128,16 +109,18 @@ type setupModel struct {
 	err     string // shown under the current screen
 	opened  string // "", "ok" or "fail": did the browser open?
 
-	input textinput.Model
-	spin  spinner.Model
-	help  bhelp.Model
-	list  list.Model
+	input       textinput.Model
+	spin        spinner.Model
+	help        bhelp.Model
+	projectPick picker
+	repoPick    picker
 
 	// Answers.
 	dir, site, email, jiraToken string
 	github                      bool
 	org, githubToken            string
-	project                     string
+	projects                    []string
+	repos                       []string
 	statuses                    []string
 	items                       []stageItem
 	cursor                      int
@@ -150,8 +133,9 @@ type setupModel struct {
 	values map[string]string
 	client setupSource
 
-	statusProject string
-	haveProjects  bool
+	statusFor    string
+	haveProjects bool
+	haveRepos    bool
 
 	saved bool
 	fatal error
@@ -181,23 +165,15 @@ func newSetupModel(ctx context.Context, v view, d setupDeps) *setupModel {
 	h.Styles = bhelp.Styles{ShortKey: bold, ShortDesc: faint, ShortSeparator: faint, Ellipsis: faint}
 	h.ShortSeparator = " · "
 
-	l := list.New(nil, projectDelegate{t}, 40, 6)
-	l.SetShowTitle(false)
-	l.SetShowStatusBar(false)
-	l.SetShowHelp(false)
-	l.SetShowPagination(false)
-	l.SetFilteringEnabled(true)
-	l.Styles.Filter = inputStyles
-	l.Styles.NoItems = faint
-	l.FilterInput.SetStyles(inputStyles)
-
 	return &setupModel{
 		ctx: ctx, v: v, t: t, deps: d,
 		width:   v.width,
 		animate: v.color,
-		input:   ti, spin: sp, help: h, list: l,
-		dir: d.dir,
-		key: fmt.Sprintf("WF_%X", time.Now().UnixNano()),
+		input:   ti, spin: sp, help: h,
+		projectPick: newPicker(t, inputStyles, faint),
+		repoPick:    newPicker(t, inputStyles, faint),
+		dir:         d.dir,
+		key:         fmt.Sprintf("WF_%X", time.Now().UnixNano()),
 	}
 }
 
@@ -209,7 +185,8 @@ func (m *setupModel) inner() int      { return m.panelWidth() - 4 }
 func (m *setupModel) resize() {
 	m.input.SetWidth(max(8, m.inner()-4))
 	m.help.SetWidth(max(10, m.width-2))
-	m.list.SetSize(m.inner(), min(8, max(3, len(m.list.Items()))))
+	m.projectPick.size(m.inner())
+	m.repoPick.size(m.inner())
 }
 
 // ---- tea.Model -------------------------------------------------------------
@@ -254,6 +231,8 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case testedMsg:
 		return m, m.tested(msg)
+	case reposMsg:
+		return m, m.gotRepos(msg)
 	case projectsMsg:
 		return m, m.gotProjects(msg)
 	case statusesMsg:
@@ -277,7 +256,9 @@ func (m *setupModel) passThrough(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.isInput() {
 		m.input, cmd = m.input.Update(msg)
 	} else if m.step == stepProjects && !m.loading {
-		m.list, cmd = m.list.Update(msg)
+		m.projectPick.list, cmd = m.projectPick.list.Update(msg)
+	} else if m.step == stepRepos && !m.loading {
+		m.repoPick.list, cmd = m.repoPick.list.Update(msg)
 	}
 	return m, cmd
 }
@@ -343,19 +324,9 @@ func (m *setupModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.goBack()
 		}
 	case stepProjects:
-		filtering := m.list.FilterState() == list.Filtering
-		switch {
-		case k == "enter" && !filtering:
-			if p, ok := m.list.SelectedItem().(projectItem); ok {
-				return m.chooseProject(p.key)
-			}
-			return nil
-		case k == "esc" && m.list.FilterState() == list.Unfiltered:
-			return m.goBack()
-		}
-		var cmd tea.Cmd
-		m.list, cmd = m.list.Update(msg)
-		return cmd
+		return m.pickKey(&m.projectPick, msg, m.chooseProjects)
+	case stepRepos:
+		return m.pickKey(&m.repoPick, msg, m.chooseRepos)
 	case stepStatuses:
 		return m.statusKey(k)
 	case stepReview:
@@ -372,6 +343,19 @@ func (m *setupModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// pickKey drives a multi-select step. Enter continues only with a pick.
+func (m *setupModel) pickKey(p *picker, msg tea.KeyPressMsg, next func() tea.Cmd) tea.Cmd {
+	if msg.String() == "esc" && p.list.FilterState() == list.Unfiltered {
+		return m.goBack()
+	}
+	m.err = ""
+	cmd, done := p.key(msg)
+	if done {
+		return next()
+	}
+	return cmd
 }
 
 func (m *setupModel) statusKey(k string) tea.Cmd {
@@ -445,9 +429,11 @@ func (m *setupModel) goBack() tea.Cmd {
 		return nil
 	case stepGitHubToken, stepGitHubTest:
 		return m.focus(stepOrg, false)
+	case stepRepos:
+		return m.focus(stepGitHubToken, false)
 	case stepProjects:
 		if m.github {
-			return m.focus(stepGitHubToken, false)
+			return m.showRepos()
 		}
 		m.step = stepAskGitHub
 		return nil
@@ -627,11 +613,54 @@ func (m *setupModel) tested(msg testedMsg) tea.Cmd {
 		return cmd
 	}
 	// A new connection means anything discovered before is out of date.
-	m.haveProjects, m.statusProject = false, ""
+	m.haveProjects, m.haveRepos, m.statusFor = false, false, ""
 	if m.step == stepJiraTest {
 		m.step = stepAskGitHub
 		return nil
 	}
+	return m.showRepos()
+}
+
+func (m *setupModel) showRepos() tea.Cmd {
+	if m.haveRepos {
+		m.step, m.err = stepRepos, ""
+		return nil
+	}
+	id := m.begin(stepRepos)
+	ctx, client := m.ctx, m.client
+	return tea.Batch(m.spin.Tick, func() tea.Msg {
+		r, err := client.SetupRepos(ctx)
+		return reposMsg{id, r, err}
+	})
+}
+
+func (m *setupModel) gotRepos(msg reposMsg) tea.Cmd {
+	if !m.loading || msg.id != m.loadID {
+		return nil
+	}
+	m.loading = false
+	if msg.err != nil {
+		m.fatal = msg.err
+		return tea.Quit
+	}
+	items := []pickItem{{pickAll, "All repositories in " + clean(m.org)}}
+	for _, r := range msg.repos {
+		items = append(items, pickItem{clean(r.Name), clean(r.Name)})
+	}
+	m.repoPick.setItems(items)
+	m.haveRepos = true
+	m.step = stepRepos
+	m.resize()
+	return nil
+}
+
+// chooseRepos keeps the picked repositories, or all of them, and moves on.
+func (m *setupModel) chooseRepos() tea.Cmd {
+	if !anyPicked(m.repoPick.picked) {
+		m.err = "Pick at least one repository."
+		return nil
+	}
+	m.repos = m.repoPick.chosen()
 	return m.showProjects()
 }
 
@@ -664,30 +693,58 @@ func (m *setupModel) gotProjects(msg projectsMsg) tea.Cmd {
 		m.fatal = errors.New("no visible Jira projects; check token permissions")
 		return tea.Quit
 	}
-	items := make([]list.Item, len(msg.projects))
+	items := make([]pickItem, len(msg.projects))
 	for i, p := range msg.projects {
-		items[i] = projectItem{clean(p.Key), clean(p.Name)}
+		items[i] = pickItem{clean(p.Key), clean(p.Key) + "  " + clean(p.Name)}
 	}
-	m.list.SetItems(items)
-	m.list.ResetFilter()
-	m.list.Select(0)
+	m.projectPick.setItems(items)
 	m.haveProjects = true
+	m.step = stepProjects
 	m.resize()
 	return nil
 }
 
-func (m *setupModel) chooseProject(key string) tea.Cmd {
-	m.project = key
-	if m.statusProject == key && len(m.items) > 0 {
+// chooseProjects keeps the picked projects and reads their statuses.
+func (m *setupModel) chooseProjects() tea.Cmd {
+	if !anyPicked(m.projectPick.picked) {
+		m.err = "Pick at least one project."
+		return nil
+	}
+	m.projects = m.projectPick.chosen()
+	key := strings.Join(m.projects, ",")
+	if m.statusFor == key && len(m.items) > 0 {
 		m.step = stepStatuses
 		return nil
 	}
 	id := m.begin(stepStatuses)
-	ctx, client := m.ctx, m.client
+	ctx, client, projects := m.ctx, m.client, m.projects
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
-		s, err := client.SetupStatuses(ctx, key)
-		return statusesMsg{id, s, err}
+		var lists [][]string
+		for _, project := range projects {
+			s, err := client.SetupStatuses(ctx, project)
+			if err != nil {
+				return statusesMsg{id: id, err: err}
+			}
+			lists = append(lists, s)
+		}
+		return statusesMsg{id: id, statuses: mergeStatuses(lists)}
 	})
+}
+
+// mergeStatuses joins each project's statuses, dropping repeats and keeping the
+// order they were first seen in.
+func mergeStatuses(lists [][]string) []string {
+	var merged []string
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, s := range list {
+			if !seen[s] {
+				seen[s] = true
+				merged = append(merged, s)
+			}
+		}
+	}
+	return merged
 }
 
 func (m *setupModel) gotStatuses(msg statusesMsg) tea.Cmd {
@@ -699,7 +756,7 @@ func (m *setupModel) gotStatuses(msg statusesMsg) tea.Cmd {
 		m.fatal = msg.err
 		return tea.Quit
 	}
-	m.statuses, m.statusProject, m.cursor = msg.statuses, m.project, 0
+	m.statuses, m.statusFor, m.cursor = msg.statuses, strings.Join(m.projects, ","), 0
 	m.items = make([]stageItem, len(msg.statuses))
 	for i := range msg.statuses {
 		m.items[i] = stageItem{index: i, on: true}
@@ -709,10 +766,25 @@ func (m *setupModel) gotStatuses(msg statusesMsg) tea.Cmd {
 
 func (m *setupModel) loadPeople() tea.Cmd {
 	id := m.begin(stepPeople)
-	ctx, client, project := m.ctx, m.client, m.project
+	ctx, client, projects := m.ctx, m.client, m.projects
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
-		p, err := client.SetupPeople(ctx, project)
-		return peopleMsg{id, p, err}
+		var people []provider.SetupPerson
+		var failed error
+		seen := map[string]bool{}
+		for _, project := range projects {
+			found, err := client.SetupPeople(ctx, project)
+			if err != nil {
+				failed = err
+				continue
+			}
+			for _, person := range found {
+				if !seen[person.AccountID] {
+					seen[person.AccountID] = true
+					people = append(people, person)
+				}
+			}
+		}
+		return peopleMsg{id, people, failed}
 	})
 }
 
@@ -727,7 +799,7 @@ func (m *setupModel) gotPeople(msg peopleMsg) tea.Cmd {
 }
 
 func (m *setupModel) save() tea.Cmd {
-	setupApply(m.w, m.project, m.statuses, m.chosen(), m.people)
+	setupApply(m.w, m.projects, m.statuses, m.chosen(), m.repos, m.people)
 	id := m.begin(stepSaving)
 	dir, w, credentials, values := m.dir, m.w, m.deps.credentials, m.values
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
@@ -753,18 +825,29 @@ func (m *setupModel) gotSaved(msg savedMsg) tea.Cmd {
 	return nil
 }
 
-// setupApply writes the chosen project, stages and people into the workspace.
-func setupApply(w *workfile.Workspace, project string, statuses []string, order []int, people []provider.SetupPerson) {
+// setupApply writes the chosen stages, repositories and people into the
+// workspace. The projects are already set. Every scope setting is written
+// explicitly, and scope itself never is. Statuses that were unticked become
+// skip_statuses, empty when none were.
+func setupApply(w *workfile.Workspace, projects []string, statuses []string, order []int, repos []string, people []provider.SetupPerson) {
 	p := w.Providers["jira"]
-	// Task 6 makes setup ask for scope. Until then it writes the required
-	// settings and keeps the status choice as an extra filter.
-	p.Projects, p.KeepDoneFor, p.Scope = workfile.Names{project}, "14d", ""
-	if len(order) < len(statuses) {
-		selected := make([]string, len(order))
-		for i, n := range order {
-			selected[i] = strconv.Quote(statuses[n])
+	p.Projects, p.KeepDoneFor, p.Scope = workfile.Names(projects), "14d", ""
+	kept := map[int]bool{}
+	for _, n := range order {
+		kept[n] = true
+	}
+	p.SkipStatuses = workfile.Names{}
+	for i, name := range statuses {
+		if !kept[i] {
+			p.SkipStatuses = append(p.SkipStatuses, name)
 		}
-		p.Scope = "status in (" + strings.Join(selected, ", ") + ")"
+	}
+	if g, ok := w.Providers["github"]; ok {
+		g.Repos = workfile.Names(repos)
+		if len(repos) == 0 {
+			g.Repos = workfile.Names{"all"}
+		}
+		w.Providers["github"] = g
 	}
 	w.Policy.States = setupStates(statuses, order)
 	w.Policy.Gates = map[string][]workfile.Rule{}

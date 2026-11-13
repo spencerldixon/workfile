@@ -25,7 +25,10 @@ type setupFake struct{ peopleErr bool }
 func (setupFake) Identity(context.Context, string) (string, error) { return "example-user", nil }
 func (setupFake) Test(context.Context, string) (string, error)     { return "connected", nil }
 func (setupFake) SetupProjects(context.Context) ([]provider.SetupProject, error) {
-	return []provider.SetupProject{{Key: "APP", Name: "Example project"}}, nil
+	return []provider.SetupProject{{Key: "APP", Name: "Example project"}, {Key: "WEB", Name: "Example web"}}, nil
+}
+func (setupFake) SetupRepos(context.Context) ([]provider.SetupRepo, error) {
+	return []provider.SetupRepo{{Name: "api"}, {Name: "web"}, {Name: "worker"}}, nil
 }
 func (setupFake) SetupStatuses(context.Context, string) ([]string, error) {
 	return []string{"To Do", "In Progress", "Done"}, nil
@@ -132,8 +135,13 @@ func (d *driver) handle(msg tea.Msg) {
 	case tea.QuitMsg:
 		d.quit = true
 	case spinner.TickMsg, animTickMsg:
-	case testedMsg, projectsMsg, statusesMsg, peopleMsg, savedMsg, openedMsg:
+	case testedMsg, reposMsg, projectsMsg, statusesMsg, peopleMsg, savedMsg, openedMsg:
 		d.send(msg)
+	default:
+		// The filter answers with a message the list package keeps private.
+		if strings.Contains(fmt.Sprintf("%T", msg), "FilterMatchesMsg") {
+			d.send(msg)
+		}
 	}
 }
 
@@ -244,8 +252,8 @@ func (d *driver) skipGitHub() {
 func (d *driver) toStatuses() {
 	d.t.Helper()
 	d.skipGitHub()
-	d.want("Which Jira project?")
-	d.press("enter")
+	d.want("Which projects does your team work in?")
+	d.press("space", "enter")
 	d.want("Which statuses should Workfile track?")
 }
 
@@ -369,8 +377,10 @@ func TestSetupGitHubIsConnectedWhenChosen(t *testing.T) {
 		d.want("repo and read:org")
 		d.typeText("example-github-token")
 		d.press("enter")
-		d.want("Which Jira project?")
-		d.press("enter", "enter")
+		d.want("Which repositories does your team ship from?")
+		d.press("space", "enter")
+		d.want("Which projects does your team work in?")
+		d.press("space", "enter", "enter")
 		d.finish()
 		w, err := workfile.Load(root)
 		if err != nil {
@@ -404,11 +414,12 @@ func TestSetupSkippingGitHubDropsItsProvider(t *testing.T) {
 	d.press("enter")
 	d.typeText("example-github-token")
 	d.press("enter")
+	d.want("Which repositories does your team ship from?")
 	d.press("esc", "esc", "esc")
 	d.want("Connect GitHub too?")
 	d.press("n", "enter")
-	d.want("Which Jira project?")
-	d.press("enter", "enter")
+	d.want("Which projects does your team work in?")
+	d.press("space", "enter", "enter")
 	d.finish()
 	w, err := workfile.Load(root)
 	if err != nil || len(w.Providers) != 1 {
@@ -432,8 +443,8 @@ func TestSetupStatusesCanBeUntickedAndReordered(t *testing.T) {
 	if strings.Join(w.Policy.States, " ") != "to_do done" || len(w.People) != 2 {
 		t.Fatalf("unexpected workspace: %+v", w)
 	}
-	if j := w.Providers["jira"]; len(j.Projects) != 1 || j.Projects[0] != "APP" || j.KeepDoneFor != "14d" || j.Scope != `status in ("To Do", "Done")` {
-		t.Fatalf("unexpected scope: %s", w.Providers["jira"].Scope)
+	if j := w.Providers["jira"]; len(j.Projects) != 1 || j.Projects[0] != "APP" || j.KeepDoneFor != "14d" || j.Scope != "" || strings.Join(j.SkipStatuses, ",") != "In Progress" {
+		t.Fatalf("unexpected scope: %+v", j)
 	}
 	policy, err := os.ReadFile(filepath.Join(root, ".workfile", "policy.yml"))
 	if err != nil {
@@ -497,7 +508,7 @@ func TestSetupConnectionFailureReturnsToTheFieldWithAMessage(t *testing.T) {
 	d.typeText("example-token-2")
 	d.press("enter")
 	d.want("Connect GitHub too?")
-	d.press("n", "enter", "enter", "enter")
+	d.press("n", "enter", "space", "enter", "enter")
 	d.finish()
 	w, err := workfile.Load(root)
 	if err != nil {

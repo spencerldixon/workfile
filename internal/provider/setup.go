@@ -5,10 +5,16 @@ import (
 	"errors"
 	"net/url"
 	"strconv"
+
+	"workfile/internal/workfile"
 )
 
 // SetupProject is a project visible to the connected Jira account.
 type SetupProject struct{ Key, Name string }
+
+// SetupRepo is an unarchived repository in the connected GitHub organisation.
+type SetupRepo struct{ Name string }
+
 type SetupPerson struct {
 	AccountID, DisplayName, AccountType string
 	Active                              bool
@@ -107,4 +113,27 @@ func (c *Client) SetupPeople(ctx context.Context, project string) ([]SetupPerson
 			return nil, errors.New("Jira repeated the people page")
 		}
 	}
+}
+
+// SetupRepos lists the unarchived repositories of the GitHub organisation, in
+// name order, for setup to offer as a choice.
+func (c *Client) SetupRepos(ctx context.Context) ([]SetupRepo, error) {
+	p, ok := c.Workspace.Providers["github"]
+	if !ok {
+		return nil, errors.New("GitHub is not connected")
+	}
+	token, err := c.Credentials.Get(p.Auth["token"])
+	if err != nil {
+		return nil, err
+	}
+	p.Repos = workfile.Names{"all"}
+	names, _, err := c.repositories(ctx, p, token)
+	if err != nil {
+		return nil, err
+	}
+	repos := make([]SetupRepo, len(names))
+	for i, name := range names {
+		repos[i] = SetupRepo{name}
+	}
+	return repos, nil
 }

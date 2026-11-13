@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -53,7 +52,7 @@ func (m *setupModel) header() string {
 	switch {
 	case m.step >= stepReview:
 		current = 2
-	case m.step >= stepProjects:
+	case m.step >= stepRepos:
 		current = 1
 	}
 	if m.width < 52 {
@@ -75,7 +74,7 @@ func (m *setupModel) header() string {
 
 // screen lays out a title, a short explanation, and then the parts.
 func (m *setupModel) screen(title, text string, parts ...string) string {
-	lines := []string{m.t.bold(title)}
+	lines := []string{m.t.bold(m.t.para(title, m.inner()))}
 	if text != "" {
 		lines = append(lines, "", m.t.para(text, m.inner()))
 	}
@@ -186,9 +185,13 @@ func (m *setupModel) body() string {
 			m.t.dim(m.t.para("Workfile only reads, but GitHub's classic tokens have no read-only choice for repositories, so repo is the smallest one. If your organisation uses SSO, choose Configure SSO next to the token and authorise it.", in)),
 			m.tokenView())
 	case stepProjects:
-		return m.screen("Which Jira project?",
-			"Workfile checks the tickets in one project. Type to filter the list.",
-			m.list.View())
+		return m.pickView("Which projects does your team work in?",
+			"Workfile checks the tickets in the projects you tick. Space ticks a project, and / filters the list.",
+			&m.projectPick, "project", "projects")
+	case stepRepos:
+		return m.pickView("Which repositories does your team ship from?",
+			"Workfile reads pull requests in the repositories you tick. Pick the first row to read them all.",
+			&m.repoPick, "repository", "repositories")
 	case stepStatuses:
 		return m.statusesView()
 	case stepReview:
@@ -199,23 +202,41 @@ func (m *setupModel) body() string {
 	return ""
 }
 
+// pickView is a title, a short explanation, the list and how many are ticked.
+func (m *setupModel) pickView(title, text string, p *picker, one, many string) string {
+	count := m.t.dim("Nothing picked yet")
+	switch n := len(p.chosen()); {
+	case p.picked[pickAll]:
+		count = m.t.good("✓ ") + "All picked"
+	case n == 1:
+		count = m.t.good("✓ ") + "1 " + one + " picked"
+	case n > 1:
+		count = m.t.good("✓ ") + fmt.Sprintf("%d %s picked", n, many)
+	}
+	return m.screen(title, text, p.list.View(), count, m.errView())
+}
+
 func (m *setupModel) loadingText() string {
 	switch m.step {
 	case stepJiraTest:
 		return "Checking your Jira connection…"
 	case stepGitHubTest:
 		return "Checking your GitHub connection…"
+	case stepRepos:
+		return "Finding your repositories…"
 	case stepProjects:
 		return "Finding your Jira projects…"
 	case stepStatuses:
-		return "Reading the statuses in " + clean(m.project) + "…"
+		return "Reading the statuses in " + m.projectNames() + "…"
 	case stepPeople:
-		return "Finding people in " + clean(m.project) + "…"
+		return "Finding people in " + m.projectNames() + "…"
 	case stepSaving:
 		return "Saving your workfile…"
 	}
 	return "Working…"
 }
+
+func (m *setupModel) projectNames() string { return clean(strings.Join(m.projects, ", ")) }
 
 func (m *setupModel) choiceView() string {
 	yes, no := m.t.dim("○ Yes"), m.t.accent("● No")
@@ -263,7 +284,10 @@ func (m *setupModel) reviewView() string {
 	}
 	github := "Not connected"
 	if m.github {
-		github = clean(m.org)
+		github = clean(m.org) + " · all repositories"
+		if len(m.repos) > 0 {
+			github = clean(m.org) + " · " + clean(strings.Join(m.repos, ", "))
+		}
 	}
 	stages := make([]string, 0, len(m.items))
 	for _, i := range m.chosen() {
@@ -277,7 +301,7 @@ func (m *setupModel) reviewView() string {
 		row("Folder", clean(m.dir)+"/.workfile"),
 		row("Jira", clean(m.site)),
 		row("GitHub", github),
-		row("Project", clean(m.project)),
+		row("Projects", m.projectNames()),
 		row("Stages", strings.Join(stages, " → ")),
 		row("People", people),
 	}, "\n")
@@ -317,10 +341,10 @@ func (m *setupModel) footer() string {
 		b = []key.Binding{hint("enter", "continue"), hint("esc", "back"), hint("ctrl+c", "quit")}
 	case m.step == stepAskGitHub:
 		b = []key.Binding{hint("←/→", "choose"), hint("enter", "confirm"), hint("esc", "back")}
-	case m.step == stepProjects && m.list.FilterState() == list.Filtering:
+	case (m.step == stepProjects && m.projectPick.filtering()) || (m.step == stepRepos && m.repoPick.filtering()):
 		b = []key.Binding{hint("enter", "apply filter"), hint("esc", "clear")}
-	case m.step == stepProjects:
-		b = []key.Binding{hint("↑/↓", "move"), hint("/", "filter"), hint("enter", "select"), hint("esc", "back")}
+	case m.step == stepProjects || m.step == stepRepos:
+		b = []key.Binding{hint("↑/↓", "move"), hint("space", "tick"), hint("/", "filter"), hint("enter", "continue"), hint("esc", "back")}
 	case m.step == stepStatuses:
 		b = []key.Binding{hint("space", "tick"), hint("shift+↑/↓", "reorder"), hint("enter", "continue"), hint("esc", "back")}
 	case m.step == stepReview:

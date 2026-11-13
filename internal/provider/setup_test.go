@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"workfile/internal/workfile"
 )
 
 func TestSetupDiscovery(t *testing.T) {
@@ -41,5 +43,18 @@ func TestSetupDiscovery(t *testing.T) {
 	people, err := c.SetupPeople(context.Background(), "APP")
 	if err != nil || len(people) != 1 || people[0].AccountID != "example-alice" {
 		t.Fatalf("people %v: %v", people, err)
+	}
+}
+
+func TestSetupReposListsUnarchivedRepositories(t *testing.T) {
+	c := client(t, func(r *http.Request) (int, string) {
+		return 200, `{"data":{"organization":{"repositories":{"nodes":[{"name":"web"},{"name":"old","isArchived":true},{"name":"api"}],"pageInfo":{"hasNextPage":false}}}}}`
+	})
+	p := c.Workspace.Providers["github"]
+	p.Repos = workfile.Names{"api"} // the choice made so far must not narrow the list
+	c.Workspace.Providers["github"] = p
+	repos, err := c.SetupRepos(context.Background())
+	if err != nil || len(repos) != 2 || repos[0].Name != "api" || repos[1].Name != "web" {
+		t.Fatalf("repos %v: %v", repos, err)
 	}
 }

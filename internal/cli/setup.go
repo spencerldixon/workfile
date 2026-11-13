@@ -20,6 +20,7 @@ import (
 type setupSource interface {
 	Identity(context.Context, string) (string, error)
 	Test(context.Context, string) (string, error)
+	SetupRepos(context.Context) ([]provider.SetupRepo, error)
 	SetupProjects(context.Context) ([]provider.SetupProject, error)
 	SetupStatuses(context.Context, string) ([]string, error)
 	SetupPeople(context.Context, string) ([]provider.SetupPerson, error)
@@ -174,6 +175,43 @@ func setupYAMLSections(keys []string, values map[string]any) ([]byte, error) {
 	return []byte(strings.Join(sections, "\n\n") + "\n"), nil
 }
 
+// setupProvidersYAML writes providers.yml. Setup never writes scope. Two
+// settings are written the way a person would read them: skip_statuses is always there on a tracker, even as
+// [], so the filter is visible, and repos: all is a plain word.
+func setupProvidersYAML(providers map[string]workfile.Provider) ([]byte, error) {
+	var doc yaml.Node
+	if err := doc.Encode(providers); err != nil {
+		return nil, err
+	}
+	for i := 0; i+1 < len(doc.Content); i += 2 {
+		name, body := doc.Content[i].Value, doc.Content[i+1]
+		if body.Kind != yaml.MappingNode {
+			continue
+		}
+		p := providers[name]
+		// Setup never sets scope, so the empty setting is left out.
+		for j := 0; j+1 < len(body.Content); j += 2 {
+			if body.Content[j].Value == "scope" && body.Content[j+1].Value == "" {
+				body.Content = append(body.Content[:j], body.Content[j+2:]...)
+				break
+			}
+		}
+		if p.Kind == "jira" && len(p.SkipStatuses) == 0 {
+			body.Content = append(body.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "skip_statuses"},
+				&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle})
+		}
+		if p.AllRepos() {
+			for j := 0; j+1 < len(body.Content); j += 2 {
+				if body.Content[j].Value == "repos" {
+					body.Content[j+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "all"}
+				}
+			}
+		}
+	}
+	return yaml.Marshal(&doc)
+}
+
 func saveSetup(dir string, w *workfile.Workspace, credentials string, values map[string]string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -204,7 +242,7 @@ func saveSetup(dir string, w *workfile.Workspace, credentials string, values map
 	if err != nil {
 		return err
 	}
-	providerData, err := yaml.Marshal(w.Providers)
+	providerData, err := setupProvidersYAML(w.Providers)
 	if err != nil {
 		return err
 	}
