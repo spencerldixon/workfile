@@ -26,7 +26,7 @@ Usage: wf <command> [options]
   tracker                     Your tracker, scoped to the team: browse and read tickets
   status [TICKET ...]         Where work is, and what it needs
   check TICKET --to STAGE     May this ticket move now? (exit 0 yes, 1 no, 2 cannot tell)
-  lint                        Is the policy sound? Proves your invariants
+  lint                        Is the policy sound? Which gates guard each stage
 
 Options for status:
   --me                        Your work: assigned to you, or PRs you opened or must review

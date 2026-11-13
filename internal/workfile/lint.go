@@ -12,19 +12,6 @@ type Move struct {
 	Requires []string `json:"requires"`
 }
 
-// Proof says whether every forward path to Stage passes Gate.
-type Proof struct {
-	Stage string `json:"stage"`
-	Gate  string `json:"gate"`
-	Holds bool   `json:"holds"`
-	// Bypass is the shortest forward path that reaches Stage without Gate.
-	// It is empty, not nil, when Stage is where tickets start.
-	Bypass []Move `json:"bypass,omitempty"`
-	// Fixes are moves on the bypass where requiring Gate closes every bypass,
-	// and which no path that already passes Gate uses.
-	Fixes []Move `json:"fixes,omitempty"`
-}
-
 // forward lists the forward moves in pipeline order. A move is forward only
 // when its stage comes later in states, so forward moves never loop, and one
 // pass in that order sees every path. Assess reads the graph the same way.
@@ -74,79 +61,51 @@ func (p Policy) Guarantees() map[string][]string {
 	return must
 }
 
-// Prove checks each invariant in pipeline order. A gate holds at a stage
-// exactly when the stage cannot be reached once every move that requires the
-// gate is taken away.
-func (p Policy) Prove() []Proof {
-	var proofs []Proof
-	for _, stage := range p.States {
-		for _, gate := range p.Invariants[stage] {
-			proof := Proof{Stage: stage, Gate: gate, Holds: true}
-			if path, found := p.bypass(stage, gate, Move{}); found {
-				proof.Holds, proof.Bypass, proof.Fixes = false, path, p.fixes(stage, gate, path)
-			}
-			proofs = append(proofs, proof)
-		}
-	}
-	return proofs
+// Gap is a gate a policy asks for on some routes into a stage but not on all of
+// them: a ticket can reach Stage by a route that skips Gate. Assess accepts a
+// stage when any one route passes, so the gate protects nothing there.
+type Gap struct {
+	Stage string `json:"stage"`
+	Gate  string `json:"gate"`
+	// Guarded are the moves into Stage that require Gate.
+	Guarded []Move `json:"guarded"`
+	// Open are the moves into Stage that a ticket can take without having
+	// passed Gate.
+	Open []Move `json:"open"`
 }
 
-// bypass finds the shortest forward path to stage that never requires gate,
-// treating extra as if it required gate too.
-func (p Policy) bypass(stage, gate string, extra Move) ([]Move, bool) {
-	start := p.States[0]
-	via := map[string]Move{}
-	length := map[string]int{start: 0}
-	for _, m := range p.forward() {
-		n, reached := length[m.From]
-		if !reached || slices.Contains(m.Requires, gate) || m.From == extra.From && m.To == extra.To {
-			continue
-		}
-		if previous, seen := length[m.To]; !seen || n+1 < previous {
-			length[m.To], via[m.To] = n+1, m
-		}
-	}
-	if _, reached := length[stage]; !reached {
-		return nil, false
-	}
-	path := []Move{}
-	for at := stage; at != start; at = via[at].From {
-		path = append(path, via[at])
-	}
-	slices.Reverse(path)
-	return path, true
-}
-
-// fixes lists the moves on path that would close every bypass if they required
-// gate. A move that a path through gate already uses is left out: requiring it
-// there would ask twice on that path, which is rarely what a team means.
-func (p Policy) fixes(stage, gate string, path []Move) []Move {
+// Gaps finds every gate required directly on a move into a stage that some
+// route to the stage can skip. A gate a ticket passed earlier does not count as
+// skipped, so asking for refinement only at the start is not a gap.
+func (p Policy) Gaps() []Gap {
+	must := p.Guarantees()
 	moves := p.forward()
-	// passed: some path from the start reaches this stage through gate.
-	passed := map[string]bool{}
-	for _, m := range moves {
-		if passed[m.From] || slices.Contains(m.Requires, gate) {
-			passed[m.To] = true
+	var gaps []Gap
+	for _, stage := range p.States {
+		var asked []string
+		for _, m := range moves {
+			if m.To == stage {
+				asked = append(asked, m.Requires...)
+			}
+		}
+		for _, gate := range p.gateOrder(unique(asked)) {
+			if slices.Contains(must[stage], gate) {
+				continue
+			}
+			gap := Gap{Stage: stage, Gate: gate, Guarded: []Move{}, Open: []Move{}}
+			for _, m := range moves {
+				switch {
+				case m.To != stage:
+				case slices.Contains(m.Requires, gate):
+					gap.Guarded = append(gap.Guarded, m)
+				case !slices.Contains(must[m.From], gate):
+					gap.Open = append(gap.Open, m)
+				}
+			}
+			gaps = append(gaps, gap)
 		}
 	}
-	// ahead: some path from this stage reaches the target through gate.
-	ahead, leads := map[string]bool{}, map[string]bool{stage: true}
-	for _, m := range slices.Backward(moves) {
-		if leads[m.To] {
-			leads[m.From] = true
-			ahead[m.From] = ahead[m.From] || ahead[m.To] || slices.Contains(m.Requires, gate)
-		}
-	}
-	var result []Move
-	for _, m := range path {
-		if passed[m.From] || ahead[m.To] {
-			continue
-		}
-		if _, open := p.bypass(stage, gate, m); !open {
-			result = append(result, m)
-		}
-	}
-	return result
+	return gaps
 }
 
 // Finding is one plain mistake a policy can have.
@@ -160,6 +119,9 @@ type Finding struct {
 // a policy invalid are reported by Load as a *PolicyError, not here.
 func (p Policy) Lint() []Finding {
 	required := map[string]bool{}
+	for _, gate := range p.Transitions[AnyStage].Requires {
+		required[gate] = true
+	}
 	for _, state := range p.States {
 		t := p.Transitions[state]
 		for _, gate := range t.Requires {
@@ -189,13 +151,6 @@ func (p Policy) Lint() []Finding {
 			Rule:     "unused-gate",
 			Severity: "warning",
 			Message:  fmt.Sprintf("Gate %s is defined but no move requires it. Require it on a move, or remove it.", gate),
-		})
-	}
-	if len(p.Invariants) == 0 {
-		findings = append(findings, Finding{
-			Rule:     "no-invariants",
-			Severity: "warning",
-			Message:  "No invariants. Add one, such as done: [code_review], to prove no path skips a gate.",
 		})
 	}
 	return findings

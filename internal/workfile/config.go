@@ -131,6 +131,9 @@ func (w *Workspace) validate() error {
 	}
 	seen := map[string]bool{}
 	for _, state := range p.States {
+		if state == AnyStage {
+			add("policy.yml: %s is reserved for rules that apply to every stage; name the stage something else", AnyStage)
+		}
 		if state == "" || seen[state] {
 			add("policy.yml: states must be nonempty and unique")
 		}
@@ -194,26 +197,15 @@ func (w *Workspace) validate() error {
 		}
 	}
 	for state := range p.Transitions {
-		if !seen[state] {
+		if !seen[state] && state != AnyStage {
 			add("policy.yml: transition %s is not in states", state)
 		}
 	}
-	for _, stage := range SortedKeys(p.Invariants) {
-		gates := p.Invariants[stage]
-		if !seen[stage] {
-			add("policy.yml: invariants refers to unknown state %s", stage)
-		}
-		if len(gates) == 0 {
-			add("policy.yml: invariants.%s needs at least one gate", stage)
-		}
-		for i, gate := range gates {
-			if _, ok := p.Gates[gate]; !ok {
-				add("policy.yml: invariants.%s refers to unknown gate %s", stage, gate)
-			}
-			if slices.Contains(gates[:i], gate) {
-				add("policy.yml: invariants.%s lists %s twice", stage, gate)
-			}
-		}
+	if len(p.Invariants) > 0 {
+		add("policy.yml: invariants has been removed. Put the gate under transitions: any: { to: [stage], requires: [gate] } to require it on every move into a stage")
+	}
+	if entry, ok := p.Transitions[AnyStage]; ok {
+		w.validateAny(entry, add)
 	}
 	for _, name := range SortedKeys(w.Providers) {
 		provider := w.Providers[name]
@@ -357,4 +349,30 @@ func SortedKeys[V any](m map[string]V) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// validateAny checks the `any` entry: the stages it guards and the gates it
+// adds to every forward move into them. It is not a stage and has no moves of
+// its own, so it can only use to and requires.
+func (w *Workspace) validateAny(t Transition, add func(string, ...any)) {
+	p := w.Policy
+	if t.End || t.Routes != nil || t.RequiresByDestination != nil {
+		add("policy.yml: %s can only use to and requires", AnyStage)
+	}
+	if len(t.To) == 0 || len(t.Requires) == 0 {
+		add("policy.yml: %s needs to (the stages it guards) and requires (the gates)", AnyStage)
+	}
+	for i, stage := range t.To {
+		if !slices.Contains(p.States, stage) {
+			add("policy.yml: %s refers to unknown state %s", AnyStage, stage)
+		}
+		if slices.Contains(t.To[:i], stage) {
+			add("policy.yml: %s lists %s twice", AnyStage, stage)
+		}
+	}
+	for _, gate := range t.Requires {
+		if _, ok := p.Gates[gate]; !ok {
+			add("policy.yml: %s requires unknown gate %s", AnyStage, gate)
+		}
+	}
 }

@@ -130,3 +130,17 @@ func quantity(n int, singular, plural string) string {
 }
 
 func group(a workfile.Assessment) int { return int(a.Standing()) }
+
+// fullWidth is the terminal's real width, without the cap newView applies. It
+// is 0 when out is not a terminal. COLUMNS wins, as it does in newView.
+func fullWidth(out io.Writer) int {
+	if width, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && width >= 20 {
+		return width
+	}
+	if f, ok := out.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		if width, _, err := term.GetSize(int(f.Fd())); err == nil && width > 0 {
+			return width
+		}
+	}
+	return 0
+}
