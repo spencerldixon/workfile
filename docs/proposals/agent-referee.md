@@ -1,8 +1,12 @@
 # Proposal: Workfile as the referee for agents
 
-**Status:** `wf prove` is built (see [Prove](../usage.md#prove-does-the-policy-say-what-you-mean)).
+**Status update (2026-11-13):** automations moved to the hosted product. The
+CLI no longer runs them, and `prove` is now `lint`. See the [vision](../vision.md).
+The text below is kept as written.
+
+**Status:** `wf prove` (now `wf lint`) is built (see [Lint](../usage.md#lint-is-the-policy-sound)).
 The rest is an idea. It builds on [the roadmap](roadmap.md) and
-[Automations](../automations.md).
+Automations.
 
 ## The short version
 

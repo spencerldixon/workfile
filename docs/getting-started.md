@@ -1,11 +1,5 @@
 # Getting started
 
-This page explains the main ideas in Workfile, in plain English. Read it before
-you install anything. It takes about five minutes. After it, the other pages
-will make sense.
-
-## The big idea
-
 Your team probably has rules for how work should move. For example:
 
 - "A ticket needs a proper description before anyone starts it."
@@ -14,90 +8,59 @@ Your team probably has rules for how work should move. For example:
 
 These rules often live in people's heads. Workfile lets you write them down in a
 few small files. Then it checks your real Jira tickets and GitHub pull requests
-against them and tells you which ones are off track.
+against them, and tells you what each one needs next.
 
-Workfile only reads your data. It never changes a ticket, a label, or a pull
-request.
+Workfile only reads. It never changes a ticket, a label or a pull request.
+
+## Do this first
+
+```sh
+wf setup            # connect your tools, pick projects and repos
+wf status --me      # see your work
+wf lint             # check the policy itself
+```
+
+Then change `.workfile/policy.yml` until it matches how your team really works.
 
 ## The words you will see
 
-### Provider
+| Word | Meaning |
+| --- | --- |
+| **Provider** | A tool workfile reads from. Jira holds tickets. GitHub holds pull requests (PRs). |
+| **Connection** | One configured provider, such as `jira` or `github`. Listed in `providers.yml`. |
+| **Scope** | The slice of work workfile reads: your Jira projects, your GitHub repos, and how long finished work stays. |
+| **Stage** | A step in your workflow, such as `todo`, `doing`, `review`, `done`. Listed in order in `policy.yml` under `states`. |
+| **Move** | A step from one stage to another. A move backwards is a **return**. |
+| **Gate** | A named checklist a ticket must pass to make a move, such as `code_review`. |
+| **Rule** | One condition in a gate, such as `github.approvals >= 1`. |
+| **Fact** | Something workfile reads, such as a description length or an approval count. |
+| **People** | An optional list of names with their Jira and GitHub accounts. |
+| **Policy** | All of the above together. The written-down way your team works. |
 
-A **provider** is a tool Workfile reads from. Today there are two:
+### How tickets and PRs link
 
-- **Jira** holds your tickets.
-- **GitHub** holds your pull requests (PRs).
+A PR belongs to a ticket when the PR title contains the ticket key, like
+`APP-42`. A link to the ticket on your Jira site in the PR description also
+works.
 
-Workfile links the two. A PR belongs to a ticket when the PR's title or branch
-name contains the ticket's key, like `APP-42`. An explicit link to that ticket
-on your configured Jira site in the PR description also links them.
+### Scope is explicit
 
-### Connection
+Workfile reads only what `providers.yml` lists. Nothing is taken from a tool's
+own screen settings. For Jira you list `projects`. For GitHub you list `repos`
+(or write `repos: all`). Either way you say how long finished work stays with
+`keep_done_for`.
 
-A **connection** is one configured use of a provider. It has a name, such as
-`jira` or `github`, and holds things like your Jira site and your GitHub
-organisation. You list your connections in `providers.yml`. The settings files
-call these "instances". If you work with two GitHub organisations, you have two
-GitHub connections. You use a connection's name in rules, like `github.approvals`.
+```yaml
+jira:
+  site: example-team.atlassian.net
+  projects: [APP]
+  keep_done_for: 14d
+```
 
-### Search (also called scope)
+This keeps requests few and the file honest. Read it, and you know what workfile
+sees. See the [Jira](providers/jira.md#scope) and [GitHub](providers/github.md#scope) guides.
 
-Your **search** says which tickets Workfile should look at. It is a Jira search
-(JQL), such as "everything in project APP that is not done". Tickets outside
-your search are invisible to Workfile.
-
-### State
-
-A **state** is a step in your workflow, such as `todo`, `doing`, `review` and
-`done`. You list them in order in `policy.yml`, where they are called `states`.
-Each stage matches one or more Jira statuses. For example, the stage `review`
-might match the statuses "In Review" and "Code Review". That match lives in
-`providers.yml` under `statuses`.
-
-### Transition (also called a move)
-
-A **transition** is a move from one stage to another. A move forward goes toward
-the end of the workflow. A move back, such as sending a ticket from review to
-doing, is called a **return**. A stage can have several moves out, which makes a
-branch. Different moves can need different gates. A `requires` list shares
-requirements across forward moves; a `requires` map assigns them to individual
-destinations. A stage with `end: true` is the finish line and has no moves out.
-
-### Gate
-
-A **gate** is a named checklist a ticket must pass to make a move. For example,
-a gate called `code_review` might say "at least one approval". You attach gates
-to moves. The ticket may only make the move when its gate is open.
-
-### Rule
-
-A **rule** is one condition inside a gate, such as `github.approvals >= 1`. A
-gate can have many rules. A gate passes only when every rule that applies to the
-ticket passes. A rule can say who counts, using `by`, and when it applies, using
-`when`.
-
-### Fact
-
-A **fact** is something Workfile reads from Jira or GitHub, such as the length of
-a description, a ticket's labels, or the number of approvals on a PR. Rules are
-made of facts. Workfile does not read history. It only knows what is true right
-now.
-
-### People
-
-Your **people** file is optional. It lists names with their Jira and GitHub
-accounts. You need it when a rule says that a particular person must do
-something, such as "approved by Alice". It also powers `--user`.
-
-### Policy
-
-Your **policy** is everything above, taken together: your stages, the moves
-between them, and the gates on those moves. It is the written-down version of how
-your team works. Its main file is `policy.yml`.
-
-## How it fits together
-
-Here is a small policy, in the plain words of the files:
+## A small policy
 
 ```yaml
 states: [todo, doing, review, done]
@@ -125,62 +88,68 @@ gates:
     - if: github.checks == success
 ```
 
-Read it like a story. A ticket starts in `todo`. To move to `doing` it needs a
-description of at least 100 characters. To move to `review` it needs a linked PR.
-To move to `done` its PR needs an approval and passing CI (continuous
-integration: automated checks run for a change) on the current commit.
+Read it like a story:
 
-## Health and status
+1. A ticket starts in `todo`.
+2. To move to `doing`, it needs a description of at least 100 characters.
+3. To move to `review`, it needs a linked PR.
+4. To move to `done`, its PR needs an approval and passing CI (automated checks) on the current commit.
 
-Workfile has two main questions it can answer.
+## Status: the question you will ask most
 
-**Status** looks forward. For each ticket it asks: *what does this ticket need
-before it can move on?* A ticket is ready to move, needs work, or is out of
-policy.
+`wf status` answers: *where is the work, and what does it need?*
 
-**Health** looks at the whole board. It asks: *how much of our work follows our
-policy, and where is it going wrong?*
+Each ticket lands in one group:
 
-A ticket is **out of policy** when it is already past a gate but does not pass it.
-Imagine a ticket in `review` that has no linked PR. It should not have got there
-without one. A ticket in `doing` with no PR yet is not out of policy. It simply
-cannot move on until it has one. `wf status` shows that as "needs work".
+| Group | Meaning |
+| --- | --- |
+| `✓` Ready | It can move on now. |
+| `✗` Needs work | It is fine so far, but every move forward is blocked. |
+| `‼` Out of policy | It is past a gate it does not pass. |
+| `!` Cannot check | Evidence is missing, so workfile will not guess. |
+| `·` Done | Finished. |
 
-Workfile judges tickets by the facts today. If a ticket's description was long
-enough when it moved, but someone shortened it later, Workfile will notice.
+Example: a ticket in `review` with no linked PR is **out of policy**. It should
+not have got there without one. A ticket in `doing` with no PR is only **needs
+work**. It just cannot move on yet.
 
-Some workflows have branches, with a different path for QA, security, or a quick
-release. A ticket only has to pass the gates on **one** valid path to its stage.
-It does not need the gates from every branch.
+Workfile judges tickets by the facts today. It does not read history.
+
+Some workflows branch, such as a QA path or a security path. A ticket only has
+to pass the gates on **one** valid path to its stage.
+
+## What changed?
+
+```sh
+wf status --since 1d
+```
+
+Shows what moved, got blocked or became ready since an earlier run on your
+computer. It reads saved snapshots, so it adds no requests.
 
 ## What you will do
 
 1. **Install** `wf`. See the [README](../README.md#install).
-2. **Run `wf setup`**. Choose a folder, connect Jira and optional GitHub in
-   your browser, and paste your tokens (they show as `*`). Choose a Jira project,
-   tick the statuses you want to track, and confirm a starter stage order. Setup writes `.workfile/` and saves tokens
-   privately. See [setup details](usage.md#setup-start-from-scratch).
-3. **Review the starter policy**. Its simple stage-to-stage moves are suggestions,
-   not imported Jira workflow moves. Add your team's gates and branches.
-   `people.yml` contains visible project users; add GitHub identities if needed.
-4. **Prefer manual setup?** Copy an example from [`example/`](../example/), edit
-   the providers and people, and add credentials to your private credentials file.
-   Credentials never go in the project files.
-5. **Run `wf test`** to check the connections work.
-6. **Run `wf health` and `wf status`** to see how your work compares with your
-   policy.
-7. **Change `policy.yml`** until it describes the way your team really works.
-8. **Put it to work.** Once the policy is right, it is the source of truth for
-   how work moves. [Automations](automations.md) react to it: "when my ticket
-   can move to done, post in the release channel". Agents can ask
-   `wf check APP-42 --to done` before they move anything.
+2. **Run `wf setup`.** Pick a folder, connect Jira and optional GitHub, paste
+   your tokens (they show as `*`), pick your projects and repos, tick the
+   statuses you want, and confirm. Setup writes `.workfile/` and saves tokens
+   privately. See [setup details](usage.md#setup-connect-your-tools).
+3. **Prefer to do it by hand?** Copy an example from [`example/`](../example/)
+   and edit it. Credentials never go in the project files.
+4. **Check the connections** with `wf setup --test`.
+5. **Look at your work** with `wf status --me`, then `wf status`.
+6. **Add your team's gates** to `policy.yml`. The starter has none, so every
+   ticket reads as ready.
+7. **Run `wf lint`.** It catches plain mistakes and proves no path skips a gate.
+   Run it in CI.
+8. **Let agents ask first.** `wf check APP-42 --to done` says whether a move is
+   allowed. Exit code `0` means yes.
 
 ## Where to read next
 
 - [Using wf](usage.md): every command and option.
 - [Writing a policy](policy.md): stages, moves, gates and rules in detail.
-- [Automations](automations.md): "when this happens to my work, do that".
-- [Jira provider](providers/jira.md) and [GitHub provider](providers/github.md): tokens, settings, and what each
-  attribute means. GitHub can also hold your tickets.
+- [Jira provider](providers/jira.md) and [GitHub provider](providers/github.md): tokens, scope and facts.
 - [Building a provider](providers/building-a-provider.md): add a new tracker or code host.
+- [Vision](vision.md): where this is going.
 - [Examples](../example/): policies you can copy.

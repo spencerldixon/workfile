@@ -3,7 +3,7 @@
 New to Workfile? Start with [Getting started](../getting-started.md).
 
 Each entry in `providers.yml` is one connection. Its name is the start of every
-expression that uses it, and it is the name you give to `wf test`.
+expression that uses it, and it is the name you give to `wf setup --test`.
 
 The `provider` setting says which provider to use. If you leave it out, the
 connection's name is used. Keep your real secrets in your environment or your
@@ -13,7 +13,8 @@ personal credentials file. Workfile refuses secrets written straight into
 ```yaml
 jira:
   site: example-team.atlassian.net
-  scope: project = APP AND (statusCategory != Done OR resolved >= -14d)
+  projects: [APP]
+  keep_done_for: 14d
   statuses:
     todo: To Do
     doing: In Progress
@@ -30,7 +31,7 @@ Make a Jira API token with scopes in your
 [Atlassian account](https://id.atlassian.com/manage-profile/security/api-tokens),
 and use the email address of that account. Workfile needs permission to read Jira
 work (`read:jira-work`) and to read who you are (`read:jira-user`). The second is
-used by `wf test` and by `--me`. If your organisation uses finer-grained scopes,
+used by `wf setup --test` and by `--me`. If your organisation uses finer-grained scopes,
 grant the matching permissions to search, to read issue change history, and to
 read the current user. These guides help:
 [Atlassian's token guide](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/)
@@ -39,24 +40,42 @@ and [REST authentication](https://developer.atlassian.com/cloud/jira/platform/ba
 | Setting | What it means |
 | --- | --- |
 | `site` | Required. Your Jira Cloud address, such as `example-team.atlassian.net`. |
-| `scope` | Required. A JQL search that picks the tickets to check. Used by `health` and `status` listings. A ticket you name, such as `wf status APP-42`, ignores it, so sub-tasks and parked tickets can still be looked up. |
-| `default_project` | Optional. A Jira project key such as `APP`. It lets you name a ticket by number alone: `wf status 42` means `APP-42`. Without it, a bare number is an error. |
+| `projects` | Required. The Jira project keys your team works in, such as `[APP, WEB]`. |
+| `keep_done_for` | Required. How long finished tickets stay in scope, such as `14d` or `2w`. |
+| `skip_statuses` | Optional. Statuses to leave out, such as `[Backlog, "On hold"]`. |
+| `scope` | Optional. Extra JQL added on top of the rest. Use it only when the settings above cannot say what you mean. |
+| `default_project` | Optional. A project key such as `APP`. It lets you name a ticket by number alone: `wf status 42` means `APP-42`. |
 | `statuses` | Required. Maps each stage in your policy to one or more Jira status names. Case does not matter. |
 | `auth.email` | The name of the credential that holds your account email. |
 | `auth.token` | The name of the credential that holds your Jira API token. |
 
-Every Jira status must map to one stage. A status that is not mapped is
-reported as an error. If some work should not be checked, leave it out of your
-search:
+## Scope
 
-```yaml
-scope: >-
-  project = APP
-  AND status not in (Backlog, "On hold")
-  AND (statusCategory != Done OR resolved >= -14d)
-```
+Scope says which tickets workfile reads. It is written in `providers.yml`, so
+the file documents the team. Nothing comes from a Jira board or filter.
 
-Workfile adds `ORDER BY updated DESC` unless your search already has an order.
+Workfile builds one JQL search from your settings:
+
+| You write | Workfile searches |
+| --- | --- |
+| `projects: [APP]`, `keep_done_for: 14d` | `project in ("APP") AND (statusCategory != Done OR resolved >= -14d)` |
+| `projects: [APP, WEB]`, `skip_statuses: [Backlog, "On hold"]`, `keep_done_for: 2w` | `project in ("APP", "WEB") AND status not in ("Backlog", "On hold") AND (statusCategory != Done OR resolved >= -2w)` |
+| Also `scope: labels != spike ORDER BY rank` | The search above, then `AND (labels != spike)`, ordered by `rank` |
+
+Why explicit? Three reasons:
+
+- Anyone reading `providers.yml` sees exactly what workfile reads.
+- A narrow search means fewer requests.
+- Changing a Jira board never changes what your policy checks.
+
+`wf status` and `wf tracker` read the same slice. A ticket you name, such as
+`wf status APP-42`, ignores the search, so sub-tasks and parked tickets can still
+be looked up.
+
+Every Jira status that appears in scope must map to one stage. A status that is
+not mapped is reported as an error. Leave a status out with `skip_statuses`.
+
+Workfile adds `ORDER BY updated DESC` unless your `scope` has its own order.
 It looks up your site's cloud ID, then talks to Atlassian's gateway at
 `api.atlassian.com/ex/jira/<cloudId>`. It uses Jira v3 search, and reads label
 history in bulk when a `by` rule needs to know who added a label. The cloud ID
@@ -104,9 +123,9 @@ gates:
 | HTTP 403 or GraphQL query rejected | Check scopes, repository access, organisation rules, single sign-on, and rate limits. |
 | Jira query rejected | Try your JQL in Jira, and check the project and status names. |
 | No Jira cloud ID | Check `site`. Only Jira Cloud is supported. |
-| Unmapped Jira status | Add it to the right stage under `statuses`, or leave it out of your search on purpose. |
+| Unmapped Jira status | Add it to the right stage under `statuses`, or list it under `skip_statuses` on purpose. |
 | A PR you expected is missing | Check its title or branch for the ticket key, its last update date, whether you can see the repository, and whether it is archived. |
-| A ticket you expected is missing | Check your search, your `--me` or `--user` filter, the limit, and your account's access. |
+| A ticket you expected is missing | Check your scope, your `--me` or `--user` filter, the limit, and your account's access. |
 
 Requests time out after 30 seconds. If a request is rate limited or the gateway
 has a short failure, Workfile tries again up to two times, with short waits that

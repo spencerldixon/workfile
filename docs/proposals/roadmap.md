@@ -1,9 +1,13 @@
 # Roadmap: workflow and automations as code
 
+**Status update (2026-11-13):** automations moved to the hosted product. The
+CLI no longer runs them. See the [vision](../vision.md). The text below is kept
+as written.
+
 **Status:** steps 1 to 5 are built, with the single-workspace parts of step 6
 (one `wf watch` per workspace folder). Per-workspace `me` and `agent`
 settings, `wf workspaces`, `wf watch --all`, `--json` events and step 7 are not
-built yet. The user guide is [Automations](../automations.md).
+built yet. The user guide is Automations.
 
 New to Workfile? Read [Getting started](../getting-started.md) first. This page
 uses its words: stage, move, gate and rule. For where this is all heading, read
@@ -66,7 +70,7 @@ workspace by its `name:` in `policy.yml`, for example
 `~/.config/workfile/example-web/automations.yml`. Any repository can claim a
 name, so a private file also lists the git remotes it may run in. You can use
 both. Details
-are in [Where automations live](../automations.md#where-automations-live).
+are in Where automations live.
 
 ## An automation file
 
@@ -143,7 +147,7 @@ The same file works as a private file. Moved to
 only Alice can see it.
 
 The full file format, triggers, modes and safety limits are in
-[Automations](../automations.md).
+Automations.
 
 ## What to add to Workfile
 
@@ -186,7 +190,7 @@ creates your private file.
 
 `wf watch --once --dry-run` checks your work, compares it with the last check,
 and prints what would fire. The rules are in
-[Triggers](../automations.md#triggers): the first check fires nothing,
+Triggers: the first check fires nothing,
 each change fires once, and unknown is never a change.
 
 ### 5. Actions and modes

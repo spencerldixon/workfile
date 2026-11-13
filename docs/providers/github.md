@@ -3,7 +3,7 @@
 New to Workfile? Start with [Getting started](../getting-started.md).
 
 Each entry in `providers.yml` is one connection. Its name is the start of every
-expression that uses it, and it is the name you give to `wf test`.
+expression that uses it, and it is the name you give to `wf setup --test`.
 
 The `provider` setting says which provider to use. If you leave it out, the
 connection's name is used. Keep your real secrets in your environment or your
@@ -13,6 +13,7 @@ personal credentials file. Workfile refuses secrets written straight into
 ```yaml
 github:
   org: example-team
+  repos: [app, api]
   auth:
     token: ${EXAMPLE_GITHUB_TOKEN}
 ```
@@ -24,7 +25,7 @@ scopes. `wf setup` opens GitHub's new-token page with both already selected.
 Workfile only reads, but classic tokens have no read-only choice for
 repositories, so `repo` is the smallest scope that works. If your organisation
 uses single sign-on, choose Configure SSO next to the token and authorise it.
-Fine-grained tokens are not recommended. `wf test github` checks the fields that Workfile reads.
+Fine-grained tokens are not recommended. `wf setup --test github` checks the fields that Workfile reads.
 These guides help:
 [GitHub's GraphQL guide](https://docs.github.com/en/graphql/guides/forming-calls-with-graphql)
 and [token setup](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
@@ -32,7 +33,22 @@ and [token setup](https://docs.github.com/en/authentication/keeping-your-account
 | Setting | What it means |
 | --- | --- |
 | `org` | Required. Your GitHub organisation name. |
+| `repos` | Required. The repositories your team ships from, such as `[app, api]`, or `all`. |
 | `auth.token` | The name of the credential that holds your GitHub token. |
+
+### Scope
+
+`repos` says which repositories workfile reads PRs from.
+
+- `repos: [app, api]` reads only those two. A PR in any other repository is never linked, even when its title names a ticket.
+- `repos: all` reads every repository in the organisation that is not archived.
+- A listed repository that is archived or hidden from your token is reported, not silently dropped.
+- You must write one or the other. There is no default that reads more than you chose.
+
+Why explicit? Anyone reading `providers.yml` sees what workfile reads, and a
+narrow list means fewer requests.
+
+### How PRs are found
 
 Workfile searches your organisation for PRs that mention the tickets being
 checked, six tickets per search, with up to six searches at once. The number of
@@ -165,7 +181,9 @@ issues:
   provider: github
   org: example-team
   project: 7
-  view: 3
+  repos: [app, api]
+  keep_done_for: 14d
+  skip_statuses: [Backlog]
   default_project: app
   statuses:
     todo: Backlog
@@ -175,6 +193,7 @@ issues:
     token: ${EXAMPLE_GITHUB_TOKEN}
 github:
   org: example-team
+  repos: [app, api]
   auth:
     token: ${EXAMPLE_GITHUB_TOKEN}
 ```
@@ -200,14 +219,40 @@ names from `policy.yml`. Two connections keep `issues.labels`
 | --- | --- |
 | `org` | Required. Your GitHub organisation name. |
 | `project` | Required. The number of your organisation's GitHub Project, from its address. |
-| `view` | Optional. The number of a saved view of that project. Only tickets the view shows are in your scope. |
+| `repos` | Required. The repositories your team's issues are in, such as `[app, api]`, or `all`. |
+| `keep_done_for` | Required. How long finished issues stay in scope, such as `14d` or `2w`. |
 | `statuses` | Required. Maps each stage in your policy to one or more `Status` names. |
+| `skip_statuses` | Optional. `Status` names to leave out, such as `[Backlog]`. |
+| `scope` | Optional. Extra GitHub project filter text added on top, such as `label:bug`. |
 | `default_project` | Optional. A repository name in lower case, such as `app`. It lets you name an issue by number alone. |
+
+The `view` setting is no longer read. A saved project view is a setting on a
+screen, not in your repo. Writing `view` is an error. Say what you mean with
+`repos`, `skip_statuses`, `keep_done_for` and `scope` instead.
+
+### Scope
+
+Workfile reads the items of your project that match what you wrote:
+
+| You write | Workfile asks GitHub for |
+| --- | --- |
+| `repos: [app]` | `repo:example-team/app` |
+| `repos: [app]`, `skip_statuses: [Backlog, "On hold"]` | `repo:example-team/app -status:Backlog,"On hold"` |
+| `repos: [app]`, `scope: label:bug` | `repo:example-team/app label:bug` |
+| `repos: [app, api]` or `repos: all` | No `repo:` filter. Workfile drops other repositories itself. |
+
+Then, for every issue, workfile also checks that it is in a listed repo, is not in
+a skipped status, and is open or was closed within `keep_done_for`. This is a
+safety net. It means a loose filter never widens what you read.
+
+`scope` is GitHub's own filter text, so write the status exactly, emoji included,
+such as `status:"🕰 Backlog"`. `skip_statuses` ignores leading symbols, like
+`statuses` does.
 
 ### Token
 
 Use a classic token with `repo`, `read:org` and `read:project`. Without
-`read:project` GitHub refuses the read, and `wf test` names the missing scope.
+`read:project` GitHub refuses the read, and `wf setup --test` names the missing scope.
 
 ### Status comes from the project
 
@@ -220,7 +265,6 @@ Status names match without case and without leading symbols, so `done: Done`
 matches a status called `☠️ Done`. If an exact match exists, it wins. If two
 stages would match, the status is left unmapped and reported as an error.
 
-Your scope is the live items of the project, or of the view if you set `view`.
 Archived items are left out of lists, but you can still look one up by key. An
 issue that is not on the project is reported with an error.
 
@@ -237,21 +281,12 @@ wf status app#42
 Do not write `wf status #42` without quotes. In most shells an unquoted `#42` is
 a comment, so the command runs with no ticket. Write `'#42'` or leave off the `#`.
 
-### Filter text
-
-A scope given to a list command is GitHub's own filter text. It is exact: the
-status must be written with its emoji, as in `status:"🕰 Backlog"`. Plain
-`status:Backlog` finds nothing. This differs from `statuses` in providers.yml,
-which ignores leading symbols.
-
 ### What it reads
 
 - `assignee` is the first person assigned to the issue. Only the first counts.
-  `wf status --me` and the `wf tickets --view me` screen see that person only. A second assignee does
-  not see the ticket in those views, and their automations do not fire, unless
-  a PR involves them.
-- With `view` set, Workfile reads the filtered view once and remembers it for 5
-  minutes. One run of a command pays for one paged read of that view.
+  `wf status --me` and the `wf tracker --view me` screen see that person only. A second assignee does
+  not see the ticket in those views, unless a PR involves them.
+- One run of a command pays for one paged read of the project.
 - At most 20 closing PRs per issue are read.
 - An issue whose only closing PR is in another organisation gets no records.
 - An issue from another organisation's repository can appear in a list of the
@@ -274,7 +309,7 @@ issue does not link.
 
 ### Issue text and images
 
-The `wf tickets` screen shows the issue's text and comments (`wf status` does not). Headings, paragraphs, emphasis,
+The `wf tracker` screen shows the issue's text and comments (`wf status` does not). Headings, paragraphs, emphasis,
 code, links, lists, quotes, rules and tables are shown. Anything else stays as
 plain text.
 
@@ -294,9 +329,9 @@ your token to another host.
 | Jira query rejected | Try your JQL in Jira, and check the project and status names. |
 | No Jira cloud ID | Check `site`. Only Jira Cloud is supported. |
 | Unmapped GitHub status | Add the name to the right stage under `statuses`. |
-| Unmapped Jira status | Add it to the right stage under `statuses`, or leave it out of your search on purpose. |
+| Unmapped Jira status | Add it to the right stage under `statuses`, or list it under `skip_statuses` on purpose. |
 | A PR you expected is missing | Check its title or branch for the ticket key, its last update date, whether you can see the repository, and whether it is archived. |
-| A ticket you expected is missing | Check your search, your `--me` or `--user` filter, the limit, and your account's access. |
+| A ticket you expected is missing | Check your scope, your `--me` or `--user` filter, the limit, and your account's access. |
 
 Requests time out after 30 seconds. If a request is rate limited or the gateway
 has a short failure, Workfile tries again up to two times, with short waits that

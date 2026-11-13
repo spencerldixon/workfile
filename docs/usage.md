@@ -2,240 +2,155 @@
 
 New to Workfile? Start with [Getting started](getting-started.md).
 
-Run `wf` inside a project that has a `.workfile/` folder, or in any folder
-below it. `wf` uses the nearest `.workfile/` it finds. Use `--dir` to choose
-where it starts looking.
+Run `wf` inside a project that has a `.workfile/` folder, or in any folder below
+it. `wf` uses the nearest `.workfile/` it finds. Use `--dir` to choose where it
+starts looking.
+
+Run `wf` with no command for help.
+
+## The five commands
+
+| Command | Use it to |
+| --- | --- |
+| [`wf setup`](#setup-connect-your-tools) | Connect your tools and write `.workfile/`. `--test` checks connections. |
+| [`wf status`](#status-where-is-the-work) | See where work is, and what it needs. |
+| [`wf check`](#check-may-this-ticket-move-now) | Ask if one ticket may move now. |
+| [`wf lint`](#lint-is-the-policy-sound) | Check the policy itself. |
+| [`wf tracker`](#tracker-browse-the-teams-tickets) | Browse and read the team's tickets. |
+
+### Renamed commands
+
+| Old name | Now | |
+| --- | --- | --- |
+| `wf health` | `wf status` | Board rollup is plain `wf status`. |
+| `wf test` | `wf setup --test` | |
+| `wf prove` | `wf lint` | Lint also finds plain mistakes. |
+| `wf tickets` | `wf tracker` | Scope comes from `providers.yml`, with no override. |
+
+The old names still work for one release. They print a notice on stderr.
 
 ## How the output looks
 
-`wf health` and `wf status` draw each section as a **panel**: a plain title and
-a soft background, with no edge or border. Icons on the rows say how each item
-is doing. Some older reports, such as `wf health --gate`, still draw **blocks**
-with a coloured edge on the left: red when something in the block needs work
-and green when everything is fine.
+- Each section is a **panel**: a plain title on a soft background.
+- Icons carry the meaning: `✓` ready, `✗` needs work, `‼` out of policy, `!` cannot check, `·` done.
+- Red and green are your terminal theme's own.
+- Output fits your terminal width.
+- Piped output, `NO_COLOR` or `TERM=dumb` give plain text. Web addresses are written out.
+- `WORKFILE_BACKGROUND=off` turns the panel tint off.
 
-If your terminal answers when asked for its background colour, each block gets a
-background a little lighter (on dark themes) or a little darker (on light
-themes) than your own. Workfile asks once per run, and waits at most a fifth of a
-second. If your terminal does not answer, you get the coloured edge only. Set
-`WORKFILE_BACKGROUND=off` to turn the background off. Red and green are your
-terminal theme's own. Piped output has no colours, terminal hyperlinks or background. Ticket and PR
-lists show web addresses instead.
+A report only describes what is true now, within your scope, and visible to your
+tokens. It cannot show the path a ticket took.
 
-A report only describes current facts visible to your tokens, within the
-configured Jira search. It cannot prove the actual path a
-ticket took, or tell you about repositories hidden from your token.
-
-Use `--evidence` to add one evidence block per selected ticket. It shows each
-requirement once, its outcome, and the observed evidence for each ticket or PR.
-Unknown checks are shown even without the flag. Missing required evidence is
-"cannot check", not a pass or a policy violation. Known empty evidence, such as
-zero approvals, can still fail a requirement. A known passing alternative is
-not blocked merely because another route has unknown evidence.
-
-Use `--json` for a machine-readable assessment with no terminal escapes. It
-uses the same evaluator and exit codes. See [JSON reports](json.md) for the
-versioned contract and an agent example.
-
-## Setup: start from scratch
+## Setup: connect your tools
 
 ```sh
 wf setup
 wf setup --dir /path/to/project
+wf setup --test                 # test every connection
+wf setup --test jira github     # test only these
 ```
 
-Setup needs an interactive terminal. You do not need an existing `.workfile/`.
-It runs as one screen at a time. A strip at the top shows where you are:
-Connect, Discover, then Save. The keys are always shown at the bottom. `enter`
-continues, `esc` goes back one screen, and Ctrl-C cancels. The welcome screen
-looks like this:
+Setup needs an interactive terminal. It runs one screen at a time. `enter`
+continues, `esc` goes back, `ctrl+c` cancels. A short animation plays at the
+start. Press any key to skip it.
+
+The steps:
+
+1. **Folder.** Where `.workfile/` goes. Setup refuses a folder that already has one.
+2. **Jira.** Site and email. Setup opens Atlassian's token page. Paste the token. It shows as `*`.
+3. **GitHub (optional).** Organisation and a **classic** token with `repo` and `read:org`. Authorise SSO if your organisation uses it.
+4. **Projects.** Tick the Jira projects your team works in. Type `/` to filter.
+5. **Repositories.** Tick the repos your team ships from, or pick the first row for all.
+6. **Statuses.** Untick any status your team rarely uses. Those tickets are left out. `shift+↑` and `shift+↓` change the order.
+7. **Review and save.** Nothing is saved before you confirm.
+
+Setup writes `policy.yml`, `providers.yml` and `people.yml`. It writes every scope
+setting, so the file documents your team: `projects`, `repos`, `keep_done_for: 14d`
+and `skip_statuses`. Tokens go in your private credentials file, never the project.
+
+It does not import Jira's workflow or invent gates. Each stage links to the next.
+Add your team's checks to `policy.yml`. Without gates, "ready" means nothing yet.
+
+### Test connections
+
+`wf setup --test` checks each connection in `providers.yml`. If one fails, the
+rest still run.
+
+- Jira: who the token belongs to, and one ticket from your scope.
+- GitHub Issues: the project and your scope.
+- GitHub code host: who you are, the repos you can see, and a sample PR search.
+
+A pass means those reads worked. It does not prove you can see every ticket or
+repo you meant to include.
+
+## Status: where is the work?
+
+```sh
+wf status                    # the whole board
+wf status --me               # your work
+wf status APP-42             # one ticket
+wf status --gate code_review # tickets failing one gate
+wf status --since 1d         # what changed
+```
+
+What you get depends on what you ask for:
+
+| You run | You see |
+| --- | --- |
+| `wf status` | A rollup of the board: which gates and stages fail, and how many tickets. |
+| `wf status --gate NAME` or `--stage NAME` | The tickets behind one gate or stage. |
+| `wf status --me` or `--user NAME` | One person's work, grouped by what to do. |
+| `wf status APP-42 APP-57` | The full picture for each named ticket. |
+
+Add `--since` to any of them to see what changed first.
+
+Exit codes: `0` nothing wrong, `1` a ticket is out of policy or needs work, `2` it
+could not finish. See [Exit codes](#exit-codes).
+
+### The rollup
+
+Plain `wf status` checks every ticket in your scope. Here is a small board:
 
 ```text
- workfile setup
+  workfile status                                          4 tickets
+  Jira · APP · repos app, api
 
-  ╭────────────────╮
-  │   ^   ^        │
-  │      ◡         │
-  │                │
-  │  ▬▬▬▬▬▬▬▬ ✓    │
-  │  ▬▬▬▬▬▬   ✓    │
-  │  ▬▬▬▬▬▬▬  ✓    │
-  ╰────────────────╯
+  1 of 4 tickets are out of policy (25%).
+  ████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-   w o r k f i l e  ✦
+  Gates                            failing of tickets that must pass
 
-  Welcome to workfile
+  refinement    ██████░░░░░░  1 / 2   50%
+    1  Description: at least 100 characters
 
-  Let's connect your tickets and pull requests, then check
-  them against a written workflow. Workfile only reads. It
-  never changes a ticket, a label or a pull request.
+  pull request  ████████████  1 / 1  100%
+    1  At least 1 linked PR
 
-  It takes about two minutes.
+  Under each gate: tickets failing each rule. A ticket can fail more
+  than one.
 
- enter begin · ctrl+c quit
+  Stages                           out of policy of tickets in stage
+
+  todo    ░░░░░░░░░░░░  0 / 2    0%
+  doing   ░░░░░░░░░░░░  0 / 1    0%
+  review  ░░░░░░░░░░░░  0 / 0    0%
+  done    ████████████  1 / 1  100%
+
+  Next  wf status --gate pull_request
 ```
 
-The animation lasts about two seconds. Press any key to skip it. With
-`NO_COLOR`, or on a very narrow terminal, you see only the finished picture.
+- The line under the title is your scope: what workfile reads.
+- Gates and stages follow your workflow order, never count or alphabet.
+- A gate's percentage is failing tickets over the tickets that must pass it. A ticket must pass a gate if it is in, or past, the stage the gate guards.
+- A stage's percentage is out-of-policy tickets over all tickets in the stage.
+- **Next** names the command that lists the tickets behind the worst gate.
 
-1. **Folder.** Choose the parent folder for `.workfile/`. Setup refuses a folder
-   that already has one.
-2. **Jira.** Enter your Jira site and account email. Setup opens Atlassian's
-   token page. Create an API token, copy it, and paste it. Each character shows
-   as `*`, with a count such as "16 characters pasted", so you can see the paste
-   worked. Press `ctrl+o` to open the page again. If a connection fails, you
-   return to the site field with a message and your earlier answers kept.
-3. **GitHub (optional).** Choose yes or no. For yes, enter your organisation and
-   create a **classic** token. The link pre-selects the two scopes Workfile needs:
-   `repo` and `read:org`. Workfile only reads, but classic tokens have no
-   read-only choice for repositories. If your organisation uses single sign-on,
-   choose Configure SSO next to the token and authorise it.
-4. **Project.** Choose a visible Jira project. Type to filter a long list.
-5. **Statuses.** Every status your project uses is ticked. Keep the ones tickets
-   move through. Untick any your team rarely uses (`space`), and tickets in
-   those statuses are left out of the Jira search and reports. Move a status
-   with `shift+↑` or `shift+↓` to change the order. A live line shows the
-   pipeline you are making. Keep at least one. Setup suggests the order from
-   Jira's status categories, not from its configured workflow moves.
-6. **Review.** Each stage moves to the next, and the last stage is terminal. Full
-   Jira workflows, branches, restrictions and gates are **not** imported, and no
-   approval or description rules are invented. Setup also imports active,
-   visible users assignable to the project into `people.yml`, with Jira account
-   IDs and display names. Aliases come from names, such as `alice`; duplicates get
-   a numbered suffix. It does not guess GitHub identities. If this read is denied,
-   you can still save with an empty people file.
-7. **Save.** Setup checks the generated configuration, creates `policy.yml`,
-   `providers.yml` and `people.yml`, and saves tokens in your personal
-   credentials file with private permissions. Existing credential entries are
-   kept. No secrets appear in the project files. `policy.yml` has blank lines
-   between sections, in the order `tracker`, `states`, `transitions`, `gates`.
-   `people.yml` has a blank line between people.
+In a terminal this opens an interactive screen: gates and stages on the left, the
+chosen one on the right, `enter` to list its tickets, `esc` to go back, `q` to quit.
+Piped, or with `NO_COLOR` or `--evidence`, it prints the text above.
 
-The last screen tells you to enter your folder and run `wf status`. Add checks
-and any real branches to `.workfile/policy.yml` before treating readiness as a
-team requirement. A starter with no gates cannot find unmet requirements.
-
-Nothing is saved before you confirm on the review screen. `NO_COLOR` and
-`TERM=dumb` disable colour. Setup does not
-support report filters or `--json`. It never changes Jira or GitHub data.
-
-## Health: how does the board compare to policy?
-
-```sh
-wf health
-wf health --gate code_review
-wf health --stage review
-wf health APP-42
-```
-
-Plain `wf health` checks every ticket in your scope (your Jira search, or your GitHub project) and sums them up. It
-starts with one sentence, such as "40 of 168 tickets are out of policy (24%)",
-and a bar. Gates and stages always follow the order of your workflow.
-
-In a terminal, `wf health` opens an interactive screen:
-
-- On the left are your gates and stages, each with its failure rate. Move with
-  ↑ and ↓.
-- On the right, a panel explains the one you chose. For a gate, it shows the
-  move the gate guards, every rule in it with how many tickets fail it, and
-  which stages those tickets are in. For a stage, it shows which gates its
-  tickets fail.
-- Press enter to list the tickets. A gate's tickets are grouped by the rule
-  they fail. Press esc to go back, and q to quit.
-- In a terminal narrower than 60 columns, the list and the panel take turns:
-  enter opens the panel and esc returns to the list.
-
-When you pipe the output, set `NO_COLOR`, or pass `--evidence`, it prints the
-same facts instead:
-
-- **Gates**: each gate's failure rate, with the rules its tickets fail listed
-  under it, one line each with the number of tickets.
-- **Stages**: which stages hold tickets that break policy.
-- **Next**: the command that lists the tickets for the gate failing most.
-
-The percentages work like this:
-
-- For a gate, it is the failing tickets divided by the tickets that must pass
-  that gate. A ticket must pass a gate if it is in, or past, the stage the gate
-  guards. A ticket in `todo` does not count against `code_review`.
-- For a stage, it is the failing tickets divided by all tickets in that stage.
-
-Red means failing and green means passing. These are your terminal theme's own
-red and green. If you pass `--limit`, only a sample is checked, and the summary
-says so. Tickets with an unmapped Jira status or unavailable required evidence
-cannot be checked. The summary counts them separately, and they are left out of
-the percentages. `wf status --failing` shows why.
-
-Want to see the tickets behind the numbers? Use `--gate` or `--stage`, or both
-together. You can also name tickets, as in `wf health APP-42`.
-
-`wf health --gate refinement` looks closely at one gate:
-
-- The first block says how many of the tickets that must pass the gate fail it, as
-  a number, a bar and a percentage. Below that is one bar for each rule in the
-  gate, so you can see which rule fails most. A ticket can fail more than one
-  rule.
-- **Where they are** shows the failing tickets by stage, in workflow order.
-- Then there is one block per stage listing the failing tickets, with only this
-  gate's problems. A ticket that fails two gates appears under each.
-
-`--stage` lists the failing tickets in one stage in the same way, with every
-unmet requirement.
-
-Health asks one question: do the ticket's facts today match at least one valid
-path to its stage? A ticket in review that cannot match any path into review is
-out of policy. A ticket in todo with a short description is fine if the
-description is only needed to leave todo. On a board with branches, a ticket
-needs one valid path. It does not need the gates from every branch. Done tickets
-are checked too.
-
-Workfile cannot see history. It checks what is true now, not what was true when
-a ticket moved. See [branches and current facts](policy.md#current-facts-and-branching-paths).
-
-## Status: what should happen next?
-
-```sh
-wf status
-wf status --me
-wf status APP-42
-```
-
-Status starts with one sentence, such as "8 tickets can move on, 9 need work
-and 4 are out of policy", and a count for each group with its icon. Then it
-lists the tickets by what to do with them:
-
-- **Ready to move**: tickets that can move on now, and where to.
-- **Needs work**, grouped by fix: each fix once, such as "Link at least 1 PR",
-  with the tickets that need it under it. A fix on a pull request names the PR.
-- **Out of policy**: tickets that fail a gate they already passed, with
-  everything they need.
-- **Cannot check**: tickets whose evidence is missing, and why.
-
-Done tickets are counted but not listed. `--failing` leaves out the tickets
-that are ready to move.
-
-In a terminal, `wf status` opens an interactive screen with the same groups:
-
-- On the left are the tickets, under the same headings. A ticket that needs
-  more than one fix is listed under its first. Move with ↑ and ↓.
-- On the right is the chosen ticket, drawn as `wf status APP-42` draws it:
-  where it is, what needs attention, its pull requests and its next moves.
-  Press page down and page up when it is longer than the screen.
-- Press m to show only your own work, and m again for everyone's. Press q to
-  quit.
-- In a terminal narrower than 70 columns, the list and the ticket take turns:
-  enter opens the ticket and esc returns to the list.
-
-When you pipe the output, set `NO_COLOR`, or pass `--evidence`, it prints the
-groups instead, with web addresses written out.
-
-The groups mean:
-
-1. **Cannot check**: its Jira status is not in your workflow, or required evidence is unavailable.
-2. **Out of policy**: a gate from an earlier stage fails.
-3. **Needs work**: it is fine so far, but every move forward is blocked.
-4. **Ready to move**: a move forward is open, or a valid return exists.
-5. **Done**: it is finished and passes every earlier gate.
+`--gate` and `--stage` list the tickets behind the numbers. A ticket that fails two
+gates appears under each.
 
 ### Your own work
 
@@ -244,189 +159,138 @@ wf status --me
 wf status --user bob
 ```
 
-This is the same screen and the same groups, with only the tickets that
-involve you: tickets assigned to you, and tickets with a pull request you wrote
-or were asked to review. `--user bob` shows Bob's. Every ticket in your Jira
-search is checked, not only the first 25, so none of your work is missed.
+This lists tickets assigned to you, and tickets with a PR you wrote or were asked
+to review. `--user bob` shows Bob's. Use one, not both.
 
-Without `--me`, the interactive screen's m key does the same for the tickets
-already checked.
+```text
+  workfile status                                          4 tickets
+  Jira · APP · repos app, api
+
+  1 ticket can move on, 2 need work and 1 is out of policy.
+  ‼ 1 out of policy   ✗ 2 need work   ✓ 1 ready   · 0 done
+  Only tickets involving Bob.
+
+  Ready to move                                             1 ticket
+
+  ✓ APP-61  Show stock levels on product pages          todo → doing
+      https://example-team.atlassian.net/browse/APP-61
+
+  Needs work                              2 tickets · grouped by fix
+
+  Expand the description to at least 100 characters                1
+  refinement
+    ✗ APP-52  Fix the search box                                todo
+        https://example-team.atlassian.net/browse/APP-52
+
+  Link at least 1 PR                                               1
+  pull request
+    ✗ APP-57  Add a delivery estimate                          doing
+        https://example-team.atlassian.net/browse/APP-57
+
+  Out of policy                                past a gate they fail
+
+  ‼ APP-70  Rename loyalty tiers                                done
+      https://example-team.atlassian.net/browse/APP-70
+      Expand the description to at least 100 characters · refinement
+      Link at least 1 PR; include APP-70 in the PR title
+      pull request
+```
+
+The groups, most urgent first:
+
+1. **Cannot check** - its status is not in your workflow, or evidence is missing.
+2. **Out of policy** - a gate from an earlier stage fails.
+3. **Needs work** - fine so far, but every move forward is blocked. Grouped by fix, each fix once.
+4. **Ready to move** - a move forward is open.
+5. **Done** - counted, not listed.
+
+`--failing` hides tickets that are ready or done.
+
+In a terminal, tickets are on the left and the chosen ticket is on the right.
+Press `m` to show only your work. Press `q` to quit.
+
+`--me` and `--user` look through your whole scope first, then show up to 25 of
+your tickets. Use `--limit N` or `--all` to change that.
 
 ### One ticket
 
 ```sh
-wf status APP-42
+wf status APP-57
 ```
 
-Name a ticket to see the full picture. Here is a ticket in review, piped to a
-file at 72 columns:
-
 ```text
-  APP-42
-  https://example-team.atlassian.net/browse/APP-42
-  A clear account settings page
-  Bug · Unassigned
+  APP-57
+  https://example-team.atlassian.net/browse/APP-57
+  Add a delivery estimate
+  Bug · Assigned to Bob
 
   WHERE IT IS
-  ●━━━━━━━●━━━━━━━━◉╌╌╌╌╌╌╌╌╌○
+  ●━━━━━━━◉╌╌╌╌╌╌╌╌○─────────○
   todo    doing    review    done
-  Out of policy: 1 earlier requirement is not met.
+  Blocked: 1 thing needs attention before it can move on.
 
   ✗ NEEDS ATTENTION
-  APP-42
-    1. Expand the description to at least 100 characters —
-       refinement.
-       needed to move to done
-
-  example-team/api #18
-    2. Get at least 1 approval — code review.
-       needed to move to done
-    3. Add a label matching "*-risk" — code review.
-       needed to move to done
+  APP-57
+    1. Link at least 1 PR; include APP-57 in the PR title — pull request.
+       needed to move to review
 
   PULL REQUESTS
-  example-team/api #18  Needs review  → merge
-  https://github.com/example-team/api/pull/18
+  No linked PRs. A PR links when its title names the ticket, or its description links to it.
 
   NEXT MOVES
-  ✗ → done  3 requirements not met
-  ✓ ↩ todo  ready now
+  ✗ → review  1 requirement not met
 ```
 
-- The ticket key links to Jira. The title, type and assignee follow it.
-- **Where it is** shows one forward path through the workflow, with each stage
-  once. `◉` is the current stage, and its name is bold and underlined when
-  colour is on. `●` is a stage behind it and `○` a stage ahead. The link out of the current stage is
-  solid and green when the next move is ready, and dashed and red when it is
-  blocked. Earlier stages are not ticked: Workfile cannot prove the path a
-  ticket took. The path goes through the current stage. Where the workflow
-  branches, such as qa or security after review, it shows the nearest branch
-  unless the ticket is in another one. Detours such as blocked and extra end
-  stages such as cancelled are left out; if the ticket is in one, the panel says
-  so. One sentence under the path says what to do about the ticket.
-- Narrow terminals shrink the gaps first. If the path still does not fit, it
-  wraps onto more lines, each picking up the link where the last one stopped.
-- **Needs attention** lists each fix once, under the ticket or pull request it
-  applies to, numbered through the whole panel. Under each fix, a dimmed line
-  says which destinations it is needed for.
-- Each pull request shows its repository and number, which link to the pull
-  request. A short status tells you if the policy gates pass, if a review is
-  missing, or if it has been merged. Queued PRs show **Queued for merge** with
-  **Wait for merge**. If a queued PR has failing gates or unreadable evidence,
-  those problems still show. Queue membership does not count as merged or
-  satisfy other gates. If a PR was not checked, it does not claim to pass.
-  GitHub's own branch rules and checks still apply on top of your policy.
-- **Next moves** lists every place the ticket can go from its current stage,
-  including returns, marked with ↩. A green `✓` means ready now. A red `✗`
-  says how many requirements are not met.
+- **Where it is** draws one forward path, each stage once. `◉` is the current stage, `●` is behind it, `○` is ahead. The link out of the current stage is solid when the move is ready, dashed when blocked.
+- Earlier stages are not ticked. Workfile cannot prove the path a ticket took.
+- Branches show the nearest one. Detours such as `blocked` and extra end stages such as `cancelled` are left out. If the ticket is in one, the panel says so.
+- **Needs attention** lists each fix once, under the ticket or PR it applies to, numbered through the panel.
+- **Pull requests** shows each PR and its state. Queued PRs show **Queued for merge** and **Wait for merge**. Queue membership never counts as merged or as a passing gate.
+- **Next moves** lists every place the ticket can go, returns marked `↩`.
 
-For example, suppose QA needs a code review, and release needs the review plus a
-waiver. The review appears once, and says it unblocks QA and release. The waiver
-appears once, and says it unblocks release only. Workfile never does the work
-for you. The lists are for you to carry out in Jira or GitHub.
+If a gate needs `github.checks == success`, CI must pass on every linked PR's
+current commit. The next step says: wait for CI, fix the failing checks, or run
+CI for this commit.
 
-If a gate requires `github.checks == success`, CI (continuous integration:
-automated checks for a change) must pass on every linked PR's current commit.
-The shared next-step wording is:
-
-- Pending: "Wait for CI to finish successfully."
-- Failed: "Fix the failing CI checks, then rerun them."
-- No checks reported: "Run CI for this PR's current commit."
-
-Unreadable CI evidence cannot establish readiness. The CI requirement is an
-explicit policy rule; see [the GitHub guide](providers/github.md#ci-in-the-code-review-gate).
-
-Finished tickets show any unmet requirements, or say that no next step is needed.
-On narrow or wide terminals you still see the same information. Long text wraps
-inside the panels.
-
-Set `NO_COLOR` to turn off colours and keep clickable terminal hyperlinks.
-When you pipe the output, or use `TERM=dumb`, there are no terminal escapes.
-Every ticket and PR list shows web addresses instead. Long addresses wrap on
-narrow screens. The stage markers, solid and dashed links, ticks and crosses
-remain visible without colours.
-
-## Tickets: find a ticket and read it
+### Since: what changed?
 
 ```sh
-wf tickets
-wf tickets --view me
-wf tickets --view review
-wf tickets --scope 'project = EXAMPLE'
+wf status --since last    # since your last run
+wf status --since 12h     # since about 12 hours ago
+wf status --since 1d      # since about a day ago
+wf status --me --since 1d
 ```
 
-`wf tickets` shows the tickets in your scope, with the selected ticket
-underneath. It only reads: it never changes a ticket.
+`--since` takes `last`, `1h` to `168h`, or `1d` to `7d`.
 
-The screen fills your terminal. The bottom half shows the ticket's description
-and comments from your tracker, and what Workfile knows: where the ticket is in
-your pipeline, what is blocking it and how to fix that, its PRs, and where it can
-move next. On a wide terminal these sit side by side, so what is blocking the
-ticket stays in view while you read. Each comment is its own block, newest
-first. On trackers that have replies, a reply's block sits indented under the
-comment it answers, and replies read in the order they were written.
-
-Tickets follow your pipeline, in the order of `states` in `policy.yml`. Within a
-stage they keep your tracker's order. Tickets whose status is not mapped come
-last.
-
-The screen starts on everything. Tabs along the top run All, Assigned to me, then
-each state in your workflow, in the order of `states` in `policy.yml`. `←` and `→` move between
-them, and each shows how many tickets it holds. Switching is instant, because the
-list is read once.
-
-| Option | What it does |
-| --- | --- |
-| `--view NAME` | Start on `all`, `me` or a state in your policy. Piped output shows that view. |
-| `--scope QUERY` | Use this search instead of the configured scope, written in your tracker's own query language. |
-
-Assigned to me looks only at the assignee, not at PRs, so it needs no GitHub reads.
-Tickets whose status is not mapped show only in All.
-
-`wf tickets` reads everyone's tickets in your scope, including unassigned ones,
-even with `only_mine` set. If your scope has no limit on finished work, that can
-mean a lot of old tickets and a slow start. Limit it in `providers.yml`, for example
-with `AND (statusCategory != Done OR resolved >= -30d)`.
-
-The current row is highlighted. The highlight softens while you read the ticket,
-and a search underlines what it matched.
-
-| Key | What it does |
-| --- | --- |
-| `↑` `↓` | Move through the list, or scroll the ticket when it has focus |
-| `/` | Search. Letters go to the search until you press `enter` or `esc` |
-| `enter` | Read the selected ticket, or keep a search you are typing |
-| `tab` | Move between the list and the ticket |
-| `esc` | Clear the search, or go back to the list from the ticket |
-| `←` `→` | Move between views |
-| `r` | Read the selected ticket again, and retry any image that failed |
-| `o` | Open the selected ticket in your browser |
-| `q` | Quit |
-
-If your terminal supports the kitty graphics protocol, titles are drawn large
-and images appear inside the ticket. Workfile asks the terminal, so this works
-in any terminal that has it. Otherwise titles are bold and images are shown by
-name. Set `WORKFILE_GRAPHICS=off` to always use text, for example if a terminal
-says it can draw images and then shows odd characters instead.
-
-To stay kind to your providers, `wf tickets` reads the list once, with only the
-fields it shows. It reads a ticket only when you stop on it, and remembers it
-until you quit or press `r`.
-
-Piped to a file, it prints a plain list:
+It shows a panel above the usual output. Here a ticket moved, one became
+blocked, and one became ready:
 
 ```text
+  Since your last run, just now
 
-  workfile / tickets
-
-  APP-1 Fix redirect loop on expired login
-    In Review · Alice
-    https://example.atlassian.net/browse/APP-1
-
-  APP-2 Add single sign-on login
-    To Do · Bob
-    https://example.atlassian.net/browse/APP-2
+  APP-2  ✗ blocked: refinement
+         https://example-team.atlassian.net/browse/APP-2
+  APP-3  ✓ ready for doing · · back on track
+         https://example-team.atlassian.net/browse/APP-3
+  APP-1  todo → doing · ✗ blocked: pull request
+         https://example-team.atlassian.net/browse/APP-1
 ```
+
+How it works:
+
+- Every `wf status` run saves a small snapshot on your computer, in `~/.local/state/workfile/<workspace>/snapshots`. Snapshots older than 8 days are deleted.
+- `--since` compares this run with an earlier snapshot. It adds no requests.
+- If there is no snapshot that old, it uses the oldest one and says so.
+- With no earlier run it says "Nothing to compare yet". Run it again later.
+- It shows what changed since you last looked. It is not a history.
+- It never changes the exit code.
+
+### Evidence
+
+`--evidence` shows, for each requirement, the outcome and what workfile observed.
+Missing required evidence is **cannot check**, never a pass or a violation. Known
+empty evidence, such as zero approvals, can still fail a rule.
 
 ## Check: may this ticket move now?
 
@@ -435,60 +299,87 @@ wf check APP-42 --to done
 wf check 42 --to done --json
 ```
 
-`wf check` reads one ticket fresh and asks your policy one question: may it move
-to that stage right now? It exits `0` when the move is allowed, `1` when it is
-not, and `2` when it cannot tell, for example because evidence is unavailable.
-Agents and scripts should run it before they move a ticket, so they never move
-work the team's gates do not allow.
+`wf check` reads one ticket fresh and asks your policy: may it move to that stage
+right now?
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | Yes. |
+| `1` | No. |
+| `2` | Cannot tell, for example evidence is unavailable. |
 
 ```text
-  APP-42
-  https://example-team.atlassian.net/browse/APP-42
-  Explain notification preferences
-  Story · Assigned to Alice
+  APP-57
+  https://example-team.atlassian.net/browse/APP-57
+  Add a delivery estimate
+  Bug · Unassigned
 
-  ✗ CANNOT MOVE TO DONE YET
-  web #207
-    1. Get at least 1 approval — code review.
+  ✗ CANNOT MOVE TO REVIEW YET
+  APP-57
+    1. Link at least 1 PR; include APP-57 in the PR title — pull request.
 ```
 
-When the move is allowed, the panel says `✓ CAN MOVE TO DONE`. A stage the
+When the move is allowed, the panel says `✓ CAN MOVE TO REVIEW`. A stage the
 ticket has no move to says so, and lists the moves it does have.
 
-With `--json` the answer is one object: `allowed`, `exit_code`, `from`, `to`,
-`possible_moves`, `unmet_requirements` (the same fields as in
-[JSON reports](json.md)), and `records`, each linked PR with its latest commit
-in `head`. An agent can compare `head` before and after its work to make sure
-nothing changed in between.
+Agents and scripts should run it before they move a ticket. With `--json` you get
+`allowed`, `exit_code`, `from`, `to`, `possible_moves`, `unmet_requirements` and
+`records`, each PR with its latest commit in `head`. Compare `head` before and
+after your work to be sure nothing changed. See [JSON reports](json.md).
 
-## Prove: does the policy say what you mean?
+## Lint: is the policy sound?
 
 ```sh
-wf prove
-wf prove --json
+wf lint
+wf lint --json
 ```
 
-`wf prove` checks the policy itself, not tickets. It reads no provider, so it
-needs no credentials and is quick enough for every CI run.
+`wf lint` checks the policy itself, not tickets. It reads no provider, so it
+needs no credentials and is quick enough for every CI run. It exits `1` on a
+problem or a broken invariant, and `0` otherwise.
 
-Workfile accepts a ticket's stage when **at least one** forward path to it
-passes its gates (see [Current facts and branching paths](policy.md#current-facts-and-branching-paths)).
-So a gate on one path says nothing about the others. `wf prove` answers two
-questions:
+The output has these sections. Empty ones are left out:
 
-- **What each stage guarantees:** the gates every forward path to the stage
-  passes. A ticket in that stage is sure to have passed these, and only these.
-- **Whether your invariants hold:** for each gate you list under `invariants:`
-  in `policy.yml`, whether any path reaches the stage without it. If one does,
-  it shows the shortest such path and, where one move would close every such
-  path, which moves to add the gate to.
+| Section | What it shows |
+| --- | --- |
+| **Problems** | Mistakes that stop the policy loading, such as an unknown gate. Exit `1`. |
+| **Warnings** | Plain mistakes in a valid policy. Exit `0`. |
+| **Invariants** | For each gate you list under `invariants:`, whether any path skips it. |
+| **What each stage guarantees** | The gates every forward path to the stage passes. |
 
-On the [branching example](../example/branching/.workfile/) with
-`invariants: {done: [code_review, merged]}`:
+A typo in a gate name is a problem:
+
+```text
+  WORKFILE LINT
+  1 problem in .workfile/. Fix them, then run wf lint again.
+
+  PROBLEMS
+  ✗ policy.yml: ready requires unknown gate refinment
+```
+
+Warnings today:
+
+| Rule | When |
+| --- | --- |
+| `unused-gate` | A gate is defined but no move requires it. |
+| `no-invariants` | `invariants:` is empty. |
+
+Workfile accepts a ticket's stage when **any one** forward path to it passes. So a
+gate on one path says nothing about the others. Invariants close that gap. Write
+down what must always be true:
+
+```yaml
+# .workfile/policy.yml
+invariants:
+  done: [code_review, merged]
+```
+
+On the [branching example](../example/branching/.workfile/), with that invariant
+added, `wf lint` finds a hole:
 
 ```text
 
-  WORKFILE PROVE
+  WORKFILE LINT
   1 of 2 invariants can be skipped.
 
   INVARIANTS
@@ -514,107 +405,117 @@ On the [branching example](../example/branching/.workfile/) with
   cancelled  nothing
 ```
 
-Review → security and security → release are the only moves that just lead
-around code review. Requiring it on either one closes the hole. Moves that a
-reviewed path also uses, such as release → done, are not suggested: that would
-ask for review twice on those paths. When no single move closes every path,
-`wf prove` says to require the gate on a move on the path shown, then run it
-again.
+Review → security and security → release are the only moves that lead around code
+review. Requiring it on either closes the hole. If no single move closes every
+path, `wf lint` says to require the gate on a move on the path shown, then run it
+again. Returns (moves back) are left out.
 
-With no invariants, `wf prove` still lists what each stage guarantees, and exits
-`0`. Returns (moves back to an earlier stage) are left out, as they are when
-Workfile checks a ticket.
+With no invariants, `wf lint` still lists what each stage guarantees. Here is the
+plain example policy:
 
-With `--json` the answer is one object: `invariants`, each with `stage`, `gate`,
-`holds`, and for a broken one `bypass` and `fixes` as lists of moves (`from`,
-`to`, `requires`); and `guarantees`, one entry per stage in pipeline order. See
-[JSON reports](json.md#prove).
+```text
 
-## Automations: when this happens, do that
+  WORKFILE LINT
+  No invariants to check.
 
-```sh
-wf automations             # your automations, and anything stopping them
-wf automations init        # create your private file for this workspace
-wf automations trust       # approve the actions in your shared file
-wf automations --all       # everyone's shared automations, read only
-wf automations --log ID    # the latest run log for one automation
-wf watch                   # check every 2 minutes and fire
-wf watch --once            # one check, for cron or launchd
-wf watch --dry-run         # show what would run, run nothing
+  WARNINGS
+  ! No invariants. Add one, such as done: [code_review], to prove no path skips a gate.
+
+  WHAT EACH STAGE GUARANTEES
+  Every path to the stage passes these gates.
+  todo    nothing
+  doing   refinement
+  review  refinement · pull request
+  done    refinement · pull request · code review
 ```
 
-Automations are written per person, either shared in
-`.workfile/automations/<you>.yml` or private in
-`~/.config/workfile/<workspace>/automations.yml`. A trigger fires on a change
-between two checks: when a move becomes allowed (`ready`), when a ticket enters
-a stage (`enters`), or when a condition turns true (`becomes`). The action is a
-command with no shell, or a prompt for your agent, in `observe`, `ask` or
-`auto` mode. Read [Automations](automations.md) for the file format, the safety
-rules and sample output.
+With `--json` you get `problems`, `warnings`, `invariants` and `guarantees`. See
+[JSON reports](json.md#lint).
 
-`wf automations` exits `1` when something stops your automations, such as a
-shared file you have not approved. `wf watch` stops with `q` or Ctrl-C.
-
-## Test: do the connections work?
+## Tracker: browse the team's tickets
 
 ```sh
-wf test
-wf test jira
-wf test github another_github
+wf tracker
+wf tracker --view me
+wf tracker --view review
 ```
 
-Names are the connection names in `providers.yml`. With no names, every
-connection is tested. If one fails, the rest still run.
+`wf tracker` shows your tracker, scoped to your team, in one standard screen for
+any tracker. The scope comes from `providers.yml`: the same slice `wf status`
+reads. There is no override. It only reads.
 
-For Jira, the test checks who the token belongs to and reads one ticket from your
-search. It also reads label history if your gates need it.
+The screen shows the list, with the selected ticket underneath: its description
+and comments, where it is in your pipeline, what blocks it, its PRs, and where it
+can move next.
 
-For a GitHub Issues tracker, the test checks the project and the view.
+Tabs run All, Assigned to me, then each stage in `states` order. Use `←` and `→`
+to switch. `--view` picks the first tab: `all`, `me`, or a stage.
 
-For a GitHub code host, it checks who you are, lists the repositories you can
-see, and runs a sample PR search. If your Jira search, GitHub project or GitHub
-organisation is empty, the test tells you.
+| Key | What it does |
+| --- | --- |
+| `↑` `↓` | Move through the list, or scroll the ticket |
+| `/` | Search |
+| `enter` | Read the selected ticket |
+| `tab` | Move between the list and the ticket |
+| `esc` | Clear the search, or go back to the list |
+| `←` `→` | Move between views |
+| `r` | Read the ticket again |
+| `o` | Open the ticket in your browser |
+| `q` | Quit |
 
-A pass means those reads worked. It does not prove you can see every ticket or
-repository you meant to include.
+To stay kind to your providers, the list is read once with only the fields it
+shows. A ticket is read when you stop on it, and remembered until you quit.
+
+If your terminal supports the kitty graphics protocol, titles and images are drawn
+large. Otherwise they are text. Set `WORKFILE_GRAPHICS=off` to always use text.
+
+Piped, it prints a plain list:
+
+```text
+
+  workfile / jira tickets
+
+  Jira · APP · repos app, api
+
+  APP-61 Show stock levels on product pages
+    To Do · Bob
+    https://example-team.atlassian.net/browse/APP-61
+
+  APP-57 Add a delivery estimate
+    In Progress · Bob
+    https://example-team.atlassian.net/browse/APP-57
+```
 
 ## Options
 
 | Option | What it does |
 | --- | --- |
-| `--limit N` | Check up to N tickets. `status` checks 25 unless you change it. `health` checks all of them unless you set this. N must be 1 or more. |
-| `--all` | Check every ticket in your search, with no limit. With `automations`, list everyone's shared automations. |
-| `--me` | Only tickets assigned to you, or linked to a PR you opened or were asked to review. |
-| `--user NAME` | The same filter for a person in `people.yml`. |
-| `--gate NAME` | Health only. List the tickets failing this gate. |
-| `--stage NAME` | Health only. List the tickets in this stage that break policy. |
-| `--failing` | Status only. Hide tickets that are ready or done. |
-| `--json` | Health, status, check and prove. Emit a versioned JSON report for scripts and agents. |
-| `--evidence` | Health and status only. Show observed evidence and pass, fail, skip or unknown outcomes. |
-| `--dir DIR` | Start looking for `.workfile/` in DIR. Works with every command. |
-| `--to STAGE` | Check only, and required. The stage the ticket would move to. |
-| `--log ID` | Automations only. Show the latest run log for one automation. |
-| `--once` | Watch only. Check once, then exit. Questions wait for a terminal. |
-| `--interval 5m` | Watch only. The time between checks. The default is 2 minutes, and the least is 1. |
-| `--dry-run` | Watch only. Show what would run, and run nothing. |
+| `--me` | Status. Your work. |
+| `--user NAME` | Status. The same for a person in `people.yml`. |
+| `--since last\|12h\|1d` | Status. What changed since an earlier run. |
+| `--gate NAME` | Status. Tickets failing this gate. |
+| `--stage NAME` | Status. Tickets in this stage that are out of policy. |
+| `--failing` | Status. Hide tickets that are ready or done. |
+| `--limit N` | Status. Check up to N tickets. N must be 1 or more. |
+| `--all` | Status. Check every ticket in scope. |
+| `--evidence` | Status. Show the evidence for each requirement. |
+| `--to STAGE` | Check. Required. The stage the ticket would move to. |
+| `--view all\|me\|STAGE` | Tracker. The tab to start on. |
+| `--test [NAME ...]` | Setup. Test connections instead of setting up. |
+| `--json` | Status, check and lint. Versioned JSON for scripts and agents. |
+| `--dir DIR` | Start looking for `.workfile/` in DIR. Works everywhere. |
+| `--version` | Print the version. |
 
-You can put options before or after ticket keys. Use `--me` or `--user`, not
-both. `--gate` and `--stage` must name a gate or stage from `policy.yml`. `wf
-test` takes `--dir` and help, but not the other filters.
+Options go before or after ticket keys. `--gate` and `--stage` must name a gate or
+stage from `policy.yml`.
 
-`wf status` fetches up to the limit and then applies `--failing`. So `wf status
---failing --limit 25` checks 25 tickets. It does not promise 25 failures. To
-find every failure, use `--all --failing`.
-
-`--me` and `--user` look through your whole search and all linked PRs first, and
-only then apply the limit. This takes more work, but you will not miss a ticket
-just because it was not in the first 25. When you name tickets, the limit is
-ignored, but the tickets must still be in your scope.
+Plain `wf status`, `--gate` and `--stage` check every ticket in your scope. Name
+tickets and the limit is ignored, but they must still be in your scope.
 
 ## Who is "me"?
 
 By default, `--me` asks Jira and GitHub who owns your token. If you use a shared
-service account, set your identity yourself in `~/.config/workfile/config.yml`:
+service account, set your identity in `~/.config/workfile/config.yml`:
 
 ```yaml
 me:
@@ -622,21 +523,9 @@ me:
   github: your-github-login
 ```
 
-The same file holds two settings for automations. `me.person` is your name in
-`people.yml`, which picks your shared automations file when Workfile cannot tell
-from your accounts. `agent` is the command that receives an automation's prompt
-as its last argument:
-
-```yaml
-me:
-  person: alice
-agent: [claude, -p]
-```
-
-A setting for a connection name beats a setting for a provider type. For
-example, `github_client` beats `github` for a connection called `github_client`.
-You count as involved if you wrote a PR or were asked by name to review it. Past
-reviewers do not count, and neither do members of a team that was asked.
+A setting for a connection name beats a setting for a provider type. You count as
+involved if you wrote a PR or were asked by name to review it. Past reviewers do
+not count, and neither do members of a team that was asked.
 
 ## Only your tickets
 
@@ -647,11 +536,9 @@ To see only tickets assigned to you in a workspace, add `name:` to its
 only_mine: true
 ```
 
-Every listing then adds `AND assignee = currentUser()` to the Jira search, or
-your `me.jira` account when you set one. Fewer tickets means fewer requests.
-Tickets you name, such as `wf status APP-42`, are still shown. Board health and
-other listings cover only your tickets too. The exception is `wf tickets`, which
-reads everyone's and has its own Assigned to me tab.
+Every status listing then adds your assignee to the Jira search or GitHub filter.
+Fewer tickets means fewer requests. Tickets you name, such as `wf status APP-42`,
+are still shown. `wf tracker` still reads everyone's.
 
 ## Personal files and settings
 
@@ -659,38 +546,34 @@ reads everyone's and has its own Assigned to me tab.
 | --- | --- |
 | Credentials | `~/.config/workfile/credentials` |
 | Identity settings | `~/.config/workfile/config.yml` |
-| Private automations | `~/.config/workfile/<workspace>/automations.yml` |
 | Workspace settings, such as `only_mine` | `~/.config/workfile/<workspace>/config.yml` |
-| What automations saw, approvals and run logs | `~/.local/state/workfile/<workspace>-<hash>/` |
-| `XDG_CONFIG_HOME` | Replaces `~/.config` for these files. |
+| Snapshots for `--since` | `~/.local/state/workfile/<workspace>/snapshots` |
+| `XDG_CONFIG_HOME` | Replaces `~/.config`. |
 | `XDG_STATE_HOME` | Replaces `~/.local/state`. |
 | `WORKFILE_CREDENTIALS_FILE` | The full path to the credentials file. |
 | `WORKFILE_CONFIG_FILE` | The full path to the identity settings file. |
-| `NO_COLOR` | If set, turns off colours. Terminal hyperlinks stay on. |
-| `WORKFILE_BACKGROUND` | Set to `off` to stop `wf status --me` asking the terminal for its background colour. |
-| `WORKFILE_GRAPHICS` | Set to `off` to stop `wf tickets` asking the terminal about graphics, and always show titles and images as text. |
+| `NO_COLOR` | Turns off colours. Terminal hyperlinks stay on. |
+| `WORKFILE_BACKGROUND` | `off` stops asking the terminal for its background colour. |
+| `WORKFILE_GRAPHICS` | `off` stops asking the terminal about graphics. |
 | `COLUMNS` | Sets the display width. Handy for previews. |
 
 The credentials file has one `NAME=value` per line. Blank lines, comments, a
-leading `export`, and single or double quotes around values are all fine. Values
-are read exactly as written, so nothing is expanded and no commands run. An
-environment variable beats the file. On macOS and Linux, other users must not be
-able to read the file, so run `chmod 600` on it. On Windows, limit access in the
-file's security settings.
+leading `export` and quotes around values are fine. Nothing is expanded and no
+commands run. An environment variable beats the file. On macOS and Linux run
+`chmod 600` on it. On Windows, limit access in the file's security settings.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Health found nothing wrong. Status found only ready or done tickets. Every connection test passed. Check found the move allowed. Prove found every invariant holds. Watch stopped normally. |
-| `1` | Health found tickets out of policy. Status found tickets out of policy or needing work. Check found the move not allowed. Prove found a path that skips an invariant's gate. Automations found something stopping them. |
-| `2` | Bad options or settings, a provider read failed, required evidence is unavailable, a Jira status is not in your workflow, or a ticket you named is not in your search. |
+| `0` | Status found only ready or done tickets. Check found the move allowed. Lint found nothing wrong. Setup tests passed. |
+| `1` | Status found tickets out of policy or needing work. Check found the move not allowed. Lint found a problem or an invariant that can be skipped. |
+| `2` | Bad options or settings, a provider read failed, evidence is unavailable, a status is not in your workflow, or a named ticket is not in your scope. |
 
-If no tickets match, the report says so and exits with `0`. Reports only cover
-the tickets that were checked. Tickets outside your search, your limit, or your
-permissions are not included. Press Ctrl-C to cancel
-requests that are still running.
+If no tickets match, the report says so and exits `0`. Reports only cover the
+tickets that were checked. Press `ctrl+c` to cancel running requests.
 
-GitHub searches look for the checked tickets' keys in PR titles and
-descriptions first, six tickets per search. Full labels, reviews and readiness evidence are fetched only for
-PRs linked to the tickets being checked, with up to six PRs read at once. Reports still use fresh data; no results are cached between runs.
+GitHub searches look for the checked tickets' keys in PR titles and descriptions,
+six tickets per search. Labels, reviews and readiness evidence are fetched only for
+linked PRs, up to six at once. Reports use fresh data. Nothing is cached between
+runs, except the snapshots for `--since`.

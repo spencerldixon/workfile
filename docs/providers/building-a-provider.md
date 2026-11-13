@@ -266,5 +266,5 @@ differently or is never available.
 - [ ] `go vet ./... && go test -race ./...` pass
 - [ ] the shared test runs for your kind
 - [ ] nothing in `internal/cli` changed
-- [ ] `wf test` and `wf status` work against a real account
+- [ ] `wf setup --test` and `wf status` work against a real account
 - [ ] your docs are linked from `docs/getting-started.md`

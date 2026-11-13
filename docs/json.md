@@ -3,19 +3,18 @@
 New to Workfile? Start with [Getting started](getting-started.md).
 
 JSON is a structured text format that scripts and AI agents can read without
-parsing terminal output. Use it with health or status:
+parsing terminal output. Use it with `status`, `check` and `lint`:
 
 ```sh
 wf status APP-42 --json
-wf health --all --json
+wf status --all --json
 wf status --me --json
 ```
 
 Output is one JSON object on standard output, with no colours or terminal links.
 Diagnostics may also appear on standard error. Exit codes are unchanged: 0 is a
 successful assessment, 1 means policy violations (or work still needed for
-status), and 2 means the assessment could not be completed. Health can exit 0
-when a ticket is in policy but still needs work before its next move.
+status), and 2 means the assessment could not be completed.
 
 ## Version 1 contract
 
@@ -28,13 +27,15 @@ follow the applicable gate and rule order.
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Currently `1`. |
-| `command` | `status` or `health`. |
+| `command` | `status`. |
 | `policy_hash` | SHA-256 hash of the loaded policy, including compiled conditions. Excludes provider settings, credentials and people. |
 | `observed_at` | UTC time when the collected facts were assessed. Reads happen over time; this is not an atomic snapshot. |
 | `exit_code` | The command's exit code. |
 | `summary` | Counts across assessed tickets, before display filters. |
 | `warnings` | Warnings about what could not be seen, such as no visible active repositories. |
-| `tickets` | Assessments selected by display filters. With no health drill-down, includes all assessed tickets. |
+| `tickets` | Assessments selected by display filters. With no `--gate` or `--stage`, includes all assessed tickets. |
+| `since` | Only with `--since` and an earlier run. When that earlier run was taken, as a UTC time. |
+| `changes` | Only with `--since` and an earlier run. What changed since then. |
 
 Summary statuses are `cannot_check`, `out_of_policy`, `needs_work`, `ready`, and
 `done`. Their counts add up to `total`. `checked` excludes `cannot_check`.
@@ -66,6 +67,27 @@ Unknown evidence on one alternative does not hide another known passing route.
 Explicit rule IDs survive condition changes. Derived IDs survive reordering
 and message changes, but change when the rule's condition, `when`, or `by`
 changes. See [Writing a policy](policy.md#rules).
+
+## What changed since an earlier run
+
+With `wf status --since last --json` (or `12h`, `1d`), the report adds `since` and
+`changes`. Without `--since`, neither field is present. If there is no earlier
+run, they are also absent. If nothing changed, `changes` is an empty list.
+
+`since` is when the earlier snapshot was taken. `changes` is a list, one entry per
+change, in pipeline order:
+
+| Field | Meaning |
+| --- | --- |
+| `key`, `title` | The ticket. |
+| `kind` | `moved`, `ready`, `blocked`, `out_of_policy`, `back_on_track` or `appeared`. |
+| `stage` | The ticket's stage now. |
+| `from`, `to` | For `moved`, the stage before and now. For `ready`, `to` is the stage it can move to. |
+| `gates` | For `blocked` and `out_of_policy`, the gates that fail. |
+
+```sh
+wf status --since 1d --json | jq '.changes[] | {key, kind}'
+```
 
 ## Failures
 
@@ -122,20 +144,22 @@ wf check APP-42 --to done --json || exit 1   # stop unless the move is allowed
 Compare each PR's `head` with the one you saw when you started. If it changed,
 check again before you move anything.
 
-## Prove
+## Lint
 
-`wf prove --json` checks the policy, not tickets, so it has no `observed_at`.
+`wf lint --json` checks the policy, not tickets, so it has no `observed_at`.
 
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Currently `1`. |
-| `command` | `prove`. |
-| `policy_hash`, `exit_code` | As in reports. `exit_code` is `1` when any invariant can be skipped. |
+| `command` | `lint`. |
+| `policy_hash`, `exit_code` | As in reports. `exit_code` is `1` when there is a problem or an invariant can be skipped. `policy_hash` is empty when the policy did not load. |
+| `problems` | Mistakes that stop the policy loading. Always present, maybe empty. Each has `rule`, `severity` (`error`) and `message`. |
+| `warnings` | Plain mistakes in a valid policy, such as `unused-gate` and `no-invariants`. Always present, maybe empty. Each has `rule`, `severity` (`warning`) and `message`. |
 | `invariants` | One entry for each gate under `invariants:`, in pipeline order, then the order listed. Each has `stage`, `gate` and `holds`. |
 | `invariants[].bypass` | When it does not hold: the shortest forward path that reaches `stage` without `gate`, as moves with `from`, `to` and `requires`. Missing when the stage is where tickets start. |
 | `invariants[].fixes` | Moves on that path where requiring `gate` would close every bypass. Missing when no single move does. |
-| `guarantees` | One entry per stage, in pipeline order: `stage`, and `gates` every forward path to it passes. |
+| `guarantees` | One entry per stage in pipeline order: `stage`, and `gates` every forward path to it passes. |
 
 ```sh
-wf prove --json || exit 1   # fail CI when a path skips a gate
+wf lint --json || exit 1   # fail CI when a path skips a gate
 ```

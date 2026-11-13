@@ -40,8 +40,8 @@ every tool, or giving up and doing it by hand.
 
 | Where | What it holds | Example |
 | --- | --- | --- |
-| The project's `.workfile/` | Providers, stages, moves, gates, people, shared automations | "Review needs one approval and passing CI" |
-| Your `~/.config/workfile/<workspace>/` | Your identity, your private automations, your agent command | "When my PR goes green, tell my agent" |
+| The project's `.workfile/` | Providers and their scope, stages, moves, gates, people | "Review needs one approval and passing CI" |
+| Your `~/.config/workfile/` | Your identity and settings | "I am this Jira account" |
 | Your credentials file | Tokens, by name | `EXAMPLE_JIRA_TOKEN` |
 
 Tools then stop carrying project details. A tool or an agent talks in
@@ -73,8 +73,8 @@ project. Her agent does the same. Its instructions say "ship this ticket", not
 "move it to In Review on site A", so the same agent works in both projects
 without a change.
 
-Nothing crosses between projects. Each workspace has its own policy,
-automations, accounts, credentials, approvals and logs.
+Nothing crosses between projects. Each workspace has its own policy, accounts,
+credentials and snapshots.
 
 ## Agents
 
@@ -95,38 +95,46 @@ PR itself.
 
 1. Bob adds the label `agent-ok` to a ticket that passes the refinement gate,
    and assigns it to Alice.
-2. Alice's automation fires on the new label. It runs a short script that
-   starts her agent on the ticket in its own branch.
-3. The agent asks Workfile what "ship" means here, does the work, and opens a
-   PR.
-4. When CI fails, another automation fires and the agent fixes it.
-5. The PR passes the code review gate. A person reviews it and merges it.
+2. Something Alice chose starts her agent on the ticket in its own branch. It
+   might be a script she runs, or an event from the hosted service (see below).
+3. Before each move, the agent asks `wf check`. It does the work and opens a PR.
+4. The PR passes the code review gate. A person reviews it and merges it.
 
 Every step uses the project's own workflow. Move to a project with different
-stages and gates, and the same automations and agent follow those instead.
+stages and gates, and the same agent follows those instead.
 
 ## Teams
 
 The policy is the team's contract, for people and for agents alike.
 
-- **Assignment decides whose agent works.** Automations use `scope: mine`, so
-  only the person a ticket is assigned to runs an agent on it. Two computers
-  never pick up the same ticket.
 - **Your agent, your PR.** An agent runs with its person's access, so the PR
   is theirs and someone else must approve it.
 - **Agent work can have its own gates.** For example, a PR labelled
   `agent-authored` needs two approvals.
-- **The rules are checked.** `wf prove` runs in CI, so no change to the policy
+- **The rules are checked.** `wf lint` runs in CI, so no change to the policy
   can open a path to done that skips code review.
-- **Everyone can see what runs.** Shared automation files sit in the
-  repository, and changes to them go through review.
+- **Changes go through review.** The policy sits in the repository, so a rule
+  change is a pull request.
+
+## The hosted reconciler
+
+The free CLI reads on demand. Teams that want the work reconciled all the time
+need something that watches. That is **Workfile Cloud**, a hosted reconciler.
+
+- Webhooks come in. Workfile reconciles them against `.workfile/`.
+- It keeps an event log in policy terms: entered review, ready for done, drift.
+- It **emits events** by webhook, GitHub `repository_dispatch` or a stream.
+- It **never runs anything**. Your own systems turn an event into a run.
+
+The CLI stays read-only and runs nothing, hosted or not. It is built to be
+self-hosted: one Go binary, one database, no cloud-only parts.
 
 ## Principles
 
 - **Workfile reads. It never writes** to Jira, GitHub or any other provider.
 - **One source of truth.** The workfile points to things, such as a PR
   template or a team's `AGENTS.md`. It does not copy them.
-- **Same commands everywhere.** `wf status`, `wf check` and `wf watch` work the
+- **Same commands everywhere.** `wf status`, `wf check` and `wf lint` work the
   same way in every project. Only the workfile changes.
 - **Tools work without it.** A tool that reads a workfile should still work,
   more simply, in a project that does not have one.
@@ -136,8 +144,9 @@ The policy is the team's contract, for people and for agents alike.
 Built today:
 
 - Providers, stages, moves, gates and people in `.workfile/`.
-- `wf health`, `wf status`, `wf check` and `wf prove`, with `--json` for agents.
-- Automations and `wf watch`, one workspace at a time.
+- Five commands: `wf setup`, `wf status`, `wf check`, `wf lint` and `wf tracker`.
+- `--json` for agents, and `wf status --since` for what changed.
+- Explicit scope in `providers.yml`: the projects and repos that are the team's work.
 
 Next:
 
@@ -158,8 +167,7 @@ Next:
   most three agent PRs waiting for review", so agents do not outpace
   reviewers.
 - **Review comment facts.** A fact for unresolved review comments, so an
-  automation can fire when a reviewer asks for a change.
-- **Every workspace at once.** `wf workspaces` and `wf watch --all`, from the
-  [roadmap](proposals/roadmap.md).
+  a check can catch it when a reviewer asks for a change.
+- **The hosted reconciler.** Events in policy terms, emitted to your own systems.
 - **A guard for agents.** `wf guard`, from the [referee
   proposal](proposals/agent-referee.md), so every move goes through a check.
