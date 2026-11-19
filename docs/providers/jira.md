@@ -113,6 +113,20 @@ gates:
       by: [alice]
 ```
 
+## Ticket images
+
+Jira's rich text can refer to an image by a media UUID rather than its numeric
+attachment ID, sometimes without a filename. Workfile resolves these references
+only when the preview asks to load an image. It inspects metadata for up to eight
+candidate image attachments and caches their identities for the session.
+
+The metadata lookup uses a HEAD request to the configured Jira connection. Its
+redirect is inspected but never followed. Image bytes are then requested from
+Jira with `redirect=false`, so credentials never reach the storage host. An image
+is shown only after an exact identity match; Workfile does not guess by position
+or download unrelated files. Failed lookups can be retried by refreshing the
+ticket preview.
+
 ## When something goes wrong
 
 | What you see | What to try |

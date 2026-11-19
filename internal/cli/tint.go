@@ -89,7 +89,11 @@ func (v view) laneBackground() string {
 		if !ok {
 			return ""
 		}
-		return backgroundCode(laneTint(r, g, b))
+		r, g, b = laneTint(r, g, b)
+		if v.tint != nil {
+			v.tint.selected = backgroundCode(laneTint(r, g, b))
+		}
+		return backgroundCode(r, g, b)
 	}
 	if v.tint == nil {
 		return find()
@@ -99,7 +103,18 @@ func (v view) laneBackground() string {
 	return v.tint.code
 }
 
+// selectedLaneBackground adds one more step of contrast using the same cached
+// terminal reply. Selection never introduces a fixed palette or another query.
+func (v view) selectedLaneBackground() string {
+	base := v.laneBackground()
+	if base != "" && v.tint != nil && v.tint.selected != "" {
+		return v.tint.selected
+	}
+	return base
+}
+
 type tintCache struct {
-	once sync.Once
-	code string
+	once     sync.Once
+	code     string
+	selected string
 }

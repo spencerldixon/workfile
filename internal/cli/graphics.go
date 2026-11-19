@@ -88,6 +88,13 @@ func detectGraphics() graphics {
 	return parseGraphics(terminalGraphics())
 }
 
+func (v view) outputGraphics() graphics {
+	if v.color && isTerminal(v.out) {
+		return detectGraphics()
+	}
+	return graphics{}
+}
+
 func parseGraphics(reply []byte) graphics {
 	g := graphics{on: graphicsYes.Match(reply), cellW: 8, cellH: 16}
 	if !g.on {
@@ -185,6 +192,22 @@ var titleFont = sync.OnceValues(func() (*sfnt.Font, error) { return opentype.Par
 // background. ok is false when bold text would serve better: the colour is not
 // known, the font lacks a character, or the title would be too tall.
 func titleImage(text string, g graphics, maxCols int) (img image.Image, cols, rows int, ok bool) {
+	return textImage(text, g, maxCols, 1.4, titleRows)
+}
+
+// headingImage preserves the document's H1-H6 hierarchy, using the terminal's
+// own text colour and transparent pixels so comment backgrounds show through.
+func headingImage(text string, level int, g graphics, maxCols int) (image.Image, int, int, bool) {
+	level = max(1, min(6, level))
+	scales := [...]float64{1.35, 1.15, .95, .8, .72, .64}
+	rows := 1
+	if level <= 3 {
+		rows = 2
+	}
+	return textImage(text, g, maxCols, scales[level-1], rows)
+}
+
+func textImage(text string, g graphics, maxCols int, scale float64, rowsPerLine int) (img image.Image, cols, rows int, ok bool) {
 	words := strings.Fields(clean(text))
 	if !g.hasInk || len(words) == 0 {
 		return nil, 0, 0, false
@@ -199,7 +222,7 @@ func titleImage(text string, g graphics, maxCols int) (img image.Image, cols, ro
 			return nil, 0, 0, false
 		}
 	}
-	face, err := opentype.NewFace(f, &opentype.FaceOptions{Size: float64(g.cellH) * 1.4, DPI: 72, Hinting: font.HintingFull})
+	face, err := opentype.NewFace(f, &opentype.FaceOptions{Size: float64(g.cellH) * scale, DPI: 72, Hinting: font.HintingFull})
 	if err != nil {
 		return nil, 0, 0, false
 	}
@@ -224,11 +247,11 @@ func titleImage(text string, g graphics, maxCols int) (img image.Image, cols, ro
 		widest = max(widest, font.MeasureString(face, line).Ceil())
 	}
 	cols = int(math.Ceil(float64(widest) / float64(g.cellW)))
-	rows = len(lines) * titleRows
+	rows = len(lines) * rowsPerLine
 	canvas := image.NewRGBA(image.Rect(0, 0, cols*g.cellW, rows*g.cellH))
 	drawer := font.Drawer{Dst: draw.Image(canvas), Src: image.NewUniform(g.ink), Face: face}
 	metrics := face.Metrics()
-	height := titleRows * g.cellH
+	height := rowsPerLine * g.cellH
 	for i, line := range lines {
 		baseline := i*height + (height+metrics.Ascent.Ceil()-metrics.Descent.Ceil())/2
 		drawer.Dot = fixed.P(0, baseline)

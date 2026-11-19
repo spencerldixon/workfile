@@ -26,7 +26,7 @@ func githubConformResponses(t *testing.T) func(*http.Request) (int, string) {
 		case strings.HasPrefix(query, "query { viewer {"):
 			return 200, `{"data":{"viewer":{"login":"example-bob"}}}`
 		case strings.Contains(query, "organization(login"):
-			return 200, `{"data":{"organization":{"repositories":{"nodes":[{"name":"app"}]}}}}`
+			return 200, `{"data":{"organization":{"repositories":{"nodes":[{"name":"app"},{"name":"api"}]}}}}`
 		case strings.Contains(query, "search(query"):
 			if variables["first"] == float64(1) {
 				return 200, `{"data":{"search":{"issueCount":0,"nodes":[]}}}`

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
 	"workfile/internal/workfile"
 )
@@ -18,10 +17,11 @@ import (
 // once and printed. Nothing here reads the keyboard, so it never takes over the
 // terminal and the result stays in scrollback and in pipes.
 type ticketModel struct {
-	v view
-	t theme
-	w *workfile.Workspace
-	a workfile.Assessment
+	v    view
+	t    theme
+	w    *workfile.Workspace
+	a    workfile.Assessment
+	flow *picture
 	// to limits the fixes to one destination, for `wf check --to`.
 	to string
 }
@@ -51,6 +51,15 @@ func (m *ticketModel) render() string {
 	return panels(m.t, m.panelWidth(), sections)
 }
 
+func (m *ticketModel) printed(g graphics, id int) string {
+	if g.on && id <= lastImageID && m.a.Ticket.Error == "" && slices.Contains(m.w.Policy.States, m.a.Ticket.State) {
+		var sequence string
+		sequence, m.flow = ticketDiagram(m.w.Policy, m.a).printedPicture(g, m.width(), id)
+		return sequence + m.render()
+	}
+	return m.render()
+}
+
 // wrap breaks text to the screen width, then styles each line, so colour codes
 // and links never change the layout.
 func (m *ticketModel) wrap(text string, style func(string) string) []string {
@@ -76,7 +85,9 @@ func (m *ticketModel) address(target string) []string {
 
 // heading is a section title. Neutral sections have a dim title; a title with
 // an icon says whether the section needs work.
-func (m *ticketModel) heading(text string) string { return m.t.dim(strings.ToUpper(text)) }
+func (m *ticketModel) heading(text string) string {
+	return m.t.dim(strings.ToUpper(text))
+}
 func (m *ticketModel) verdictHeading(text string, ok bool) string {
 	if ok {
 		return m.t.good("✓ ") + m.t.bold(strings.ToUpper(text))
@@ -121,200 +132,6 @@ func (m *ticketModel) assigned() string {
 	return "Assigned to " + name
 }
 
-// sideStates are stages a ticket parks in or leaves the workflow through, such
-// as blocked and cancelled. They are not on the forward path, so the track
-// leaves them out and notes them only when current.
-//
-// A stage is a side stage when it is an end stage other than the first one (done
-// is the first), or a detour: its only exit goes back to an earlier stage that
-// moves into it (blocked, which returns to doing).
-func sideStates(p workfile.Policy) []string {
-	exits := func(state string) []string {
-		var to []string
-		for _, route := range p.Routes(state) {
-			to = append(to, route.To)
-		}
-		return to
-	}
-	var side []string
-	firstEnd := true
-	for i, state := range p.States {
-		if p.Transitions[state].End {
-			if !firstEnd {
-				side = append(side, state)
-			}
-			firstEnd = false
-			continue
-		}
-		out := exits(state)
-		if len(out) == 1 && slices.Index(p.States, out[0]) < i && slices.Contains(exits(out[0]), state) {
-			side = append(side, state)
-		}
-	}
-	return side
-}
-
-// forwardStages is one path through the workflow, start to finish, through
-// the current stage when it is on the main track. From each stage it takes the
-// nearest stage it can move forward to, and before the current stage the
-// nearest stage that moves into it. Alternatives, such as security beside qa,
-// appear only when the ticket is in them.
-func forwardStages(p workfile.Policy, current string) []string {
-	side := sideStates(p)
-	index := func(state string) int { return slices.Index(p.States, state) }
-	moves := func(from, to string) bool {
-		return slices.ContainsFunc(p.Routes(from), func(r workfile.Route) bool { return r.To == to })
-	}
-	main := slices.DeleteFunc(slices.Clone(p.States), func(s string) bool { return slices.Contains(side, s) })
-	if len(main) == 0 {
-		return nil
-	}
-	next := func(from string) string {
-		for _, s := range main {
-			if index(s) > index(from) && moves(from, s) {
-				return s
-			}
-		}
-		return ""
-	}
-	prev := func(to string) string {
-		for i := len(main) - 1; i >= 0; i-- {
-			if index(main[i]) < index(to) && moves(main[i], to) {
-				return main[i]
-			}
-		}
-		return ""
-	}
-	start := main[0]
-	var path []string
-	if slices.Contains(main, current) {
-		for s := prev(current); s != ""; s = prev(s) {
-			path = append([]string{s}, path...)
-		}
-		start = current
-	}
-	for s := start; s != ""; s = next(s) {
-		path = append(path, s)
-	}
-	return path
-}
-
-// forwardPath draws the path as a stepper: a line of nodes joined by links,
-// with the stage names under them. Stages behind the ticket are solid (●), the
-// current stage is bold (◉), and stages ahead are dim (○). The link out of the
-// current stage says whether that move is open: a solid green line when it is
-// ready, a dashed red one when it is blocked. Earlier stages are not ticked,
-// because Workfile cannot prove the path a ticket took.
-//
-// Gaps shrink to fit the width, then the stepper wraps, each new line picking
-// up the link where the last one stopped.
-func (m *ticketModel) forwardPath(path []string) []string {
-	if len(path) == 0 {
-		return nil
-	}
-	at := slices.Index(path, m.a.Ticket.State)
-	ready := at >= 0 && at+1 < len(path) && slices.ContainsFunc(m.a.Routes, func(r workfile.RouteAssessment) bool {
-		return r.To == path[at+1] && r.Available()
-	})
-	here := lipgloss.ANSIColor(2)
-	if m.a.Violation() || m.a.Blocked() {
-		here = lipgloss.ANSIColor(1)
-	}
-	strong := func(s string, underline bool) string {
-		return m.t.render(s, func(st lipgloss.Style) lipgloss.Style {
-			return st.Bold(true).Underline(underline).Foreground(here)
-		})
-	}
-	node := func(i int) string {
-		switch {
-		case i == at:
-			return strong("◉", false)
-		case i < at:
-			return "●"
-		default:
-			return m.t.dim("○")
-		}
-	}
-	name := func(i int) string {
-		switch {
-		case i == at:
-			return strong(path[i], true)
-		case i < at:
-			return path[i]
-		default:
-			return m.t.dim(path[i])
-		}
-	}
-	// link is the line from stage i to stage i+1, n columns long.
-	link := func(i, n int) string {
-		n = max(n, 1)
-		switch {
-		case i < at:
-			return strings.Repeat("━", n)
-		case i == at && ready:
-			return m.t.good(strings.Repeat("━", n))
-		case i == at:
-			return m.t.bad(strings.Repeat("╌", n))
-		default:
-			return m.t.dim(strings.Repeat("─", n))
-		}
-	}
-	widths := make([]int, len(path))
-	total := 0
-	for i, state := range path {
-		widths[i] = runewidth.StringWidth(state)
-		total += widths[i]
-	}
-	gap := 2
-	for _, g := range []int{4, 3} {
-		if total+g*(len(path)-1) <= m.width() {
-			gap = g
-			break
-		}
-	}
-	// Pack stages into rows. A row after the first starts with a short link,
-	// and a row that continues leaves one column for its trailing link.
-	const lead = 2
-	var rows [][]int
-	used := 0
-	for i := range path {
-		tail := 1
-		if i+1 == len(path) {
-			tail = 0
-		}
-		if len(rows) > 0 && used+widths[i]+tail <= m.width() {
-			rows[len(rows)-1] = append(rows[len(rows)-1], i)
-			used += widths[i] + gap
-			continue
-		}
-		rows = append(rows, []int{i})
-		used = widths[i] + gap
-		if i > 0 {
-			used += lead
-		}
-	}
-	var lines []string
-	for _, row := range rows {
-		nodes, names := "", ""
-		if row[0] > 0 {
-			nodes, names = link(row[0]-1, lead), strings.Repeat(" ", lead)
-		}
-		for k, i := range row {
-			nodes += node(i)
-			names += name(i)
-			switch {
-			case k+1 < len(row):
-				nodes += link(i, widths[i]+gap-1)
-				names += strings.Repeat(" ", gap)
-			case i+1 < len(path):
-				nodes += link(i, widths[i])
-			}
-		}
-		lines = append(lines, nodes, names)
-	}
-	return lines
-}
-
 func (m *ticketModel) track() []string {
 	p := m.w.Policy
 	if len(p.States) == 0 {
@@ -329,13 +146,10 @@ func (m *ticketModel) track() []string {
 		lines := m.wrap(m.a.Ticket.Error, m.t.bad)
 		return append(lines, m.wrap(action, m.t.bad)...)
 	}
-	// The workflow graph is shared with the old details view. It lays out to the
-	// view's inner width, so give it a view as wide as this screen's text.
-	path := forwardStages(p, m.a.Ticket.State)
 	lines := []string{m.heading("Where it is")}
-	lines = append(lines, m.forwardPath(path)...)
-	if !slices.Contains(path, m.a.Ticket.State) {
-		lines = append(lines, m.wrap("Off the main path: "+m.a.Ticket.State, m.t.bad)...)
+	lines = append(lines, ticketWorkflowLines(p, m.a, m.v, m.width(), m.flow)...)
+	if !slices.Contains(p.States, m.a.Ticket.State) {
+		lines = append(lines, m.wrap("! Current stage is not mapped to this workflow.", m.t.dim)...)
 	}
 	return append(lines, m.verdict()...)
 }

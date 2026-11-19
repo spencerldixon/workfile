@@ -1,0 +1,190 @@
+<!doctype html>
+<!-- Throwaway prototype. Compare individual comment panels and shared thread panels. -->
+<html lang="en" data-variant="cards">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workfile comments prototype</title>
+<style>
+  @font-face {
+    font-family: "Comment Icons";
+    src: local("MesloLGS Nerd Font Mono"), local("MesloLGSNFM-Regular");
+  }
+  :root {
+    color-scheme: dark;
+    --terminal: #191a24;
+    --panel: #222431;
+    --text: #c5ccee;
+    --quiet: #929ab8;
+    --link: #88cfee;
+    --indent: 3ch;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #13141c;
+    color: var(--text);
+    font: 14px/1.55 ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  main {
+    width: min(100%, 880px);
+    min-height: 100vh;
+    margin-inline: auto;
+    padding: 24px 20px 88px;
+    background: var(--terminal);
+  }
+  h1, h2, p, ol { margin: 0; }
+  h1, h2 { font-size: inherit; }
+  h1 { margin: 8px 0 18px; }
+  section { margin-top: 24px; }
+  h2 { margin-bottom: 10px; }
+  ol { list-style: none; padding: 0; }
+  .threads { display: grid; gap: 12px; }
+  .replies { margin-inline-start: var(--indent); }
+  article { padding: 8px 1.5ch; }
+  .meta { display: flex; align-items: baseline; gap: 1ch; }
+  .icon { flex: 0 0 1ch; color: var(--link); }
+  .nerd { display: none; font-family: "Comment Icons"; }
+  .has-icons .nerd { display: inline; }
+  .has-icons .fallback { display: none; }
+  time, .quiet { color: var(--quiet); }
+  time { white-space: nowrap; }
+  a { color: var(--link); overflow-wrap: anywhere; text-underline-offset: 3px; }
+  article p { overflow-wrap: anywhere; }
+
+  [data-variant="cards"] article { background: var(--panel); }
+  [data-variant="cards"] .replies > li { margin-top: 5px; }
+  [data-variant="cards"] .threads > li > article .icon { display: none; }
+  [data-variant="cards"] .replies article p { margin-inline-start: 2ch; }
+
+  [data-variant="threads"] .threads > li { background: var(--panel); padding-block: 3px; }
+  [data-variant="threads"] .replies {
+    margin-inline-start: calc(var(--indent) + 1px);
+    border-inline-start: 1px solid #48516a;
+  }
+  [data-variant="threads"] .meta { justify-content: space-between; }
+  [data-variant="threads"] .author { flex: 1; }
+  [data-variant="threads"] article p { margin-top: 2px; }
+
+  nav {
+    position: fixed;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: #313448;
+    border: 1px solid #4a5070;
+    border-radius: 7px;
+    white-space: nowrap;
+  }
+  button {
+    border: 0;
+    border-radius: 4px;
+    padding: 5px 9px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: var(--text); color: var(--terminal); }
+  @media (max-width: 520px) {
+    :root { --indent: 2ch; }
+    main { padding-inline: 12px; }
+    article { padding-inline: 1ch; }
+    .meta { flex-wrap: wrap; column-gap: .75ch; }
+    time { font-size: .85em; }
+  }
+</style>
+<main>
+  <header>
+    <div><strong>APP-247</strong><span class="quiet"> · In review</span></div>
+    <h1>Support the local dev stack</h1>
+    <p>Check whether the missing features block local development.</p>
+  </header>
+
+  <section aria-labelledby="comments-heading">
+    <h2 id="comments-heading">Comments (4)</h2>
+    <ol class="threads">
+      <li>
+        <article>
+          <header class="meta">
+            <span class="icon" aria-hidden="true"><span class="nerd">󰍩</span><span class="fallback">●</span></span>
+            <strong class="author">Alice</strong>
+            <time datetime="2026-11-02">16 days ago</time>
+          </header>
+          <p>Both issues are still open upstream. We could send a patch if this is holding up local development.</p>
+        </article>
+        <ol class="replies">
+          <li>
+            <article>
+              <header class="meta">
+                <span class="icon" aria-hidden="true"><span class="nerd">󰑀</span><span class="fallback">↳</span></span>
+                <strong class="author">Bob</strong>
+                <time datetime="2026-11-02">16 days ago</time>
+              </header>
+              <p>Worth a shot. The missing feature means we still have to start the service by hand.</p>
+            </article>
+            <ol class="replies">
+              <li>
+                <article>
+                  <header class="meta">
+                    <span class="icon" aria-hidden="true"><span class="nerd">󰑀</span><span class="fallback">↳</span></span>
+                    <strong class="author">Alice</strong>
+                    <time datetime="2026-11-05">13 days ago</time>
+                  </header>
+                  <p>I opened a patch for that in <a href="https://example.com/pull/185">example-stack#185</a>.</p>
+                </article>
+              </li>
+            </ol>
+          </li>
+        </ol>
+      </li>
+      <li>
+        <article>
+          <header class="meta">
+            <span class="icon" aria-hidden="true"><span class="nerd">󰍩</span><span class="fallback">●</span></span>
+            <strong class="author">Charlie</strong>
+            <time datetime="2026-11-06">12 days ago</time>
+          </header>
+          <p>I added the manual steps to the dev guide.</p>
+        </article>
+      </li>
+    </ol>
+  </section>
+</main>
+<nav aria-label="Prototype layout">
+  <button type="button" data-layout="cards">A · Comment panels</button>
+  <button type="button" data-layout="threads">B · Thread panels</button>
+</nav>
+<script>
+  const page = document.documentElement;
+  const buttons = document.querySelectorAll("[data-layout]");
+
+  function show(layout) {
+    page.dataset.variant = layout === "threads" ? "threads" : "cards";
+    for (const button of buttons) {
+      button.setAttribute("aria-pressed", button.dataset.layout === page.dataset.variant);
+    }
+  }
+  function select(layout) {
+    const url = new URL(location.href);
+    url.searchParams.set("variant", layout);
+    history.replaceState(null, "", url);
+    show(layout);
+  }
+
+  for (const button of buttons) {
+    button.addEventListener("click", () => select(button.dataset.layout));
+  }
+  document.addEventListener("keydown", event => {
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      select(page.dataset.variant === "cards" ? "threads" : "cards");
+    }
+  });
+  show(new URLSearchParams(location.search).get("variant"));
+  document.fonts.load('14px "Comment Icons"').then(fonts => {
+    if (fonts.length) page.classList.add("has-icons");
+  }).catch(() => {});
+</script>
+</html>

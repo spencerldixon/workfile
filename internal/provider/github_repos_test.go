@@ -51,7 +51,7 @@ func TestCodeHostKeepsListedAndAllRepos(t *testing.T) {
 	}
 }
 
-func TestCodeHostTestWarnsAboutMissingRepos(t *testing.T) {
+func TestCodeHostTestRejectsMissingRepos(t *testing.T) {
 	c := client(t, func(r *http.Request) (int, string) {
 		body := requestBody(t, r)
 		query := body["query"].(string)
@@ -66,14 +66,26 @@ func TestCodeHostTestWarnsAboutMissingRepos(t *testing.T) {
 	p := c.Workspace.Providers["github"]
 	p.Repos = workfile.Names{"app", "api", "old"}
 	c.Workspace.Providers["github"] = p
-	message, err := c.Test(context.Background(), "github")
-	if err != nil {
-		t.Fatal(err)
+	_, err := c.Test(context.Background(), "github")
+	if err == nil || !strings.Contains(err.Error(), "api, old") || !strings.Contains(err.Error(), "token") {
+		t.Fatalf("expected a repository access error, got %v", err)
 	}
-	if !strings.Contains(message, "1 visible active repositories") {
-		t.Errorf("unlisted repos were counted: %q", message)
-	}
-	if !strings.Contains(message, "github.repos lists api, old, which are not in example-team or are archived") {
-		t.Errorf("no warning: %q", message)
+}
+
+func TestCodeHostTestRejectsHiddenPullRequestSample(t *testing.T) {
+	c := client(t, func(r *http.Request) (int, string) {
+		query := requestBody(t, r)["query"].(string)
+		switch {
+		case strings.HasPrefix(query, "query { viewer {"):
+			return 200, `{"data":{"viewer":{"login":"example-bob"}}}`
+		case strings.Contains(query, "organization(login"):
+			return 200, `{"data":{"organization":{"repositories":{"nodes":[{"name":"app"},{"name":"api"}]}}}}`
+		default:
+			return 200, `{"data":{"search":{"issueCount":3,"nodes":[null]}}}`
+		}
+	})
+	_, err := c.Test(context.Background(), "github")
+	if err == nil || !strings.Contains(err.Error(), "Pull requests") {
+		t.Fatalf("expected a pull request access error, got %v", err)
 	}
 }

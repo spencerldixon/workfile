@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,7 +29,7 @@ type review struct {
 	Author login
 	Commit *struct{ OID string }
 }
-type reviewRequest struct{ RequestedReviewer login }
+type reviewRequest struct{ RequestedReviewer struct{ Login, Slug string } }
 type commitStatus struct{ StatusCheckRollup json.RawMessage }
 type commitNode struct{ Commit *commitStatus }
 type pullRequest struct {
@@ -38,6 +39,7 @@ type pullRequest struct {
 	IsDraft                            *bool
 	MergeQueueEntry                    json.RawMessage
 	HeadRefOID                         string
+	Mergeable                          string
 	Commits                            *graphConnection[commitNode]
 	Repository                         struct{ Name string }
 	Author                             login
@@ -56,14 +58,14 @@ const repositoryQuery = `query($org: String!, $after: String) {
 }`
 
 const prFields = `
-  id number title url headRefName headRefOid state isDraft
+  id number title url headRefName headRefOid state isDraft mergeable
   mergeQueueEntry { id }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
   repository { name }
   author { login }
   labels(first: 100) { nodes { name } pageInfo { hasNextPage endCursor } }
   latestOpinionatedReviews(first: 100) { nodes { state author { login } commit { oid } } pageInfo { hasNextPage endCursor } }
-  reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } } } pageInfo { hasNextPage endCursor } }
+  reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } pageInfo { hasNextPage endCursor } }
 `
 
 // Discovery only needs the fields used to link a PR to a ticket. Fetch expensive
@@ -177,11 +179,15 @@ func (c *Client) searchPRs(ctx context.Context, token, query string, probe bool)
 			return nil, fmt.Errorf("GitHub found %d PRs for one search and stops at 1000", page.IssueCount)
 		}
 		for _, pr := range page.Nodes {
-			if pr != nil && (pr.State == "OPEN" || pr.State == "MERGED") {
+			if pr != nil && (probe || pr.State == "OPEN" || pr.State == "MERGED") {
 				prs = append(prs, *pr)
 			}
 		}
 		if probe {
+			if (page.IssueCount > 0 || len(page.Nodes) > 0) &&
+				!slices.ContainsFunc(prs, func(pr pullRequest) bool { return pr.ID != "" }) {
+				return nil, errors.New("GitHub reported pull requests but the token could not read a sample. Check the token's repository access, Pull requests read permission, and organisation approval")
+			}
 			break
 		}
 		cursor, err := nextCursor(page.PageInfo, seen)
@@ -422,7 +428,7 @@ func (c *Client) completePR(ctx context.Context, token string, pr *pullRequest) 
       node(id: $id) { ... on PullRequest {
         labels(first: 100, after: $labels) { nodes { name } pageInfo { hasNextPage endCursor } }
         latestOpinionatedReviews(first: 100, after: $reviews) { nodes { state author { login } commit { oid } } pageInfo { hasNextPage endCursor } }
-        reviewRequests(first: 100, after: $requests) { nodes { requestedReviewer { ... on User { login } } } pageInfo { hasNextPage endCursor } }
+        reviewRequests(first: 100, after: $requests) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } pageInfo { hasNextPage endCursor } }
       } }
     }`
 	seen := map[string]map[string]bool{"labels": {}, "reviews": {}, "requests": {}}
@@ -468,6 +474,7 @@ func (c *Client) completePR(ctx context.Context, token string, pr *pullRequest) 
 func (p pullRequest) record() workfile.Record {
 	labels, approvers, reviewers := []string{}, []string{}, []string{}
 	approvals := []workfile.Actor{}
+	changes := []string{}
 	fresh := []workfile.Actor{}
 	unavailable := map[string]string{}
 	freshKnown := p.HeadRefOID != ""
@@ -475,9 +482,12 @@ func (p pullRequest) record() workfile.Record {
 		labels = append(labels, l.Name)
 	}
 	for _, r := range p.LatestOpinionatedReviews.Nodes {
-		if !slices.Contains([]string{"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED", "PENDING"}, r.State) || r.State == "APPROVED" && r.Author.Login == "" {
+		if !slices.Contains([]string{"APPROVED", "CHANGES_REQUESTED", "DISMISSED", "COMMENTED", "PENDING"}, r.State) || (r.State == "APPROVED" || r.State == "CHANGES_REQUESTED") && r.Author.Login == "" {
 			unavailable["approvals"] = "GitHub did not return complete reviewer evidence"
 			freshKnown = false
+		}
+		if r.State == "CHANGES_REQUESTED" && r.Author.Login != "" {
+			changes = append(changes, r.Author.Login)
 		}
 		if r.State == "APPROVED" && r.Author.Login != "" && !slices.Contains(approvers, r.Author.Login) {
 			approvers = append(approvers, r.Author.Login)
@@ -490,8 +500,13 @@ func (p pullRequest) record() workfile.Record {
 		}
 	}
 	for _, r := range p.ReviewRequests.Nodes {
-		if r.RequestedReviewer.Login != "" {
+		switch {
+		case r.RequestedReviewer.Login != "":
 			reviewers = append(reviewers, r.RequestedReviewer.Login)
+		case r.RequestedReviewer.Slug != "":
+			reviewers = append(reviewers, "team:"+r.RequestedReviewer.Slug)
+		default:
+			unavailable["review_requests"] = "GitHub did not identify a requested reviewer"
 		}
 	}
 	state := strings.ToLower(p.State)
@@ -511,7 +526,16 @@ func (p pullRequest) record() workfile.Record {
 	if len(reviewers) > 0 {
 		parts = append(parts, "waiting on "+strings.Join(reviewers, ", "))
 	}
-	facts := workfile.Facts{"labels": labels, "approvals": approvals, "state": state, "author": p.Author.Login, "review_requests": reviewers}
+	facts := workfile.Facts{"labels": labels, "approvals": approvals, "state": state, "author": p.Author.Login, "review_requests": reviewers, "changes_requested": changes}
+	if unavailable["approvals"] != "" {
+		unavailable["changes_requested"] = "GitHub did not return complete reviewer evidence"
+	}
+	switch p.Mergeable {
+	case "MERGEABLE", "CONFLICTING":
+		facts["mergeable"] = strings.ToLower(p.Mergeable)
+	default:
+		unavailable["mergeable"] = "GitHub has not established mergeability"
+	}
 	if queueReason != "" {
 		unavailable["merge_queue"] = queueReason
 	} else {
@@ -538,8 +562,13 @@ func (p pullRequest) record() workfile.Record {
 	} else {
 		facts["checks"] = status
 	}
+	checksURL := ""
+	if u, err := url.Parse(p.URL); err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil {
+		u.Path, u.RawQuery, u.Fragment = strings.TrimRight(u.Path, "/")+"/checks", "", ""
+		checksURL = u.String()
+	}
 	return workfile.Record{
-		ID: fmt.Sprintf("%s#%d", p.Repository.Name, p.Number), URL: p.URL, Title: p.Title, Summary: strings.Join(parts, " · "), Head: p.HeadRefOID,
+		ID: fmt.Sprintf("%s#%d", p.Repository.Name, p.Number), URL: p.URL, ChecksURL: checksURL, Title: p.Title, Summary: strings.Join(parts, " · "), Head: p.HeadRefOID,
 		People: append([]string{p.Author.Login}, reviewers...),
 		Facts:  facts, Unavailable: unavailable,
 	}

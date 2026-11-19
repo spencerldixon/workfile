@@ -34,6 +34,8 @@ func checkMove(ctx context.Context, e env) (int, error) {
 	if !slices.Contains(w.Policy.States, o.to) {
 		return 2, fmt.Errorf("%s is not a stage in policy.yml", o.to)
 	}
+	finish := e.startProgramWork()
+	defer finish()
 	tickets, err := client.Tickets(ctx, o.keys, 0)
 	if err != nil {
 		return 2, err
@@ -42,6 +44,7 @@ func checkMove(ctx context.Context, e env) (int, error) {
 		return 2, fmt.Errorf("%s is not visible to your %s token: check the key, or ask for access", o.keys[0], w.TrackerLabel())
 	}
 	tickets, warnings, err := client.Records(ctx, tickets[:1])
+	finish()
 	if err != nil {
 		return 2, err
 	}

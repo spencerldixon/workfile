@@ -47,8 +47,14 @@ type Role struct {
 	Check    func(name string, p Provider, add func(string, ...any)) // may be nil
 	Facts    []string // TrackerFacts or CodeHostFacts, plus any of its own
 	ByFacts  []string // facts that say who supplied them, for `by` rules
+	Activity []string // the activity kinds it supplies to `wf inbox`
 }
 ```
+
+`Activity` lists what the adapter's `Activity` method can return for `wf inbox`:
+`comment`, `review`, `approved`, `changes_requested`, `review_requested` or
+`pushed`. Leave it empty if the adapter supplies none yet; the inbox still shows
+policy rows for its tickets.
 
 Workfile rejects settings not listed, and a connection given a role its kind
 does not have. A new setting also needs a field on `workfile.Provider` and a line in
@@ -80,13 +86,15 @@ type tracker interface {
 	Listing(ctx context.Context, scope string) ([]workfile.Listing, error)
 	Detail(ctx context.Context, key string) (workfile.Detail, error)
 	Image(ctx context.Context, attachment string) ([]byte, error)
+	// Activity reads what happened on these tickets after since, for wf inbox.
+	Activity(ctx context.Context, keys []string, since time.Time) ([]workfile.Activity, error)
 }
 ```
 
 | Method | Reads | Rules |
 |---|---|---|
 | `Tickets` | Full tickets, for policy checks | With `keys`, read those even outside the scope, and set `OutOfScope` on any it hides. Leave out a key that does not exist. With no `keys`, read the scope up to `limit`; 0 means all. `only_mine` narrows a scope read only |
-| `Listing` | The little a list shows, for the whole scope | Ask for only those fields. A non-empty `scope` replaces the configured one. Ignore `only_mine`. `State` is empty for an unmapped status |
+| `Listing` | The little a list shows, for the whole scope | Ask for only those fields. A non-empty `scope` replaces the configured one. Ignore `only_mine`. `State` is empty for an unmapped status. `Origin` is the source name within the configured scope, such as a project or repository; view filters compare it without knowing the provider |
 | `Detail` | One ticket's text and comments | Return `workfile.Block`s, never the tracker's format. If comments fail, still return the ticket. If you cannot return every comment, return the newest and set `CommentTotal` |
 | `Image` | An image a block named in `Attachment` | Check `attachment` first: it comes from ticket text. Never send a token to a host a ticket supplied. Use `c.download` |
 
@@ -135,10 +143,27 @@ type codeHost interface {
 	connection
 	// Records returns the code changes linked to each ticket, by Ticket.Key.
 	Records(ctx context.Context, tickets []workfile.Ticket, keys workfile.Keys) (map[string][]workfile.Record, error)
+	// Activity reads what happened on these PRs since each cursor, for wf inbox.
+	Activity(ctx context.Context, prs []workfile.PRCursor) (workfile.ActivityResult, error)
+	// Mine finds open PRs the person wrote or was asked to review, in listed repos.
+	Mine(ctx context.Context) ([]workfile.Record, error)
+	// FailedChecks lists the failing jobs on one PR's latest commit, with log links.
+	FailedChecks(ctx context.Context, record workfile.Record) ([]workfile.FailedCheck, error)
 }
 ```
 
+**FailedChecks reads one PR.** The tracker calls it only when someone opens a
+ticket whose PR has failing checks, so a person can jump to the log. Read the
+PR's latest commit in one request and keep only failing jobs. Refuse a record
+outside the connection's repositories without a request.
+
 `keys` is the tracker's, so a code host works with any tracker.
+
+**Activity is for polling, so keep it cheap.** `wf inbox` calls `Activity` every
+few minutes while it is open. Ask first which PRs changed at all, in as few
+requests as the service allows, and read details only for those. A poll where
+nothing changed should cost one request. An adapter that supplies no activity
+returns nothing, with no request, and lists none in `Role.Activity`.
 
 **Finding work.** For each ticket:
 
@@ -159,6 +184,7 @@ Fields on `Record`:
 | `ID` | `repo#42`. The screens split it at `#` |
 | `Repository` | `org/repo` |
 | `URL`, `Title` | The change's page and title |
+| `ChecksURL` | Optional HTTPS link to this change's check results |
 | `Summary` | One short line: `open · by alice · no approvals` |
 | `Head` | The latest commit |
 | `People` | The author and requested reviewers, as identities |
@@ -185,6 +211,8 @@ policy using a fact the kind lacks fails when it loads.
 |---|---|---|
 | `fresh_approvals` | `[]workfile.Actor` | Approvals on the current commit |
 | `merge_queue` | `string` | `queued` or `none` |
+| `mergeable` | `string` | `mergeable` or `conflicting`; unknown stays unavailable |
+| `changes_requested` | `[]string` | Reviewers whose latest opinion requests changes |
 
 ## Standards
 
@@ -256,6 +284,11 @@ results are dropped, that a change linked to two tickets appears under both, and
 that a failed read returns an error.
 
 ## 5. Document it
+
+To offer the provider in `wf setup`, add its connection form to
+`internal/provider/setup_form.go` and implement discovery for its roles in
+`internal/provider/setup.go`. Workfile builds the wizard's provider choices
+from the role table and the available forms.
 
 Write `docs/providers/<kind>.md` like [the Jira guide](jira.md): a sample
 `providers.yml`, the smallest token that works, and any fact that behaves

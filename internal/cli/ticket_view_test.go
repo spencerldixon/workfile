@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/kitty"
 	"workfile/internal/workfile"
 )
 
@@ -23,7 +24,7 @@ func ticketScreen(t *testing.T, width int, tk workfile.Ticket) string {
 
 func TestTicketScreenShowsWhereItIsAndWhatNeedsAttention(t *testing.T) {
 	out := ticketScreen(t, 80, fixtureTicket("APP-42", "todo", "short"))
-	for _, want := range []string{"WHERE IT IS", "◉", "todo", "doing", "NEEDS ATTENTION", "Expand the description", "PULL REQUESTS", "NEXT MOVES"} {
+	for _, want := range []string{"WHERE IT IS", "[Todo]", "Doing", "NEEDS ATTENTION", "Expand the description", "PULL REQUESTS", "NEXT MOVES"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
@@ -65,21 +66,18 @@ func TestTicketScreenIsPlainAndFitsNarrowTerminals(t *testing.T) {
 	}
 }
 
-func TestForwardStagesIsOnePathThroughTheCurrentStage(t *testing.T) {
-	w, err := workfile.Load("../../example/branching")
+func TestPrintedTicketUsesTheSharedKittyDiagram(t *testing.T) {
+	w, err := workfile.Load("../../example")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for current, want := range map[string]string{
-		"review":    "intake triage discovery ready doing review qa release done",
-		"security":  "intake triage discovery ready doing review security release done",
-		"blocked":   "intake triage discovery ready doing review qa release done",
-		"cancelled": "intake triage discovery ready doing review qa release done",
-	} {
-		if got := strings.Join(forwardStages(w.Policy, current), " "); got != want {
-			t.Errorf("%s: got %q, want %q", current, got, want)
-		}
+	a := w.Assess(fixtureTicket("APP-42", "review", "short"))
+	m := newTicketModel(view{width: 60, color: true}, w, a)
+	out := m.printed(testGraphics, firstImageID)
+	if !strings.Contains(out, "\x1b_G") || !strings.ContainsRune(out, kitty.Placeholder) {
+		t.Fatal("single-ticket status did not print the workflow image")
 	}
+	assertWidth(t, ansi.Strip(out), 60)
 }
 
 func TestTicketScreenPanelsFitWithColourAndBackground(t *testing.T) {
@@ -115,16 +113,14 @@ func TestPipedTicketScreenWritesOutWebAddresses(t *testing.T) {
 	}
 }
 
-func TestStepperLinkSaysWhetherTheNextMoveIsOpen(t *testing.T) {
+func TestTicketDiagramStylesMovesIndependently(t *testing.T) {
 	w, err := workfile.Load("../../example/destination-requires")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for description, want := range map[string]string{strings.Repeat("x", 120): "◉━", "short": "◉╌"} {
-		a := w.Assess(fixtureTicket("APP-42", "todo", description))
-		out := newTicketModel(view{width: 60, tint: &tintCache{}}, w, a).render()
-		if !strings.Contains(out, want) {
-			t.Errorf("want %q for a %d-character description:\n%s", want, len(description), out)
-		}
+	a := w.Assess(fixtureTicket("APP-42", "todo", "short"))
+	out := newTicketModel(view{width: 60, color: true}, w, a).render()
+	if !strings.Contains(out, "\x1b[31m") || !strings.Contains(out, "\x1b[32m") || strings.Contains(out, "🔒") {
+		t.Fatalf("want blocked and available moves in the same diagram:\n%s", out)
 	}
 }

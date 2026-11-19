@@ -53,7 +53,7 @@ func TestLintPassesAndDrawsThePolicy(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("%d %s", code, out)
 	}
-	for _, want := range []string{"✓ Pass", "Nothing can slip through", "Flow", "doing"} {
+	for _, want := range []string{"✓ Pass", "Nothing can slip through", "Flow", "Doing"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
@@ -230,7 +230,7 @@ func TestLintDrawsThePolicyAsAnImageWhenTheTerminalCanShowOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := newLintModel(view{width: 100, color: true}, w, nil, w.Policy.Lint(), w.Policy.Gaps())
-	if out := m.render(); strings.Contains(out, "\x1b_G") || !strings.Contains(ansi.Strip(out), "┌") && !strings.Contains(ansi.Strip(out), "──→") {
+	if out := m.render(); strings.Contains(out, "\x1b_G") || !strings.Contains(ansi.Strip(out), "Todo-[🔒 Ready To Start]->Doing-[🔒 Sign Off]->Done") {
 		t.Fatalf("without graphics the flow is text:\n%s", ansi.Strip(out))
 	}
 	m.gfx = testGraphics
@@ -238,11 +238,78 @@ func TestLintDrawsThePolicyAsAnImageWhenTheTerminalCanShowOne(t *testing.T) {
 	if !strings.Contains(out, "\x1b_G") || !strings.ContainsRune(out, 0x10EEEE) {
 		t.Fatalf("with graphics the flow is a picture drawn in placeholder cells:\n%q", out)
 	}
+	if text := ansi.Strip(out); strings.Contains(text, "Ready To Start") || strings.Contains(text, "Sign Off") {
+		t.Fatalf("gate names were repeated below the picture:\n%s", text)
+	}
 	// Plain output never carries a picture, even if graphics were asked for.
 	m = newLintModel(view{width: 100}, w, nil, nil, nil)
 	m.gfx = testGraphics
 	if strings.Contains(m.render(), "\x1b") {
 		t.Fatal("no colour means no escapes")
+	}
+}
+
+func TestLintKeepsKittyGraphicsForDenseGatedFlows(t *testing.T) {
+	w, err := workfile.Load(branchingWorkspace(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, width := range []int{40, 60, 100} {
+		m := newLintModel(view{width: width, color: true}, w, nil, w.Policy.Lint(), w.Policy.Gaps())
+		m.gfx = testGraphics
+		out := m.render()
+		if !strings.Contains(out, "\x1b_G") || !strings.ContainsRune(out, 0x10EEEE) {
+			t.Fatalf("%d columns: branching flow lost its Kitty diagram", width)
+		}
+		if width >= 60 {
+			edges, broken := m.flowEdges()
+			d := newWorkflowDiagram(w.Policy, edges, broken, true)
+			if _, _, ok := flowDiagramImage(&d.layout, m.gfx, m.width(), flowRoutes(d.layout.moves)); !ok {
+				t.Fatalf("%d columns: expected a connected branching diagram", width)
+			}
+		}
+	}
+}
+
+func TestLintMergesRefinementForFourMovesIntoReady(t *testing.T) {
+	policy := workfile.Policy{
+		States: []string{"intake", "triage", "discovery", "draft", "ready"},
+		Transitions: map[string]workfile.Transition{
+			"intake":          {To: []string{"ready"}},
+			"triage":          {To: []string{"ready"}},
+			"discovery":       {To: []string{"ready"}},
+			"draft":           {To: []string{"ready"}},
+			"ready":           {End: true},
+			workfile.AnyStage: {To: []string{"ready"}, Requires: []string{"refinement"}},
+		},
+	}
+	w := &workfile.Workspace{Policy: policy}
+	plain := newLintModel(view{width: 60}, w, nil, nil, nil).render()
+	if strings.Count(plain, "[🔒 Refinement]") != 1 ||
+		!strings.Contains(plain, ">[🔒 Refinement]---->Ready") ||
+		!strings.Contains(plain, "Draft---------+") ||
+		strings.Contains(plain, "Links Use Stage Numbers.") {
+		t.Fatalf("want a single gate leading to ready:\n%s", plain)
+	}
+	assertWidth(t, plain, 60)
+	m := newLintModel(view{width: 60, color: true}, w, nil, nil, nil)
+	m.gfx = testGraphics
+	if out := m.render(); !strings.ContainsRune(out, 0x10EEEE) {
+		t.Fatal("grouped routes lost the Kitty diagram")
+	}
+}
+
+func TestFlowRoutesKeepsDifferentRequirementsAndEndpointsSeparate(t *testing.T) {
+	moves := []flowMove{
+		{from: 0, to: 2, gates: []string{"refinement"}, color: green},
+		{from: 0, to: 3, gates: []string{"refinement"}, color: green},
+		{from: 0, to: 4, gates: []string{"refinement", "approval"}, color: green},
+		{from: 1, to: 5, gates: []string{"refinement"}, color: green},
+		{from: 1, to: 2, gates: []string{"refinement"}, color: red},
+	}
+	got := flowRoutes(moves)
+	if len(got) != 4 || stageNumbers(got[0].from) != "1" || stageNumbers(got[0].to) != "3, 4" {
+		t.Fatalf("merged unrelated routes: %+v", got)
 	}
 }
 
@@ -299,25 +366,25 @@ func TestFlowImageFallsBackWhenItCannotBeDrawnWell(t *testing.T) {
 	stages := []string{"todo", "doing", "done"}
 	edges := []pipelineEdge{{from: 0, to: 1, lane: -1, color: green}, {from: 1, to: 2, lane: -1, color: muted}, {from: 0, to: 2, lane: 0, color: red}}
 	l := newFlowLayout(stages, map[string]bool{"done": true}, edges, map[string]bool{"done": true})
-	img, rows, ok := flowImage(&l, testGraphics, 60)
+	img, rows, ok := (workflowDiagram{layout: l}).image(testGraphics, 60)
 	if !ok || img.Bounds().Dx() != 60*testGraphics.cellW || img.Bounds().Dy() != rows*testGraphics.cellH {
 		t.Fatalf("%v %d %v", ok, rows, img)
 	}
 	// A terminal that never tells us its text colour still gets a picture.
-	if _, _, ok := flowImage(&l, graphics{on: true, cellW: 8, cellH: 16}, 60); !ok {
+	if _, _, ok := (workflowDiagram{layout: l}).image(graphics{on: true, cellW: 8, cellH: 16}, 60); !ok {
 		t.Fatal("a terminal that does not report its text colour still gets a picture")
 	}
-	if _, _, ok := flowImage(&l, graphics{cellW: 8, cellH: 16}, 60); ok {
+	if _, _, ok := (workflowDiagram{layout: l}).image(graphics{cellW: 8, cellH: 16}, 60); ok {
 		t.Fatal("a terminal without graphics gets text")
 	}
-	if _, _, ok := flowImage(&l, testGraphics, 12); ok {
+	if _, _, ok := (workflowDiagram{layout: l}).image(testGraphics, 12); ok {
 		t.Fatal("a very narrow terminal gets text")
 	}
 	many := make([]string, 40)
 	for i := range many {
 		many[i] = "a-long-stage-name"
 	}
-	if _, _, ok := flowImage(func() *flowLayout { l := newFlowLayout(many, nil, nil, nil); return &l }(), testGraphics, 100); ok {
+	if _, _, ok := (workflowDiagram{layout: newFlowLayout(many, nil, nil, nil)}).image(testGraphics, 100); ok {
 		t.Fatal("too many stages to read gets text")
 	}
 }

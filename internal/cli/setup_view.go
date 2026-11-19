@@ -19,13 +19,18 @@ func (m *setupModel) View() tea.View {
 // render is the screen as a string. Plain output has every escape removed, so
 // whatever a component draws by default cannot leak colour.
 func (m *setupModel) render() string {
-	out := []string{"", m.header(), ""}
-	if m.step == stepWelcome || m.step == stepDone {
-		out = append(out, m.art(), "")
+	var out []string
+	switch m.step {
+	case stepWelcome:
+		out = append(out, m.t.animFrame(m.frame, m.panelWidth()), "")
+	case stepDone:
+		// The result stands on its own when the wizard ends.
+	default:
+		out = append(out, m.header(), "")
 	}
 	out = append(out, m.t.panel(m.body(), m.panelWidth()))
 	if h := m.footer(); h != "" {
-		out = append(out, "", " "+h)
+		out = append(out, "", " "+m.t.para(h, m.panelWidth()-1))
 	}
 	screen := strings.Join(out, "\n") + "\n"
 	if !m.t.color {
@@ -34,42 +39,52 @@ func (m *setupModel) render() string {
 	return screen
 }
 
-// art is the animated picture, or just the name on a very narrow terminal.
-func (m *setupModel) art() string {
-	if m.width < 24 {
-		return m.t.wordmark()
+func setupIcon(nerd bool, fallback, glyph string) string {
+	if nerd {
+		return glyph
 	}
-	return m.t.animFrame(m.frame)
+	return fallback
+}
+
+func (m *setupModel) icon(fallback, glyph string) string {
+	return setupIcon(m.nerd, fallback, glyph)
 }
 
 func (m *setupModel) header() string {
-	title := " " + m.t.bold("workfile") + m.t.dim(" setup")
-	if m.step == stepWelcome || m.step == stepDone {
-		return title
-	}
-	names := []string{"Connect", "Discover", "Save"}
+	names := []string{"Providers", "Connections", "Scope", "Policy"}
 	current := 0
 	switch {
-	case m.step >= stepReview:
+	case m.step >= stepStatuses:
+		current = 3
+	case m.step >= stepProjects:
 		current = 2
-	case m.step >= stepRepos:
+	case m.step >= stepTrackerSettings:
 		current = 1
 	}
-	if m.width < 52 {
-		return title + m.t.dim(fmt.Sprintf("  ·  %d of 3 %s", current+1, names[current]))
+	gap := "   "
+	if m.width < 60 {
+		names[1], gap = "Connect", " "
 	}
+	if m.width < 38 {
+		return m.t.accent(names[current]) + m.t.dim(fmt.Sprintf("  %d/%d", current+1, len(names)))
+	}
+	icons := []string{m.icon("+", "\uf1e6"), m.icon("↔", "\uf0c1"), m.icon("•", "\uf07c"), m.icon("≡", "\uf15c")}
 	parts := make([]string, len(names))
 	for i, name := range names {
+		label := icons[i] + " " + name
 		switch {
 		case i < current:
-			parts[i] = m.t.good("✓") + " " + name
+			parts[i] = m.t.good(m.icon("✓", "\uf00c") + " " + name)
 		case i == current:
-			parts[i] = m.t.accent("●") + " " + m.t.bold(name)
+			if !m.t.color {
+				label = "› " + name
+			}
+			parts[i] = m.t.accent(label)
 		default:
-			parts[i] = m.t.dim("○ " + name)
+			parts[i] = m.t.dim(label)
 		}
 	}
-	return title + "   " + strings.Join(parts, m.t.dim("  ›  "))
+	return strings.Join(parts, gap)
 }
 
 // screen lays out a title, a short explanation, and then the parts.
@@ -84,15 +99,6 @@ func (m *setupModel) screen(title, text string, parts ...string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-// steps is a numbered list whose wrapped lines hang under the text.
-func (m *setupModel) steps(items ...string) string {
-	rows := make([]string, len(items))
-	for i, item := range items {
-		rows[i] = lipgloss.JoinHorizontal(lipgloss.Top, m.t.dim(fmt.Sprintf("%d. ", i+1)), m.t.para(item, m.inner()-3))
-	}
-	return strings.Join(rows, "\n")
 }
 
 func (m *setupModel) errView() string {
@@ -120,14 +126,18 @@ func nonEmpty(s ...string) []string {
 func (m *setupModel) tokenView() string {
 	count := m.t.dim("Nothing pasted yet")
 	if n := len([]rune(m.input.Value())); n > 0 {
-		count = m.t.good("✓ ") + fmt.Sprintf("%d characters pasted", n)
+		count = m.t.good(m.icon("✓", "\uf00c")+" ") + fmt.Sprintf("%d characters pasted", n)
 	}
 	return strings.Join(nonEmpty(m.input.View(), count, m.errView()), "\n\n")
 }
 
 func (m *setupModel) pageLink(label, target string) string {
 	if m.v.color {
-		return m.v.link(label+" ↗", target)
+		var lines []string
+		for _, line := range strings.Split(m.t.para(label+" ↗", m.inner()), "\n") {
+			lines = append(lines, m.v.link(line, target))
+		}
+		return strings.Join(lines, "\n")
 	}
 	return m.t.para(target, m.inner())
 }
@@ -144,54 +154,40 @@ func (m *setupModel) openedNote() string {
 
 func (m *setupModel) body() string {
 	if m.loading {
-		return m.spin.View() + " " + m.loadingText()
+		icon := m.spin.View() + " "
+		return lipgloss.JoinHorizontal(lipgloss.Top, icon, m.t.para(m.loadingText(), m.inner()-lipgloss.Width(icon)))
 	}
-	in := m.inner()
+	if m.retry != nil {
+		return m.screen("Try again", "", m.errView())
+	}
 	switch m.step {
 	case stepWelcome:
-		return m.screen("Welcome to workfile",
-			"Let's connect your tickets and pull requests, then check them against a written workflow. Workfile only reads. It never changes a ticket, a label or a pull request.",
-			m.t.dim("It takes about two minutes."))
+		return m.screen("Set up your workflow",
+			"Choose where you track work and review code. Then preview and apply a starter policy for this workspace.")
+	case stepTrackerKind:
+		return m.screen("Where does your team track work?",
+			"Choose the tracker Workfile reads for tickets and their statuses.", m.providerPick.list.View(), m.errView())
+	case stepCodeHostKind:
+		return m.screen("Where does your team review code?",
+			"Choose a code host to include pull requests, reviews and checks.", m.providerPick.list.View(), m.errView())
 	case stepFolder:
-		return m.screen("Where should your workfile live?",
-			"Workfile keeps its settings in a .workfile folder. Choose the folder that will hold it, usually your project root.",
-			m.inputView())
-	case stepSite:
-		return m.screen("Your Jira site",
-			"The address you use to open Jira, such as example-team.atlassian.net.",
-			m.inputView())
-	case stepEmail:
-		return m.screen("Your Jira email", "The email address of your Atlassian account.", m.inputView())
-	case stepJiraToken:
-		return m.screen("Create a Jira API token",
-			"",
-			m.steps("Open the page below and choose Create API token.", "Name it workfile, then copy the token.", "Paste it here."),
-			strings.Join(nonEmpty(m.pageLink("Open Atlassian API tokens", jiraTokenPage), m.openedNote()), "\n"),
-			m.t.dim(m.t.para("Workfile only reads. If Jira offers scopes, choose read:jira-work and read:jira-user.", in)),
-			m.tokenView())
-	case stepAskGitHub:
-		return m.screen("Connect GitHub too?",
-			"Workfile can also read pull requests, so each ticket shows its reviews and checks. It is optional, and you can add it later.",
-			m.choiceView())
-	case stepOrg:
-		return m.screen("Your GitHub organisation",
-			"The name in your GitHub address, like example-team in github.com/example-team.",
-			m.inputView())
-	case stepGitHubToken:
-		return m.screen("Create a GitHub token",
-			"",
-			m.steps("Open the page below. It selects the two permissions Workfile needs: repo and read:org.", "Choose Generate token, then copy it.", "Paste it here."),
-			strings.Join(nonEmpty(m.pageLink("Open GitHub token page", githubTokenPage), m.openedNote()), "\n"),
-			m.t.dim(m.t.para("Workfile only reads, but GitHub's classic tokens have no read-only choice for repositories, so repo is the smallest one. If your organisation uses SSO, choose Configure SSO next to the token and authorise it.", in)),
-			m.tokenView())
+		return m.screen("Where should .workfile/ go?",
+			"Use your project root to share the workflow with your team.", m.inputView())
+	case stepTrackerSettings, stepHostSettings:
+		return m.connectionView()
 	case stepProjects:
+		if m.singleProject() {
+			return m.screen("Choose a project", "Workfile reads work and statuses from this project.",
+				m.projectPick.list.View(), m.errView())
+		}
 		return m.pickView("Which projects does your team work in?",
-			"Workfile checks the tickets in the projects you tick. Space ticks a project, and / filters the list.",
-			&m.projectPick, "project", "projects")
+			"Workfile checks tickets in the projects you pick.", &m.projectPick, "project", "projects")
+	case stepTrackerRepos:
+		return m.pickView("Choose repositories for tickets",
+			"Select the repositories Workfile should read for the tracker.", &m.trackerRepoPick, "repository", "repositories")
 	case stepRepos:
-		return m.pickView("Which repositories does your team ship from?",
-			"Workfile reads pull requests in the repositories you tick. Pick the first row to read them all.",
-			&m.repoPick, "repository", "repositories")
+		return m.pickView("Choose repositories for pull requests",
+			"Select the repositories Workfile should read for the code host.", &m.repoPick, "repository", "repositories")
 	case stepStatuses:
 		return m.statusesView()
 	case stepReview:
@@ -202,123 +198,133 @@ func (m *setupModel) body() string {
 	return ""
 }
 
-// pickView is a title, a short explanation, the list and how many are ticked.
+func (m *setupModel) connectionView() string {
+	field := m.field()
+	if !m.isToken() {
+		return m.screen(field.Title, field.Hint, m.inputView())
+	}
+	form := m.connection().form
+	return m.screen(field.Title, form.TokenHint,
+		strings.Join(nonEmpty(m.pageLink(form.TokenLink, form.TokenPage), m.openedNote()), "\n"),
+		m.tokenView())
+}
+
 func (m *setupModel) pickView(title, text string, p *picker, one, many string) string {
 	count := m.t.dim("Nothing picked yet")
 	switch n := len(p.chosen()); {
 	case p.picked[pickAll]:
-		count = m.t.good("✓ ") + "All picked"
+		count = m.t.good(m.icon("✓", "\uf00c")+" ") + "All picked"
 	case n == 1:
-		count = m.t.good("✓ ") + "1 " + one + " picked"
+		count = m.t.good(m.icon("✓", "\uf00c")+" ") + "1 " + one + " picked"
 	case n > 1:
-		count = m.t.good("✓ ") + fmt.Sprintf("%d %s picked", n, many)
+		count = m.t.good(m.icon("✓", "\uf00c")+" ") + fmt.Sprintf("%d %s picked", n, many)
 	}
 	return m.screen(title, text, p.list.View(), count, m.errView())
 }
 
 func (m *setupModel) loadingText() string {
 	switch m.step {
-	case stepJiraTest:
-		return "Checking your Jira connection…"
-	case stepGitHubTest:
-		return "Checking your GitHub connection…"
-	case stepRepos:
-		return "Finding your repositories…"
+	case stepTrackerTest, stepHostTest:
+		return "Connecting to " + m.connection().label + "…"
+	case stepTrackerRepos, stepRepos:
+		return "Finding repositories…"
 	case stepProjects:
-		return "Finding your Jira projects…"
+		return "Finding projects…"
 	case stepStatuses:
-		return "Reading the statuses in " + m.projectNames() + "…"
+		return "Reading workflow statuses…"
 	case stepPeople:
-		return "Finding people in " + m.projectNames() + "…"
+		return "Finding people…"
 	case stepSaving:
-		return "Saving your workfile…"
+		return "Applying the policy…"
 	}
 	return "Working…"
 }
 
-func (m *setupModel) projectNames() string { return clean(strings.Join(m.projects, ", ")) }
-
-func (m *setupModel) choiceView() string {
-	yes, no := m.t.dim("○ Yes"), m.t.accent("● No")
-	if m.github {
-		yes, no = m.t.accent("● Yes"), m.t.dim("○ No")
-	}
-	return yes + "    " + no
-}
-
 func (m *setupModel) statusesView() string {
-	rows := make([]string, len(m.items))
-	names := []string{}
-	for i, it := range m.items {
-		name := runewidth.Truncate(clean(m.statuses[it.index]), max(8, m.inner()-6), "…")
-		cursor, box := "  ", m.t.dim("[ ]")
+	end := min(m.statusOffset+m.statusRows(), len(m.items))
+	rows := make([]string, 0, m.statusRows()+1)
+	for i := m.statusOffset; i < end; i++ {
+		it := m.items[i]
+		name := runewidth.Truncate(clean(m.statuses[it.index]), m.inner()-4, "…")
+		cursor, mark := "  ", m.t.dim(m.icon("○", "\uf10c"))
 		if it.on {
-			box = m.t.good("[✓]")
-			names = append(names, clean(m.statuses[it.index]))
+			mark = m.t.good(m.icon("✓", "\uf00c"))
 		} else {
 			name = m.t.dim(name)
 		}
 		if i == m.cursor {
-			cursor = m.t.accent("› ")
-			if it.on {
-				name = m.t.bold(name)
-			}
+			cursor = m.t.accent(m.icon("›", "\uf054") + " ")
+			name = m.t.accent(name)
 		}
-		rows[i] = cursor + box + " " + name
+		rows = append(rows, cursor+mark+" "+name)
 	}
-	pipeline := m.t.dim("Pipeline  ") + strings.Join(names, m.t.dim(" → "))
-	if len(names) == 0 {
-		pipeline = m.t.dim("Pipeline  none yet")
+	if end < len(m.items) || m.statusOffset > 0 {
+		rows = append(rows, m.t.dim(fmt.Sprintf("Showing %d–%d of %d", m.statusOffset+1, end, len(m.items))))
 	}
-	return m.screen("Which statuses should Workfile track?",
-		"These are the statuses your project uses. Keep the ones tickets move through. Untick any your team rarely uses, and those tickets are left out of checks.",
-		strings.Join(rows, "\n"),
-		m.t.para(pipeline, m.inner()),
-		m.errView())
+	var names []string
+	for _, i := range m.chosen() {
+		names = append(names, clean(m.statuses[i]))
+	}
+	pipeline := "None selected"
+	if len(names) > 0 {
+		pipeline = strings.Join(names, " → ")
+	}
+	return m.screen("Put the workflow stages in order",
+		"Keep the statuses tickets move through. The last stage marks completed work.",
+		strings.Join(rows, "\n"), m.t.para("Workflow  "+pipeline, m.inner()), m.errView())
 }
 
 func (m *setupModel) reviewView() string {
-	labelW := 9
+	if m.reviewPolicy {
+		return m.screen("policy.yml", "", m.preview.View(), m.errView())
+	}
 	row := func(label, value string) string {
-		return lipgloss.JoinHorizontal(lipgloss.Top, m.t.dim(runewidth.FillRight(label, labelW)), m.t.para(value, m.inner()-labelW))
-	}
-	github := "Not connected"
-	if m.github {
-		github = clean(m.org) + " · all repositories"
-		if len(m.repos) > 0 {
-			github = clean(m.org) + " · " + clean(strings.Join(m.repos, ", "))
+		const labelWidth = 11
+		if m.inner()-labelWidth < 10 {
+			return m.t.dim(label) + "\n" + m.t.para(value, m.inner())
 		}
+		return lipgloss.JoinHorizontal(lipgloss.Top, m.t.dim(runewidth.FillRight(label, labelWidth)),
+			m.t.para(value, m.inner()-labelWidth))
 	}
-	stages := make([]string, 0, len(m.items))
+	repos := func(names []string) string {
+		if len(names) == 0 {
+			return "all repositories"
+		}
+		return clean(strings.Join(names, ", "))
+	}
+	tracker := clean(strings.Join(m.projects, ", "))
+	if m.singleProject() {
+		tracker = "Project #" + tracker + " · " + repos(m.trackerRepos)
+	}
+	host := "Skipped"
+	if m.host.kind != "" {
+		host = m.host.label + " · " + repos(m.repos)
+	}
+	var stages []string
 	for _, i := range m.chosen() {
 		stages = append(stages, clean(m.statuses[i]))
 	}
-	people := fmt.Sprintf("%d imported", len(m.people))
-	if m.peopleErr {
-		people = "None imported"
-	}
+	folder := m.t.para("Write to "+clean(m.dir)+"/.workfile/", m.inner())
 	rows := strings.Join([]string{
-		row("Folder", clean(m.dir)+"/.workfile"),
-		row("Jira", clean(m.site)),
-		row("GitHub", github),
-		row("Projects", m.projectNames()),
-		row("Stages", strings.Join(stages, " → ")),
-		row("People", people),
+		row("Tracker", m.tracker.label+" · "+tracker),
+		row("Code host", host),
+		row("Workflow", strings.Join(stages, " → ")),
 	}, "\n")
-	parts := []string{rows}
+	note := ""
 	if m.peopleErr {
-		parts = append(parts, m.t.para("! Could not import people. Add them later in people.yml.", m.inner()))
+		note = m.t.warn(m.t.para("! Could not import people. You can add them in people.yml.", m.inner()))
+	} else if len(m.people) > 0 {
+		note = m.t.dim(fmt.Sprintf("%d people imported", len(m.people)))
 	}
-	parts = append(parts,
-		m.t.dim(m.t.para("Each stage links to the next, and no checks are added yet. Add your team's rules in .workfile/policy.yml. Tokens are saved privately in "+clean(m.deps.credentials)+".", m.inner())),
+	return m.screen("Review and apply policy", folder, rows, note,
+		m.t.dim(m.t.para("Your starter policy links each stage to the next. Add checks in policy.yml. Tokens go in your private credentials file.", m.inner())),
 		m.errView())
-	return m.screen("Ready to save", "", parts...)
 }
 
 func (m *setupModel) doneView() string {
-	return m.screen(m.t.good("✓")+" Your workfile is ready", "Next, open your project folder and run:",
+	return m.screen(m.t.good(m.icon("✓", "\uf00c"))+" Policy applied", "See the tickets in your new workflow.",
 		m.t.bold(m.t.para("cd "+strconv.Quote(m.dir), m.inner()))+"\n"+m.t.bold("wf status"),
-		m.t.dim(m.t.para("This starter has no checks yet, so everything reads as ready. Add your team's rules in .workfile/policy.yml. Guide: docs/getting-started.md", m.inner())))
+		m.t.dim(m.t.para("Add your team’s checks in .workfile/policy.yml before using the policy to decide what is ready.", m.inner())))
 }
 
 func (m *setupModel) footer() string {
@@ -329,6 +335,8 @@ func (m *setupModel) footer() string {
 		b = []key.Binding{hint("enter", "close")}
 	case m.step == stepSaving:
 		return ""
+	case m.retry != nil:
+		b = []key.Binding{hint("enter", "retry"), hint("esc", "back")}
 	case m.loading:
 		b = []key.Binding{hint("esc", "back"), hint("ctrl+c", "quit")}
 	case m.step == stepWelcome && m.frame < animLast:
@@ -336,19 +344,32 @@ func (m *setupModel) footer() string {
 	case m.step == stepWelcome:
 		b = []key.Binding{hint("enter", "begin"), hint("ctrl+c", "quit")}
 	case m.isToken():
-		b = []key.Binding{hint("enter", "continue"), hint("ctrl+o", "open page"), hint("esc", "back")}
+		b = []key.Binding{hint("enter", "test"), hint("ctrl+o", "open page"), hint("esc", "back")}
 	case m.isInput():
 		b = []key.Binding{hint("enter", "continue"), hint("esc", "back"), hint("ctrl+c", "quit")}
-	case m.step == stepAskGitHub:
-		b = []key.Binding{hint("←/→", "choose"), hint("enter", "confirm"), hint("esc", "back")}
-	case (m.step == stepProjects && m.projectPick.filtering()) || (m.step == stepRepos && m.repoPick.filtering()):
-		b = []key.Binding{hint("enter", "apply filter"), hint("esc", "clear")}
-	case m.step == stepProjects || m.step == stepRepos:
-		b = []key.Binding{hint("↑/↓", "move"), hint("space", "tick"), hint("/", "filter"), hint("enter", "continue"), hint("esc", "back")}
+	case m.step == stepTrackerKind || m.step == stepCodeHostKind:
+		b = []key.Binding{hint("↑/↓", "choose"), hint("enter", "confirm"), hint("esc", "back")}
+	case m.currentPicker() != nil:
+		p := m.currentPicker()
+		switch {
+		case p.filtering():
+			b = []key.Binding{hint("enter", "apply filter"), hint("esc", "clear")}
+		case p.single:
+			return m.help.ShortHelpView([]key.Binding{hint("↑/↓", "choose"), hint("/", "filter")}) +
+				"\n " + m.help.ShortHelpView([]key.Binding{hint("enter", "select"), hint("esc", "back")})
+		default:
+			return m.help.ShortHelpView([]key.Binding{hint("↑/↓", "move"), hint("space", "tick"), hint("/", "filter")}) +
+				"\n " + m.help.ShortHelpView([]key.Binding{hint("enter", "continue"), hint("esc", "back")})
+		}
 	case m.step == stepStatuses:
-		b = []key.Binding{hint("space", "tick"), hint("shift+↑/↓", "reorder"), hint("enter", "continue"), hint("esc", "back")}
+		return m.help.ShortHelpView([]key.Binding{hint("space", "tick"), hint("shift+↑/↓", "reorder")}) +
+			"\n " + m.help.ShortHelpView([]key.Binding{hint("enter", "continue"), hint("esc", "back")})
 	case m.step == stepReview:
-		b = []key.Binding{hint("enter", "save"), hint("esc", "back")}
+		if m.reviewPolicy {
+			b = []key.Binding{hint("↑/↓", "scroll"), hint("p", "summary"), hint("enter", "apply")}
+		} else {
+			b = []key.Binding{hint("enter", "apply"), hint("p", "policy.yml"), hint("esc", "back")}
+		}
 	}
 	return m.help.ShortHelpView(b)
 }

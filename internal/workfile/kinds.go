@@ -32,6 +32,7 @@ type Role struct {
 	Check    func(name string, p Provider, add func(string, ...any))
 	Facts    []string // TrackerFacts or CodeHostFacts, plus any of its own
 	ByFacts  []string // facts that say who supplied them, for `by` rules
+	Activity []string // the ActivityKinds it supplies to the inbox
 }
 
 // TrackerFacts are the facts every tracker supplies.
@@ -52,6 +53,7 @@ var Kinds = map[string]Kind{
 			Scope:    func(p Provider) string { return strings.Join(p.Projects, ", ") },
 			Facts:    slices.Clone(TrackerFacts),
 			ByFacts:  []string{"labels"},
+			Activity: []string{"comment"},
 		},
 	},
 	"github": {
@@ -70,8 +72,9 @@ var Kinds = map[string]Kind{
 		CodeHost: &Role{
 			Settings: []string{"org", "lookback", "repos"},
 			Check:    checkGitHub,
-			Facts:    append(slices.Clone(CodeHostFacts), "fresh_approvals", "merge_queue"),
+			Facts:    append(slices.Clone(CodeHostFacts), "fresh_approvals", "merge_queue", "mergeable", "changes_requested"),
 			ByFacts:  []string{"approvals", "fresh_approvals"},
+			Activity: []string{"comment", "review", "approved", "changes_requested", "review_requested", "pushed"},
 		},
 	},
 }

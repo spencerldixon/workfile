@@ -84,7 +84,7 @@ func TestSetupTestAllPassIsExitZero(t *testing.T) {
 	}
 }
 
-func TestHelpEndsWithTheNextStepAndNamesFiveCommands(t *testing.T) {
+func TestHelpEndsWithTheNextStepAndNamesSixCommands(t *testing.T) {
 	run := func(dir string) string {
 		var out bytes.Buffer
 		if code := run(context.Background(), []string{"--dir", dir}, &out, &bytes.Buffer{}, "t", nil); code != 0 {
@@ -105,7 +105,7 @@ func TestHelpEndsWithTheNextStepAndNamesFiveCommands(t *testing.T) {
 			commands++
 		}
 	}
-	if commands != 5 {
+	if commands != 6 {
 		t.Fatalf("help names %d commands", commands)
 	}
 	if strings.Contains(text, "—") {

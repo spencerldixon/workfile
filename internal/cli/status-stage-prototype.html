@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workfile | Stage-scoped status</title>
+<!-- Three throwaway stage-scoped wf status layouts. Select with ?variant=A, B, or C. -->
+<style>
+:root {
+  color-scheme: dark;
+  --page: #101310; --term: #1b201c; --panel: #262d27; --active: #303a31;
+  --ink: #ebf0e9; --quiet: #aab8ab; --rule: #3b473d;
+  --red: #ffaaa0; --green: #bde39b; --amber: #f0cd8a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+main { width: min(1060px, 100% - 28px); margin: 42px auto 108px; }
+h1 { margin: 0; font-size: 30px; letter-spacing: -.04em; }
+p { margin: 0; }
+button { color: inherit; cursor: pointer; font: inherit; }
+button:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.intro { display: flex; align-items: end; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 17px; }
+.widths { display: flex; gap: 5px; }
+.widths button, .switcher button { padding: 3px 8px; background: var(--term); border: 1px solid var(--rule); border-radius: 5px; }
+.widths [aria-pressed="true"] { color: var(--page); background: var(--ink); }
+.terminal { container-type: inline-size; overflow: hidden; margin: auto; border: 1px solid var(--rule);
+  border-radius: 10px; background: var(--term); font: 13px/1.5 Menlo, Consolas, monospace; }
+.terminal[data-width="60"] { max-width: calc(60ch + 26px); }
+.terminal[data-width="40"] { max-width: calc(40ch + 26px); }
+.bar { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1ch; background: var(--panel); padding: 9px 15px; }
+.screen { display: grid; gap: 14px; align-content: start; min-height: 360px; padding: 15px; }
+.muted { color: var(--quiet); }
+.red { color: var(--red); }
+.amber { color: var(--amber); }
+.green { color: var(--green); }
+h2 { margin: 0; font: inherit; font-weight: bold; }
+.stage-bar { display: flex; gap: 4px; flex-wrap: wrap; }
+.stage-chip, .rail-row, .back, .overview-open { border: 0; text-align: left; background: var(--panel); }
+.stage-chip { flex: 1 1 auto; padding: 7px 9px; border-bottom: 2px solid transparent; }
+.stage-chip[aria-pressed="true"] { border-bottom-color: var(--green); background: var(--active); }
+.stage-chip:hover, .rail-row:hover, .back:hover, .overview-open:hover { background: var(--active); }
+.stage-chip .counts { display: block; }
+.scope { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
+.register { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
+.register th, .register td { padding: .6em .75em; overflow-wrap: anywhere; vertical-align: top; }
+.register th { background: var(--panel); }
+.register tbody tr + tr { border-top: 1px solid var(--rule); }
+.ticket-col { width: 40%; }
+.standing-col { width: 19%; }
+.ticket strong { display: inline-block; min-width: 7ch; }
+.split { display: grid; grid-template-columns: minmax(18ch, 25%) minmax(0, 1fr); gap: 12px; align-items: start; }
+.rail { display: grid; gap: 3px; }
+.rail h2 { padding: 3px 0 7px; }
+.rail-row { display: grid; grid-template-columns: 1fr auto; border-left: 2px solid transparent; gap: 0 8px; padding: 7px 9px; }
+.rail-row[aria-pressed="true"] { background: var(--active); border-left-color: var(--green); }
+.rail-row .attention { grid-column: 1 / -1; }
+.queue { min-width: 0; }
+.queue h2 { padding: 3px 0 7px; }
+.queue ul { margin: 0; padding: 0; list-style: none; }
+.queue li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 1ch; align-items: baseline; padding: 6px 9px; }
+.queue li:nth-child(odd) { background: var(--panel); }
+.queue li .next-step { grid-column: 1 / -1; padding-left: 8ch; }
+.overview .stage-col { width: 29%; }
+.overview td, .overview th { text-align: right; }
+.overview td:first-child, .overview th:first-child { text-align: left; }
+.overview td:first-child { padding: 0; }
+.overview-open { width: 100%; padding: .6em .75em; background: transparent; font-weight: bold; }
+.back { padding: 5px 8px; }
+.switcher { position: fixed; inset: auto 0 20px; width: max-content; max-width: calc(100% - 24px); margin: auto;
+  display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: #121713; border: 1px solid var(--rule); border-radius: 8px; box-shadow: 0 4px 24px #0008; }
+.switcher output { min-width: 125px; text-align: center; }
+@container (max-width: 650px) {
+  .screen { padding: 10px; }
+  .tickets, .tickets tbody { display: block; }
+  .tickets colgroup { display: none; }
+  .tickets thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .tickets tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 8px; padding: 6px 8px; }
+  .tickets tr:nth-child(odd) { background: var(--panel); }
+  .tickets td { padding: 0; }
+  .tickets .next-step { grid-column: 1 / -1; }
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .rail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rail h2 { grid-column: 1 / -1; }
+  .overview th, .overview td, .overview-open { padding-inline: 4px; font-size: 11px; }
+}
+@container (max-width: 360px) {
+  .tickets tr, .queue li { display: block; }
+  .queue li .next-step { padding-left: 0; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header class="intro">
+    <div><h1><code>wf status</code></h1><p id="description" class="muted"></p></div>
+    <div class="widths" aria-label="Terminal width">
+      <button data-width="wide" aria-pressed="true">Wide</button>
+      <button data-width="60" aria-pressed="false">60 cols</button>
+      <button data-width="40" aria-pressed="false">40 cols</button>
+    </div>
+  </header>
+  <section class="terminal" aria-label="Terminal mockup" data-width="wide">
+    <div class="bar"><b>workfile status</b><span class="muted">Jira · APP · 12 tickets · Sample data</span></div>
+    <div class="screen" id="screen"></div>
+  </section>
+</main>
+<nav class="switcher" aria-label="Prototype layouts">
+  <button id="prev" aria-label="Previous layout">←</button>
+  <output id="layout-name" aria-live="polite"></output>
+  <button id="next" aria-label="Next layout">→</button>
+</nav>
+<script>
+const groups = [
+  { stage: 'Doing', state: 'blocked', text: 'Link a PR to move to Review', tickets: [[41, 'Add CSV export'], [42, 'Fix invoice totals'], [43, 'Improve search filters']] },
+  { stage: 'Doing', state: 'ready', text: 'Ready to move to Review', action: 'Move to Review', tickets: [[44, 'Update empty states'], [45, 'Add keyboard shortcuts']] },
+  { stage: 'Review', state: 'blocked', text: 'Get CI passing to move to Release', tickets: [[46, 'Retry failed imports']] },
+  { stage: 'Review', state: 'unknown', text: 'CI evidence unavailable', action: 'Check the CI status', tickets: [[47, 'Show last sync time']] },
+  { stage: 'Review', state: 'ready', text: 'Ready to move to Release', action: 'Move to Release', tickets: [[48, 'Simplify invite flow']] },
+  { stage: 'Release', state: 'violation', text: 'Get the missing approval', action: 'Resolve the missing release approval', tickets: [[49, 'Add saved views']] },
+  { stage: 'Done', state: 'done', text: 'Done', action: '', tickets: [[50, 'Clarify password reset'], [51, 'Fix export filenames'], [52, 'Improve audit log filters']] },
+];
+const stages = ['Doing', 'Review', 'Release', 'Done'];
+const standing = {
+  blocked: ['✗', 'Blocked', 'red'],
+  violation: ['‼', 'Out of policy', 'red'],
+  unknown: ['!', 'Cannot check', 'amber'],
+  ready: ['✓', 'Ready', 'green'],
+  done: ['·', 'Done', 'muted'],
+};
+const layouts = [
+  ['A', 'Stage bar', 'Keep the stages above the ticket table and switch in place.'],
+  ['B', 'Stage sidebar', 'Keep stage counts on the left and read tickets on the right.'],
+  ['C', 'Board overview', 'See what needs attention across the board, then open one stage.'],
+];
+const screen = document.querySelector('#screen');
+const query = new URLSearchParams(location.search);
+let variant = Math.max(0, layouts.findIndex(([key]) => key === query.get('variant')));
+let stage = stages.includes(query.get('stage')) ? query.get('stage') : stages[0];
+let overview = !query.has('stage');
+
+function stats(name) {
+  const result = {total: 0, blocked: 0, other: 0, ready: 0, done: 0};
+  for (const group of groups.filter(g => g.stage === name)) {
+    const bucket = ['violation', 'unknown'].includes(group.state) ? 'other' : group.state;
+    result[bucket] += group.tickets.length;
+    result.total += group.tickets.length;
+  }
+  return result;
+}
+
+function tickets(name) {
+  return groups.filter(g => g.stage === name).flatMap(g => g.tickets.map(([key, title]) => {
+    const [icon, label, tone] = standing[g.state];
+    return {
+      key, title, status: icon + ' ' + label, tone,
+      next: g.action ?? g.text,
+    };
+  }));
+}
+
+function ticketCount(n) {
+  return n + (n === 1 ? ' ticket' : ' tickets');
+}
+function attentionCount(n) {
+  return n + (n === 1 ? ' needs attention' : ' need attention');
+}
+function heading() {
+  const {total, blocked, other, ready, done} = stats(stage);
+  const counts = [[blocked, 'blocked'], [other, 'other attention'], [ready, 'ready'], [done, 'done']];
+  return `<div class="scope"><h2>${stage}</h2><span class="muted">${ticketCount(total)}${counts
+    .filter(([n]) => n).map(([n, label]) => ` · ${n} ${label}`).join('')}</span></div>`;
+}
+
+function table() {
+  return `<table class="register tickets" aria-label="Tickets in ${stage}">
+    <colgroup><col class="ticket-col"><col class="standing-col"><col></colgroup>
+    <thead><tr><th scope="col">Ticket</th><th scope="col">Standing</th><th scope="col">Next step</th></tr></thead>
+    <tbody>${tickets(stage).map(t => `<tr>
+      <td class="ticket"><strong>APP-${t.key}</strong> ${t.title}</td>
+      <td class="${t.tone}">${t.status}</td>
+      <td class="next-step muted">${t.next}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+function variantA() {
+  return `<div class="stage-bar" role="group" aria-label="Policy stages">${stages.map(name => {
+    const {total, blocked, other} = stats(name);
+    return `<button class="stage-chip" aria-pressed="${stage === name}" data-stage="${name}">
+      <b>${name}</b><span class="counts muted">${ticketCount(total)}${blocked + other
+        ? ` · <span class="red">${attentionCount(blocked + other)}</span>` : ''}</span>
+    </button>`;
+  }).join('')}</div>${heading()}${table()}`;
+}
+
+function variantB() {
+  return `<div class="split"><div class="rail" role="group" aria-label="Policy stages"><h2>Policy stages</h2>${stages.map(name => {
+    const {total, blocked, other} = stats(name);
+    return `<button class="rail-row" data-stage="${name}" aria-pressed="${stage === name}">
+      <b>${name}</b><span class="muted">${total}</span>
+      ${blocked + other ? `<span class="attention red">${attentionCount(blocked + other)}</span>` : ''}
+    </button>`;
+  }).join('')}</div>
+  <section class="queue" aria-label="Tickets in ${stage}"><h2>${stage}</h2><ul>${tickets(stage).map(t => `<li>
+    <span class="ticket"><strong>APP-${t.key}</strong> ${t.title}</span>
+    <span class="${t.tone}">${t.status}</span>
+    ${t.next ? `<span class="next-step muted">${t.next}</span>` : ''}
+  </li>`).join('')}</ul></section></div>`;
+}
+
+function variantC() {
+  if (!overview) {
+    return `<div><button class="back" data-back>← All stages</button></div>${heading()}${table()}`;
+  }
+  return `<table class="register overview" aria-label="Policy stage overview">
+    <colgroup><col class="stage-col"><col><col><col><col></colgroup>
+    <thead><tr><th scope="col">Stage</th><th scope="col">Tickets</th><th scope="col">Blocked</th><th scope="col">Other attention</th><th scope="col">Ready</th></tr></thead>
+    <tbody>${stages.map(name => {
+      const {total, blocked, other, ready} = stats(name);
+      return `<tr><td><button class="overview-open" data-stage="${name}">${name} ›</button></td>
+        <td>${total}</td><td class="${blocked ? 'red' : 'muted'}">${blocked}</td>
+        <td class="${other ? 'amber' : 'muted'}">${other}</td><td class="${ready ? 'green' : 'muted'}">${ready}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+function render(focus) {
+  const [key, name, description] = layouts[variant];
+  document.querySelector('#layout-name').textContent = key + ' · ' + name;
+  document.querySelector('#description').textContent = description;
+  screen.innerHTML = [variantA, variantB, variantC][variant]();
+  if (focus) screen.querySelector(focus)?.focus();
+}
+
+function updateURL() {
+  const url = new URL(location.href);
+  url.searchParams.set('variant', layouts[variant][0]);
+  if (variant === 2 && overview) url.searchParams.delete('stage');
+  else url.searchParams.set('stage', stage);
+  history.replaceState(null, '', url);
+}
+function cycle(delta) {
+  variant = (variant + delta + layouts.length) % layouts.length;
+  overview = true;
+  updateURL();
+  render();
+}
+function backToOverview() {
+  overview = true;
+  updateURL();
+  render(`[data-stage="${stage}"]`);
+}
+document.querySelector('#prev').onclick = () => cycle(-1);
+document.querySelector('#next').onclick = () => cycle(1);
+document.querySelectorAll('.widths button').forEach(button => button.onclick = () => {
+  document.querySelector('.terminal').dataset.width = button.dataset.width;
+  document.querySelectorAll('.widths button').forEach(b => b.setAttribute('aria-pressed', b === button));
+});
+screen.addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  if (button.hasAttribute('data-back')) {
+    backToOverview();
+  } else if (button.dataset.stage) {
+    stage = button.dataset.stage;
+    overview = false;
+    updateURL();
+    render(variant === 2 ? '[data-back]' : `[data-stage="${stage}"]`);
+  }
+});
+document.addEventListener('keydown', event => {
+  if (event.altKey || event.metaKey || event.ctrlKey) return;
+  if (event.key === 'Escape' && variant === 2 && !overview) {
+    backToOverview();
+  } else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    event.preventDefault();
+    cycle(event.key === 'ArrowLeft' ? -1 : 1);
+  }
+});
+render();
+</script>
+</body>
+</html>

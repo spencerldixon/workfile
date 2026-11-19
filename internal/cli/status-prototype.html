@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workfile | Status prototypes</title>
+<!-- Throwaway layouts for wf status. ?variant=A, B, C, D, or E selects a layout. -->
+<style>
+:root {
+  color-scheme: dark;
+  --page: #101310; --term: #1b201c; --panel: #262d27; --active: #303a31;
+  --ink: #ebf0e9; --quiet: #aab8ab; --rule: #3b473d;
+  --red: #ffaaa0; --green: #bde39b; --amber: #f0cd8a;
+}
+* { box-sizing: border-box; }
+body { background: var(--page); color: var(--ink); margin: 0; font: 15px/1.5 system-ui, sans-serif; }
+main { width: min(1120px, 100% - 32px); margin: 44px auto 112px; }
+h1 { font-size: 32px; letter-spacing: -.04em; margin: 2px 0 6px; }
+p { margin: 0; }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--green); outline-offset: -2px; }
+.intro { display: flex; justify-content: space-between; align-items: end; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+.muted { color: var(--quiet); }
+.widths { display: flex; gap: 4px; }
+.widths button, .switcher button { background: var(--term); border: 1px solid var(--rule); border-radius: 5px; padding: 4px 9px; }
+.widths [aria-pressed="true"] { background: var(--ink); color: var(--page); }
+.terminal { container-type: inline-size; border: 1px solid var(--rule); border-radius: 10px; margin: auto; background: var(--term); overflow: hidden; font: 13px/1.55 Menlo, Consolas, monospace; }
+.terminal[data-width="60"] { max-width: calc(60ch + 26px); }
+.terminal[data-width="40"] { max-width: calc(40ch + 26px); }
+.bar { display: flex; justify-content: space-between; gap: 1ch; flex-wrap: wrap; background: var(--panel); padding: .6rem 1rem; }
+.screen { padding: 16px; display: grid; gap: 16px; min-height: 480px; align-content: start; }
+.summary { display: flex; flex-wrap: wrap; column-gap: 2ch; row-gap: .2ch; }
+.summary .muted { flex-basis: 100%; }
+h2 { font: inherit; font-weight: bold; margin: 0; }
+.panel { background: var(--panel); padding: 9px 11px; min-width: 0; }
+.panel + .panel { margin-top: 7px; }
+.red { color: var(--red); }
+.green { color: var(--green); }
+.amber { color: var(--amber); }
+.row { width: 100%; display: grid; grid-template-columns: 1ch minmax(0, 1fr) 2ch; align-items: baseline; gap: 1ch; text-align: left; background: none; border: 0; border-left: 2px solid transparent; padding: 5px 7px; }
+.row:hover, .stage:hover { background: var(--term); }
+.row[aria-expanded="true"], .stage[aria-pressed="true"] { border-left-color: var(--green); background: var(--active); }
+.row strong { color: var(--ink); font-weight: 600; }
+.count { text-align: right; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .9fr); gap: 10px; align-items: start; }
+.details { background: var(--term); padding: .7em .9em; margin-top: .45em; }
+.split > .detail { background: var(--panel); min-height: 170px; }
+.tickets { list-style: none; padding: 0; margin: .55em 0 0; }
+.tickets li { display: grid; grid-template-columns: 7ch minmax(0, 1fr); gap: 1ch; padding: 4px 0; }
+.flow { display: flex; align-items: stretch; gap: 1ch; flex-wrap: wrap; }
+.stage { flex: 1 1 9ch; text-align: left; border: 0; border-left: 2px solid transparent; padding: 7px 8px; background: var(--panel); }
+.stage span { display: block; }
+.connector { align-self: center; }
+.brief ul { display: grid; gap: 5px; list-style: none; padding: 0; margin: .6em 0 0; }
+.brief li { display: grid; grid-template-columns: 7ch minmax(0, 1fr); gap: 1ch; }
+.brief li p { overflow-wrap: anywhere; }
+.brief li + li { margin-top: 4px; }
+.brief footer { margin-top: 12px; }
+.stage-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16ch), 1fr)); gap: 1ch; }
+.stage-picker button { overflow-wrap: anywhere; }
+.stage-picker .stage { padding: 7px 8px; }
+.register { width: 100%; border-collapse: collapse; table-layout: fixed; text-align: left; }
+.register th, .register td { padding: .55em .8em; overflow-wrap: anywhere; vertical-align: top; }
+.register th { background: var(--panel); }
+.register .ticket-col { width: 40%; }
+.register .standing-col { width: 18%; }
+.register .ticket strong { display: inline-block; min-width: 7ch; }
+.register .ready-route { color: var(--green); }
+footer { border-top: 1px solid var(--rule); padding-top: 9px; }
+.switcher { position: fixed; inset: auto 0 20px; margin: auto; display: flex; gap: 11px; align-items: center; width: max-content; max-width: calc(100% - 20px); padding: 7px 9px; border: 1px solid var(--rule); background: #121713; border-radius: 9px; box-shadow: 0 4px 22px #0008; }
+.switcher output { min-width: 15ch; text-align: center; }
+@container (max-width: 475px) {
+  .screen { padding: 10px; }
+  .split { grid-template-columns: 1fr; }
+  .flow { flex-wrap: nowrap; gap: 4px; }
+  .stage { min-width: 0; flex-basis: 0; padding: 4px 3px; }
+  .stage span { font-size: 11px; }
+  .connector { display: none; }
+}
+@container (max-width: 670px) {
+  .register, .register tbody { display: block; }
+  .register colgroup { display: none; }
+  .register thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .register tr { display: grid; padding: .5em .65em; }
+  .register tr:nth-child(odd) { background: var(--panel); }
+  .register td { padding: 0; }
+  .register .ticket { font-weight: bold; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header class="intro">
+    <div>
+      <h1><code>wf status</code></h1>
+      <p class="muted" id="description"></p>
+    </div>
+    <div class="widths" aria-label="Terminal width">
+      <button data-width="wide" aria-pressed="true">Wide</button>
+      <button data-width="60" aria-pressed="false">60 cols</button>
+      <button data-width="40" aria-pressed="false">40 cols</button>
+    </div>
+  </header>
+  <section class="terminal" aria-label="Terminal mockup" data-width="wide">
+    <div class="bar"><strong>workfile status</strong><span class="muted">Jira · APP · Sample data</span></div>
+    <div id="screen" class="screen"></div>
+  </section>
+</main>
+<nav class="switcher" aria-label="Prototype layouts">
+  <button id="prev" aria-label="Previous layout">←</button>
+  <output id="layout-name" aria-live="polite"></output>
+  <button id="next" aria-label="Next layout">→</button>
+</nav>
+<script>
+const groups = [
+  { stage: 'Doing', state: 'blocked', text: 'Link a PR to move to Review', tickets: [[41, 'Add CSV export'], [42, 'Fix invoice totals'], [43, 'Improve search filters']] },
+  { stage: 'Doing', state: 'ready', text: 'Ready to move to Review', action: 'Move to Review', tickets: [[44, 'Update empty states'], [45, 'Add keyboard shortcuts']] },
+  { stage: 'Review', state: 'blocked', text: 'Get CI passing to move to Release', tickets: [[46, 'Retry failed imports']] },
+  { stage: 'Review', state: 'unknown', text: 'CI evidence unavailable', action: 'Check the CI status', tickets: [[47, 'Show last sync time']] },
+  { stage: 'Review', state: 'ready', text: 'Ready to move to Release', action: 'Move to Release', tickets: [[48, 'Simplify invite flow']] },
+  { stage: 'Release', state: 'violation', text: 'Get the missing approval', action: 'Resolve the missing release approval', tickets: [[49, 'Add saved views']] },
+  { stage: 'Done', state: 'done', text: 'Done', action: '', tickets: [[50, 'Clarify password reset'], [51, 'Fix export filenames'], [52, 'Improve audit log filters']] },
+];
+const stages = ['Doing', 'Review', 'Release', 'Done'];
+const standing = {
+  blocked: ['✗', 'Blocked', 'red'],
+  violation: ['‼', 'Out of policy', 'red'],
+  unknown: ['!', 'Cannot check', 'amber'],
+  ready: ['✓', 'Ready', 'green'],
+  done: ['·', 'Done', 'muted'],
+};
+const layouts = [
+  ['A', 'By stage', 'Read the workflow in order and open a blocker or ready move in place.'],
+  ['B', 'Triage queue', 'Scan the work that needs attention and inspect its tickets beside the queue.'],
+  ['C', 'Flow explorer', 'Pick a stage in the workflow to see what’s holding work there.'],
+  ['D', 'Board update', 'See which tickets need a conversation and which can move.'],
+  ['E', 'One stage at a time', 'Pick a policy stage to see its tickets, standing, and next steps.'],
+];
+const total = groups.reduce((sum, g) => sum + g.tickets.length, 0);
+const screen = document.querySelector('#screen');
+const requestedLayout = new URLSearchParams(location.search).get('variant') ?? 'E';
+let variant = Math.max(0, layouts.findIndex(([key]) => key === requestedLayout));
+let selected = variant === 1 ? 0 : null;
+let stage = 'Doing';
+const count = state => groups.filter(g => g.state === state).reduce((sum, g) => sum + g.tickets.length, 0);
+const groupID = g => groups.indexOf(g);
+const ticketCount = n => n + (n === 1 ? ' ticket' : ' tickets');
+const stageGroups = name => groups.filter(g => g.stage === name);
+function summary() {
+  return `<div class="summary"><p class="muted">Of ${total} tickets in scope</p>${Object.entries(standing).map(([state, [icon, label, tone]]) =>
+    `<span><b class="${tone}">${icon} ${count(state)}</b> ${label.toLowerCase()} <small class="muted">${Math.round(count(state) * 100 / total)}%</small></span>`).join('')}</div>`;
+}
+function row(g, text = g.text) {
+  const id = groupID(g);
+  const [icon, label, tone] = standing[g.state];
+  return `<button class="row" data-group="${id}" aria-expanded="${selected === id}">
+    <span class="${tone}" title="${label}" aria-label="${label}">${icon}</span><strong>${text}</strong><span class="count">${g.tickets.length}</span>
+  </button>`;
+}
+function details(g) {
+  if (!g) return '<p class="panel muted detail">Select a row to see the tickets.</p>';
+  return `<section class="details detail">
+    <h2>${g.stage} · ${standing[g.state][1]}</h2>
+    <p class="muted">${g.text}</p>
+    <ul class="tickets">${g.tickets.map(([key, title]) => `<li><b>APP-${key}</b><span>${title}</span></li>`).join('')}</ul>
+  </section>`;
+}
+function expandable(g) {
+  return row(g) + (groupID(g) === selected ? details(g) : '');
+}
+function variantA() {
+  return '<div>' + stages.map(name => {
+    const items = stageGroups(name);
+    return `<section class="panel"><h2>${name} <span class="muted">· ${ticketCount(items.reduce((sum, g) => sum + g.tickets.length, 0))}</span></h2>
+    ${name === 'Done' ? '' : items.map(expandable).join('')}</section>`;
+  }).join('') + '</div>';
+}
+function variantB() {
+  const sections = [
+    ['Needs attention', ['blocked', 'violation', 'unknown']],
+    ['Ready to move', ['ready']],
+  ];
+  return `<div class="split"><div>${sections.map(([name, states]) => {
+    const rows = groups.filter(g => states.includes(g.state));
+    return `<section class="panel"><h2>${name}</h2>${rows.map(g => row(g, g.stage + ' · ' + g.text)).join('')}</section>`;
+  }).join('')}</div>${details(groups[selected])}</div>`;
+}
+function variantC() {
+  return `<div class="flow" aria-label="Workflow stages">${stages.map((name, i) => {
+    const items = stageGroups(name), n = items.reduce((sum, g) => sum + g.tickets.length, 0);
+    const stalled = items.filter(g => g.state === 'blocked').reduce((sum, g) => sum + g.tickets.length, 0);
+    const signal = stalled ? `<span class="red">✗ ${stalled} blocked</span>` :
+      items.some(g => g.state === 'violation') ? '<span class="red">‼ Out of policy</span>' : '';
+    return `${i === 0 ? '' : '<span class="connector muted">-&gt;</span>'}<button class="stage" data-stage="${name}" aria-pressed="${stage === name}">
+      <b>${name}</b><span class="muted">${ticketCount(n)}</span>${signal}</button>`;
+  }).join('')}</div><section class="panel"><h2>${stage}</h2>${stageGroups(stage).map(expandable).join('')}</section>`;
+}
+function variantD() {
+  const notes = [
+    ['Fix or follow up', [
+      [0, 'In Doing without a linked PR'],
+      [2, 'In Review with failing CI'],
+      [5, 'In Release and missing the required approval'],
+    ]],
+    ['Can move today', [
+      [1, 'Doing → Review'],
+      [4, 'Review → Release'],
+    ]],
+    ['Couldn’t check', [
+      [3, 'CI status unavailable'],
+    ]],
+  ];
+  return '<div class="brief">' + notes.map(([title, items]) =>
+    `<section class="panel"><h2>${title}</h2><ul>${items.flatMap(([index, note]) =>
+      groups[index].tickets.map(([key, title]) => `<li><b>APP-${key}</b><div><p>${title}</p><p class="muted">${note}</p></div></li>`)
+    ).join('')}</ul></section>`
+  ).join('') + `<footer class="muted">${total} tickets in scope · ${count('done')} done</footer></div>`;
+}
+function variantE() {
+  const stagePicker = stages.map(name => {
+    const items = stageGroups(name);
+    const tickets = items.reduce((sum, g) => sum + g.tickets.length, 0);
+    const attention = items.filter(g => ['blocked', 'violation', 'unknown'].includes(g.state))
+      .reduce((sum, g) => sum + g.tickets.length, 0);
+    return `<button class="stage" data-stage="${name}" aria-pressed="${stage === name}">
+      <b>${name}</b>
+      <span class="muted">${ticketCount(tickets)}</span>
+      ${attention ? `<span class="red">${attention} need${attention === 1 ? 's' : ''} attention</span>` : ''}
+    </button>`;
+  }).join('');
+  return `<div class="stage-picker" role="group" aria-label="Policy stages">${stagePicker}</div>
+  <table class="register" aria-label="Tickets in ${stage}">
+    <colgroup><col class="ticket-col"><col class="standing-col"><col></colgroup>
+    <thead><tr><th scope="col">Ticket</th><th scope="col">Standing</th><th scope="col">Next step</th></tr></thead>
+    <tbody>${stageGroups(stage).map(g => {
+      const [icon, label, tone] = standing[g.state];
+      return g.tickets.map(([key, title]) => `<tr>
+        <td class="ticket"><strong>APP-${key}</strong> ${title}</td>
+        <td class="${tone}">${icon} ${label}</td>
+        <td class="next-step ${g.state === 'ready' ? 'ready-route' : 'muted'}">${g.action ?? g.text}</td>
+      </tr>`).join('');
+    }).join('')}</tbody>
+  </table>`;
+}
+function render(focus = '') {
+  const [key, name, description] = layouts[variant];
+  document.querySelector('#layout-name').textContent = key + ' · ' + name;
+  document.querySelector('#description').textContent = description;
+  if (key === 'E') {
+    screen.innerHTML = variantE();
+    if (focus) screen.querySelector(focus)?.focus();
+    return;
+  }
+  if (key === 'D') {
+    screen.innerHTML = variantD();
+    return;
+  }
+  const keys = variant === 2 ? 'Tab  pick a stage or row' : '↑ ↓  select a row';
+  screen.innerHTML = summary() + [variantA, variantB, variantC][variant]() +
+    `<footer class="muted">${keys} &nbsp; Enter  show tickets &nbsp; Esc  close tickets</footer>`;
+  if (focus) screen.querySelector(focus)?.focus();
+}
+function cycle(delta) {
+  variant = (variant + delta + layouts.length) % layouts.length;
+  selected = variant === 1 ? 0 : null;
+  stage = 'Doing';
+  const url = new URL(location.href);
+  url.searchParams.set('variant', layouts[variant][0]);
+  history.replaceState(null, '', url);
+  render();
+}
+document.querySelector('#prev').onclick = () => cycle(-1);
+document.querySelector('#next').onclick = () => cycle(1);
+document.querySelectorAll('.widths button').forEach(button => button.onclick = () => {
+  document.querySelector('.terminal').dataset.width = button.dataset.width;
+  document.querySelectorAll('.widths button').forEach(b => b.setAttribute('aria-pressed', b === button));
+});
+screen.addEventListener('click', event => {
+  const button = event.target.closest('button');
+  if (!button) return;
+  if (button.dataset.stage) {
+    stage = button.dataset.stage;
+    selected = null;
+    render(`[data-stage="${stage}"]`);
+  } else {
+    const id = Number(button.dataset.group);
+    selected = selected === id ? null : id;
+    render(`[data-group="${id}"]`);
+  }
+});
+document.addEventListener('keydown', event => {
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    event.preventDefault();
+    const delta = event.key === 'ArrowLeft' ? -1 : 1;
+    if (layouts[variant][0] === 'E' && document.activeElement.matches('.stage-picker button')) {
+      const next = stages.indexOf(stage) + delta;
+      if (stages[next]) screen.querySelector(`[data-stage="${stages[next]}"]`).click();
+    } else {
+      cycle(delta);
+    }
+  } else if (event.key === 'Escape' && selected !== null) {
+    const id = selected;
+    selected = null;
+    render(`[data-group="${id}"]`);
+  } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    const rows = [...screen.querySelectorAll('.row')];
+    if (rows.length === 0) return;
+    const current = rows.indexOf(document.activeElement);
+    const next = current < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, current + (event.key === 'ArrowUp' ? -1 : 1)));
+    event.preventDefault();
+    rows[next]?.focus();
+  }
+});
+render();
+</script>
+</body>
+</html>

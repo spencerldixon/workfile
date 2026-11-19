@@ -249,6 +249,9 @@ func TestTicketsReplaceImagesOnResize(t *testing.T) {
 	d.check()
 	d.width = 21
 	d.send(tea.WindowSizeMsg{Width: 21, Height: 60})
+	// The narrow layout puts policy checks before the description. Scroll to
+	// the image to check its text fallback, rather than its initial position.
+	d.press("enter", "f")
 	d.wants("a1.png")
 }
 

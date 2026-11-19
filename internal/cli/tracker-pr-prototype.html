@@ -1,0 +1,184 @@
+<!doctype html>
+<!-- Throwaway prototype: three PR layouts per view, switchable with ?view=board or list and ?variant=A, B, or C. -->
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workfile tracker PR layouts</title>
+<style>
+  :root { color-scheme: dark; background: #17191b; color: #e0e0e0; }
+  body { margin: 0; font: 15px system-ui, sans-serif; }
+  main { max-width: 910px; margin: 7vh auto; padding: 0 20px 80px; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { color: #b8b8b8; margin: 0 0 22px; }
+  pre { background: #202225; padding: 20px; overflow-x: auto; line-height: 1.55; }
+  .views { display: flex; gap: 12px; margin: 0 0 12px; }
+  .views a { color: #b8b8b8; }
+  .views [aria-current] { color: inherit; font-weight: bold; }
+  nav { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; align-items: center; background: #333538; padding: 6px 10px; border-radius: 8px; white-space: nowrap; }
+  button { background: #252729; border: 0; border-radius: 4px; color: inherit; padding: 8px 12px; font: inherit; cursor: pointer; }
+</style>
+<main>
+  <h1>Linked pull requests in wf tracker</h1>
+  <div class="views"><a id="board" href="?view=board">Board</a><a id="list" href="?view=list">List</a></div>
+  <p id="description"></p>
+  <pre id="terminal" aria-label="Tracker terminal mockup"></pre>
+</main>
+<nav aria-label="Compare layouts">
+  <button id="previous" aria-label="Previous layout">←</button>
+  <strong id="variant" aria-live="polite"></strong>
+  <button id="next" aria-label="Next layout">→</button>
+</nav>
+<script>
+  const listVariants = [
+    {
+      key: 'A',
+      name: 'PR column',
+      description: 'Scan PRs across tickets. Show the first linked PR and how many more there are.',
+      list: [
+        '  Key     Title                      Status       Pull requests',
+        '▸ APP-14  Improve search             In Review    app#42 +2',
+        '  APP-15  Retry failed imports       In Progress  api#51',
+        '  APP-16  Update help text           To Do        None',
+        '  APP-17  Tidy billing               In Progress  Not checked',
+      ],
+      preview: ['  Next action', '  ✗ Fix failing checks on app#42'],
+    },
+    {
+      key: 'B',
+      name: 'Expand selected ticket',
+      description: 'See PRs and their states under the current ticket. Expansion follows selection.',
+      list: [
+        '  Key     Title                      Status',
+        '▸ APP-14  Improve search             In Review',
+        '          app#42  Open · checks failed',
+        '          api#18  Open · awaiting review',
+        '          web#73  Merged',
+        '  APP-15  Retry failed imports       In Progress',
+        '  APP-16  Update help text           To Do',
+        '  APP-17  Tidy billing               In Progress',
+      ],
+      preview: ['  Next action', '  ✗ Fix failing checks on app#42'],
+    },
+    {
+      key: 'C',
+      name: 'PRs at the top of preview',
+      description: 'Keep ticket rows compact. Show PR state and next action together in the preview.',
+      list: [
+        '  Key     Title                      Status',
+        '▸ APP-14  Improve search             In Review',
+        '  APP-15  Retry failed imports       In Progress',
+        '  APP-16  Update help text           To Do',
+        '  APP-17  Tidy billing               In Progress',
+      ],
+      preview: [
+        '  Pull requests',
+        '  app#42  Open     Fix failing checks',
+        '  api#18  Open     Awaiting review',
+        '  web#73  Merged',
+      ],
+    },
+  ];
+
+  const boardVariants = [
+    {
+      key: 'A',
+      name: 'PR rows on cards',
+      description: 'Show up to two linked PRs per card, with their states. Open the ticket to see the rest.',
+      card: ['app#42 · Checks failed', 'api#18 · Awaiting review', '+1 more PR', '', '✗ Fix failing checks'],
+      otherPR: 'api#51 · Open',
+    },
+    {
+      key: 'B',
+      name: 'Compact PR line',
+      description: 'Keep cards short with one line for linked PRs. The next action still has its own line.',
+      card: ['PRs  app#42 · api#18 +1', '✗ Fix failing checks'],
+      otherPR: 'PRs  api#51',
+    },
+    {
+      key: 'C',
+      name: 'Selected card detail',
+      description: 'Show the complete PR list beneath the lanes. It follows selection while card heights stay steady.',
+      card: ['3 pull requests', '✗ Fix failing checks'],
+      otherPR: '1 pull request',
+      detail: [
+        '  Pull requests for APP-14',
+        '  app#42   Open     Fix failing checks',
+        '  api#18   Open     Awaiting review',
+        '  web#73   Merged',
+        '',
+      ],
+    },
+  ];
+
+  const params = new URLSearchParams(location.search);
+  const view = params.get('view') === 'list' ? 'list' : 'board';
+  const variants = view === 'board' ? boardVariants : listVariants;
+  const byId = id => document.getElementById(id);
+  byId(view).setAttribute('aria-current', 'page');
+  let index = Math.max(0, variants.findIndex(
+    variant => variant.key === params.get('variant')
+  ));
+
+  function board(variant) {
+    const lanes = [
+      ['  To Do                       1', '', '    APP-16', '    Update help text'],
+      ['  In Progress                 1', '', '    APP-15', '    Retry failed imports', '    ' + variant.otherPR],
+      ['  In Review                   1', '', '  ▌ APP-14', '  ▌ Improve search', ...variant.card.map(line => '  ▌ ' + line)],
+    ];
+    return [
+      '  [Board 3]  List',
+      '',
+      '  Scope  All projects',
+      '',
+      ...Array.from({ length: Math.max(...lanes.map(lane => lane.length)) }, (_, row) =>
+        lanes.map(lane => (lane[row] ?? '').padEnd(32)).join('  ').trimEnd()
+      ),
+      '',
+      ...(variant.detail ?? []),
+      '  ↑↓←→ move   enter read   p open PR',
+    ];
+  }
+
+  function show() {
+    const variant = variants[index];
+    byId('description').textContent = variant.description;
+    byId('variant').textContent = variant.key + ' · ' + variant.name;
+    const body = view === 'board' ? board(variant) : [
+      '  [List 4]  Board',
+      '',
+      ...variant.list,
+      '',
+      '  Ticket preview',
+      '',
+      '  APP-14  Improve search',
+      '',
+      ...variant.preview,
+      '',
+      '  ↑↓ move   enter read   p open PR',
+    ];
+    byId('terminal').textContent = ['  workfile / tracker', '', ...body].join('\n');
+  }
+
+  function move(direction) {
+    index = (index + direction + variants.length) % variants.length;
+    const url = new URL(location.href);
+    url.searchParams.set('variant', variants[index].key);
+    if (url.protocol === 'file:') {
+      location.replace(url);
+    } else {
+      history.replaceState(null, '', url);
+      show();
+    }
+  }
+
+  byId('previous').onclick = () => move(-1);
+  byId('next').onclick = () => move(1);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      move(event.key === 'ArrowLeft' ? -1 : 1);
+    }
+  });
+  show();
+</script>
+</html>

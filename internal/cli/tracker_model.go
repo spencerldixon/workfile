@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -16,6 +15,7 @@ import (
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/mattn/go-runewidth"
 	"workfile/internal/workfile"
 )
 
@@ -37,18 +37,6 @@ func (d ticketRow) Render(w io.Writer, l list.Model, index int, item list.Item) 
 
 // ticketRead is what has been read about one ticket. Replies carry their read,
 // so a reply to a read that was dropped or refreshed is ignored.
-type ticketRead struct {
-	detail    *workfile.Detail
-	detailErr error
-	policy    *workfile.Assessment
-	policyErr error
-	cancel    context.CancelFunc
-}
-
-func (r *ticketRead) detailDone() bool { return r.detail != nil || r.detailErr != nil }
-func (r *ticketRead) policyDone() bool { return r.policy != nil || r.policyErr != nil }
-func (r *ticketRead) pending() bool    { return !r.detailDone() || !r.policyDone() }
-
 type (
 	ticketListMsg struct {
 		all []workfile.Listing
@@ -58,21 +46,6 @@ type (
 	ticketMeMsg struct {
 		me  string
 		err error
-	}
-	// ticketSettledMsg says the selection stayed put long enough to read.
-	ticketSettledMsg struct {
-		gen int
-		key string
-	}
-	ticketDetailMsg struct {
-		read   *ticketRead
-		detail workfile.Detail
-		err    error
-	}
-	ticketPolicyMsg struct {
-		read   *ticketRead
-		policy workfile.Assessment
-		err    error
 	}
 	ticketOpenedMsg struct{ err error }
 	ticketImageMsg  struct {
@@ -105,68 +78,111 @@ const cannotFindMe = "Cannot tell who you are. Check your connection with wf set
 const wideTickets = 110
 
 type ticketKeys struct {
-	Move, View, Search, Read, Focus, Refresh, Open, Quit, Keep, Clear key.Binding
+	Move, View, Search, Read, Focus, Refresh, Open, Quit, Keep, Clear, PR, Checks, More, Project key.Binding
+	Workfile                                                                                     key.Binding
 }
 
 // trackerModel is the `wf tracker` screen: a list of the scope above the
 // selected ticket. The list is read once. A ticket is read only after the
 // selection rests on it, and then kept for the session.
 type trackerModel struct {
-	ctx           context.Context
-	e             env
-	v             view
-	t             theme
-	list          list.Model
-	pane          viewport.Model // the ticket
-	side          viewport.Model // Workfile's view, on wide terminals
-	spin          spinner.Model
-	help          bubblehelp.Model
-	keys          ticketKeys
-	width, height int
-	loaded        bool
-	all           []workfile.Listing
-	total         int // tickets in the view before any search
-	view          int // index into views()
-	me            string
-	findingMe     bool
-	counts        map[ticketView]int
-	keyWidth      int
-	statusWidth   int
-	onTicket      bool // focus is on the ticket, not the list
-	spinning      bool
-	current       string // the ticket on show
-	gen           int    // counts selection changes, to spot a stale pause
-	reads         map[string]*ticketRead
-	notice        string
-	fatal         error
-	gfx           graphics
-	images        map[string]*ticketPicture // by attachment
-	titles        map[string]*ticketPicture // by ticket key
-	tried         map[string]bool           // attachments already asked for
-	nextID        int
-	pause         time.Duration
-	open          func(string) error
-	now           func() time.Time
+	ticketReads                           trackerReads
+	refresh                               trackerRefresh
+	ctx                                   context.Context
+	e                                     env
+	v                                     view
+	t                                     theme
+	boardTheme                            theme
+	boardSelectedTheme                    theme
+	panelTheme                            theme
+	tagPalette                            ticketTagPalette
+	tabFocus                              bool // up from the top card focuses the view tabs
+	headings                              map[ticketHeading]*ticketPicture
+	headingTried                          map[ticketHeading]bool
+	flows                                 map[flowSpec]*ticketPicture
+	flowTried                             map[flowSpec]bool
+	projectOrigins                        map[ticketView]string
+	projectPicker                         list.Model
+	pickingProject                        bool
+	pickingPR                             bool
+	prTicket                              string
+	projectGeneration                     int
+	list                                  list.Model
+	pane                                  viewport.Model // the ticket
+	side                                  viewport.Model // Workfile's view, on wide terminals
+	spin                                  spinner.Model
+	help                                  bubblehelp.Model
+	keys                                  ticketKeys
+	width, height                         int
+	loaded                                bool
+	all                                   []workfile.Listing
+	total                                 int // tickets in the view before any search
+	view                                  int // index into views()
+	me                                    string
+	findingMe                             bool
+	counts                                map[ticketView]int
+	keyWidth                              int
+	statusWidth                           int
+	onTicket                              bool // focus is on the ticket, not the list
+	readerHeader                          []string
+	readerWorkfile                        bool
+	spinning                              bool
+	current                               string // the ticket on show
+	notice                                string
+	fatal                                 error
+	gfx                                   graphics
+	images                                map[string]*ticketPicture // by attachment
+	titles                                map[string]*ticketPicture // by ticket key
+	tried                                 map[string]bool           // attachments already asked for
+	nextID                                int
+	open                                  func(string) error
+	now                                   func() time.Time
+	overview                              bool
+	who                                   map[string]string
+	whoStarted, whoIncomplete, whoLoading bool
+	checkBudgets                          map[ticketView]int
 }
 
 func newTrackerModel(ctx context.Context, e env) *trackerModel {
-	t := newTheme(e.view.color, e.view.laneBackground())
-	m := &trackerModel{ctx: ctx, e: e, v: e.view, t: t, width: e.view.width, height: 24, reads: map[string]*ticketRead{}, counts: map[ticketView]int{}, images: map[string]*ticketPicture{}, titles: map[string]*ticketPicture{}, tried: map[string]bool{}, nextID: firstImageID, pause: 200 * time.Millisecond, now: time.Now, spin: spinner.New(spinner.WithSpinner(spinner.MiniDot)), pane: viewport.New(), side: viewport.New(), help: t.help()}
+	if e.view.tint == nil {
+		e.view.tint = &tintCache{}
+	}
+	e.tracker = e.tracker.WithDefaults()
+	t := newTheme(e.view.color, "")
+	m := &trackerModel{ctx: ctx, e: e, v: e.view, t: t, width: e.view.width, height: 24, ticketReads: trackerReads{byKey: map[string]*ticketRead{}, pause: 200 * time.Millisecond}, counts: map[ticketView]int{}, images: map[string]*ticketPicture{}, titles: map[string]*ticketPicture{}, tried: map[string]bool{}, nextID: firstImageID, now: time.Now, spin: spinner.New(spinner.WithSpinner(spinner.MiniDot)), pane: viewport.New(), side: viewport.New(), help: t.help()}
+	m.overview = attentionEnabled(e.tracker)
+	m.boardTheme, m.boardSelectedTheme = t, t
+	if slices.ContainsFunc(e.tracker.Views, func(v workfile.TrackerView) bool { return v.Layout == "board" }) {
+		m.boardTheme = newTheme(e.view.color, e.view.laneBackground())
+		m.boardSelectedTheme = newTheme(e.view.color, e.view.selectedLaneBackground())
+	}
+	m.panelTheme = newTheme(e.view.color, e.view.laneBackground())
+	m.headings = map[ticketHeading]*ticketPicture{}
+	m.headingTried = map[ticketHeading]bool{}
+	m.flows, m.flowTried = map[flowSpec]*ticketPicture{}, map[flowSpec]bool{}
+	m.who = map[string]string{}
+	m.checkBudgets = map[ticketView]int{}
+	m.projectOrigins = map[ticketView]string{}
 	m.open = func(target string) error { return openBrowser(ctx, target) }
 	m.keys = ticketKeys{
-		Move:    key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
-		Search:  key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
-		Read:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "read")),
-		Focus:   key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "list")),
-		View:    key.NewBinding(key.WithKeys("left", "right"), key.WithHelp("←→", "view")),
-		Refresh: key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
-		Open:    key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open")),
-		Quit:    key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
-		Keep:    key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "keep")),
-		Clear:   key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
+		Move:     key.NewBinding(key.WithKeys("up", "down"), key.WithHelp("↑↓", "move")),
+		Search:   key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		Read:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "read")),
+		Focus:    key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "list")),
+		View:     key.NewBinding(key.WithKeys("left", "right", "[", "]"), key.WithHelp("←→", "view")),
+		Refresh:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
+		Open:     key.NewBinding(key.WithKeys("o"), key.WithHelp("o", "open")),
+		Quit:     key.NewBinding(key.WithKeys("q"), key.WithHelp("q", "quit")),
+		Keep:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "keep")),
+		Clear:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "clear")),
+		PR:       key.NewBinding(key.WithKeys("p", "P"), key.WithHelp("p", "PR")),
+		Checks:   key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "checks")),
+		More:     key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "check more")),
+		Project:  key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "scope")),
+		Workfile: key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "workfile")),
 	}
 	m.help.ShortSeparator = " · "
-	start, _ := pickView(e.o, e.w.Policy)
+	start, _ := pickView(e.o, e.w.Policy, e.tracker)
 	m.view = max(0, slices.Index(m.views(), start))
 	m.list = list.New(nil, ticketRow{m}, 0, 0)
 	m.list.SetShowTitle(false)
@@ -202,10 +218,20 @@ func (m *trackerModel) startSpinner() tea.Cmd {
 }
 
 func (m *trackerModel) busy() bool {
-	if !m.loaded {
+	if m.refresh.syncing || !m.loaded || m.findingMe {
 		return true
 	}
-	r := m.reads[m.current]
+	if m.overview {
+		if m.whoLoading {
+			return true
+		}
+		for _, r := range m.ticketReads.byKey {
+			if r.policyStarted && !r.policyDone() {
+				return true
+			}
+		}
+	}
+	r := m.ticketReads.byKey[m.current]
 	return r != nil && r.pending()
 }
 
@@ -217,36 +243,51 @@ func (m *trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		resized := m.resizeImages()
 		m.layout()
 		item, _ := m.selected()
-		return m, tea.Batch(resized, m.loadTitle(item))
+		return m, tea.Batch(resized, m.loadTitle(item), m.loadPreviewPictures(), m.pumpChecks())
 	case ticketListMsg:
 		return m, m.listed(msg)
 	case ticketSettledMsg:
-		if msg.gen != m.gen {
+		if msg.gen != m.ticketReads.generation {
 			return m, nil
 		}
 		item, _ := m.selected()
+		if m.showingBoard() {
+			return m, m.pumpChecks()
+		}
 		return m, tea.Batch(m.read(msg.key), m.loadTitle(item))
 	case ticketDetailMsg:
-		if msg.read == m.reads[m.current] {
-			msg.read.detail, msg.read.detailErr = &msg.detail, msg.err
-			if msg.err != nil {
-				msg.read.detail = nil
-			}
+		if m.ticketReads.receivedDetail(msg) && msg.read == m.ticketReads.byKey[m.current] {
 			m.fill(false)
 			if msg.err == nil {
-				return m, m.loadImages(msg.detail)
+				return m, tea.Batch(m.loadImages(msg.detail), m.loadPreviewPictures())
 			}
 		}
 		return m, nil
 	case ticketPolicyMsg:
-		if msg.read == m.reads[m.current] {
-			msg.read.policy, msg.read.policyErr = &msg.policy, msg.err
-			if msg.err != nil {
-				msg.read.policy = nil
-			}
-			m.fill(false)
+		if !m.ticketReads.receivedPolicy(msg, m.now()) {
+			return m, nil
 		}
-		return m, nil
+		if msg.read != m.ticketReads.byKey[m.current] {
+			if m.overview {
+				return m, m.showTickets()
+			}
+			return m, nil
+		}
+		more := tea.Batch(m.loadWorkflow(), m.loadFailedChecks())
+		if m.overview {
+			return m, tea.Batch(m.showTickets(), more)
+		}
+		m.fill(false)
+		return m, more
+	case ticketActionIdentityMsg:
+		m.who, m.whoIncomplete, m.whoLoading = msg.who, msg.incomplete, false
+		if msg.incomplete {
+			m.notice = "Some action owners could not be established."
+		}
+		if m.me == "" {
+			m.me = m.who[m.e.w.Policy.Tracker]
+		}
+		return m, m.showTickets()
 	case ticketMeMsg:
 		m.findingMe = false
 		if msg.err != nil {
@@ -254,11 +295,28 @@ func (m *trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.me = msg.me
+		m.who[m.e.w.Policy.Tracker] = msg.me
 		return m, m.showTickets()
 	case ticketImageMsg:
 		return m, m.showImage(msg)
 	case ticketTitleMsg:
 		return m, m.showTitle(msg)
+	case ticketHeadingMsg:
+		return m, m.showHeading(msg)
+	case workflowPictureMsg:
+		return m, m.showWorkflow(msg)
+	case failedChecksMsg:
+		m.showFailedChecks(msg)
+		return m, nil
+	case trackerSyncScheduleMsg:
+		return m, m.refresh.timer(msg, m.now())
+	case trackerSyncDueMsg:
+		return m, m.syncDue(msg)
+	case trackerSyncedMsg:
+		return m, m.synced(msg)
+	case trackerPRsOpenedMsg:
+		m.notice = m.prOpenNotice(msg)
+		return m, nil
 	case ticketOpenedMsg:
 		m.notice = ""
 		if msg.err != nil {
@@ -273,6 +331,11 @@ func (m *trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
+	case trackerProjectMsg:
+		if (m.pickingProject || m.pickingPR) && msg.generation == m.projectGeneration {
+			return m, m.updateProjectPicker(msg.msg)
+		}
+		return m, nil
 	case tea.KeyPressMsg:
 		return m, m.key(msg)
 	}
@@ -286,22 +349,31 @@ func (m *trackerModel) listed(msg ticketListMsg) tea.Cmd {
 	}
 	m.loaded, m.all, m.me = true, msg.all, msg.me
 	for _, t := range msg.all {
-		m.keyWidth = max(m.keyWidth, len(clean(t.Key)))
-		m.statusWidth = min(14, max(m.statusWidth, len(clean(t.Status))))
+		m.keyWidth = max(m.keyWidth, runewidth.StringWidth(clean(t.Key)))
+		m.statusWidth = min(14, max(m.statusWidth, runewidth.StringWidth(clean(t.Status))))
 	}
-	return m.showTickets()
+	if msg.me != "" {
+		m.who[m.e.w.Policy.Tracker] = msg.me
+	}
+	return tea.Batch(m.showTickets(), m.actionIdentity(), m.refresh.markSynced(m.now()))
 }
 
 func (m *trackerModel) views() []ticketView {
-	return ticketViews(m.e.w.Policy)
+	return ticketViews(m.e.w.Policy, m.e.tracker)
 }
 
 func (m *trackerModel) shownView() ticketView { return m.views()[m.view] }
 
+// showingBoard reports whether cards are visible. A board view can also show
+// the ticket reader while keeping the board tab selected.
+func (m *trackerModel) showingBoard() bool {
+	return m.shownView().board() && !m.onTicket
+}
+
 // findMe asks who "me" is the first time Assigned to me needs it, and never if it
 // never does. A failed answer is asked again on the next visit.
 func (m *trackerModel) findMe() tea.Cmd {
-	if !m.shownView().me || m.me != "" || m.findingMe {
+	if !m.shownView().me || m.me != "" || m.findingMe || m.whoLoading {
 		return nil
 	}
 	m.findingMe, m.notice = true, ""
@@ -314,10 +386,10 @@ func (m *trackerModel) findMe() tea.Cmd {
 
 // showTickets fills the list, staying on the current ticket if it is still there.
 func (m *trackerModel) showTickets() tea.Cmd {
-	shown := arrangeTickets(m.all, m.e.w.Policy, m.shownView(), m.me)
+	shown := m.shownTickets(m.shownView())
 	m.total = len(shown)
 	for _, view := range m.views() {
-		m.counts[view] = len(arrangeTickets(m.all, m.e.w.Policy, view, m.me))
+		m.counts[view] = len(m.shownTickets(view))
 	}
 	items := make([]list.Item, len(shown))
 	at := 0
@@ -332,7 +404,7 @@ func (m *trackerModel) showTickets() tea.Cmd {
 		m.list.Select(at)
 	}
 	m.layout()
-	return tea.Batch(cmd, m.follow())
+	return tea.Batch(cmd, m.follow(), m.pumpChecks())
 }
 
 // updateList passes a message to the list, then follows the selection, which a
@@ -340,7 +412,7 @@ func (m *trackerModel) showTickets() tea.Cmd {
 func (m *trackerModel) updateList(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
-	return tea.Batch(cmd, m.follow())
+	return tea.Batch(cmd, m.follow(), m.pumpChecks())
 }
 
 func (m *trackerModel) selected() (ticketItem, bool) {
@@ -356,125 +428,171 @@ func (m *trackerModel) follow() tea.Cmd {
 	if item.Key == m.current {
 		return nil
 	}
-	if r := m.reads[m.current]; r != nil && r.pending() {
-		r.cancel()
-		delete(m.reads, m.current)
-	}
+	m.ticketReads.selectionChanged(m.current, m.overview)
 	m.current = item.Key
-	m.gen++
+	m.readerWorkfile = false
 	m.fill(true)
 	if !ok {
 		return nil
 	}
-	if m.reads[item.Key] != nil {
-		return m.loadTitle(item)
+	if r := m.ticketReads.byKey[item.Key]; r != nil && r.detailStarted {
+		return tea.Batch(m.loadTitle(item), m.loadPreviewPictures())
 	}
-	gen, ticket := m.gen, item.Key
-	return tea.Tick(m.pause, func(time.Time) tea.Msg { return ticketSettledMsg{gen, ticket} })
+	return m.ticketReads.settle(item.Key)
 }
 
 // read starts the reads for one ticket: its text from the tracker, and the policy's
 // view of it. Each draws when it arrives.
 func (m *trackerModel) read(ticket string) tea.Cmd {
-	if m.reads[ticket] != nil {
-		return nil
+	cmds := m.ticketReads.start(m.ctx, m.e, ticket)
+	if len(cmds) == 0 {
+		return m.loadPreviewPictures()
 	}
-	ctx, cancel := context.WithCancel(m.ctx)
-	r := &ticketRead{cancel: cancel}
-	m.reads[ticket] = r
 	m.fill(false)
-	e := m.e
-	return tea.Batch(m.startSpinner(), func() tea.Msg {
-		detail, err := e.client.Detail(ctx, ticket)
-		return ticketDetailMsg{r, detail, err}
-	}, func() tea.Msg {
-		policy, err := readPolicy(ctx, e, ticket)
-		return ticketPolicyMsg{r, policy, err}
-	})
-}
-
-// readPolicy checks one ticket as `wf status TICKET` does.
-func readPolicy(ctx context.Context, e env, ticket string) (workfile.Assessment, error) {
-	found, err := e.client.Tickets(ctx, []string{ticket}, 0)
-	if err != nil {
-		return workfile.Assessment{}, err
-	}
-	if len(found) == 0 {
-		return workfile.Assessment{}, errors.New(ticket + " is not visible to your account")
-	}
-	found, _, err = e.client.Records(ctx, found[:1])
-	if err != nil {
-		return workfile.Assessment{}, err
-	}
-	return e.w.Assess(found[0]), nil
+	return tea.Batch(append(cmds, m.startSpinner(), m.loadPreviewPictures())...)
 }
 
 func (m *trackerModel) key(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "ctrl+c" {
 		return m.quit()
 	}
+	if m.pickingProject || m.pickingPR {
+		return m.projectKey(msg)
+	}
 	// While searching, every letter belongs to the search.
 	if m.list.SettingFilter() {
 		return m.updateList(msg)
 	}
 	m.notice = ""
+	if m.showingBoard() {
+		switch msg.String() {
+		case "left", "right", "up", "down":
+			if m.tabFocus {
+				if msg.String() == "down" {
+					m.tabFocus = false
+					return nil
+				}
+				if msg.String() == "up" {
+					return nil
+				}
+				return m.switchView(msg.String() == "left")
+			}
+			if msg.String() == "up" && m.atBoardTop() {
+				m.tabFocus = true
+				return nil
+			}
+			return m.moveCard(msg.String())
+		case "esc", "enter":
+			if m.tabFocus {
+				m.tabFocus = false
+				return nil
+			}
+		}
+	}
 	item, ok := m.selected()
 	switch {
 	case key.Matches(msg, m.keys.Quit):
 		return m.quit()
+	case key.Matches(msg, m.keys.Project) && !m.onTicket:
+		return m.openProjectPicker()
 	case key.Matches(msg, m.keys.Focus):
-		m.onTicket = ok && !m.onTicket
+		m.setReading(ok && !m.onTicket)
+		if m.onTicket && m.shownView().board() {
+			return tea.Batch(m.read(item.Key), m.loadTitle(item))
+		}
 		return nil
 	case key.Matches(msg, m.keys.Read) && !m.onTicket:
-		m.onTicket = ok
+		m.setReading(ok)
+		if ok && m.shownView().board() {
+			return tea.Batch(m.read(item.Key), m.loadTitle(item))
+		}
+		return nil
+	case m.onTicket && key.Matches(msg, m.keys.Workfile):
+		m.readerWorkfile = !m.readerWorkfile
 		return nil
 	case key.Matches(msg, m.keys.View):
-		count := len(m.views())
-		step := 1
-		if msg.String() == "left" {
-			step = count - 1
-		}
-		m.view = (m.view + step) % count
-		return tea.Batch(m.findMe(), m.showTickets())
+		return m.switchView(msg.String() == "left" || msg.String() == "[")
 	case key.Matches(msg, m.keys.Open):
 		if !ok {
 			return nil
 		}
 		open, target := m.open, item.URL
 		return func() tea.Msg { return ticketOpenedMsg{open(target)} }
-	case key.Matches(msg, m.keys.Refresh):
-		if !ok {
+	case key.Matches(msg, m.keys.PR):
+		return m.openPullRequests()
+	case key.Matches(msg, m.keys.Checks):
+		target := m.actionURL(true)
+		if target == "" {
+			m.notice = "No matching PR or checks link is available."
 			return nil
 		}
-		if r := m.reads[item.Key]; r != nil {
-			r.cancel()
-			delete(m.reads, item.Key)
+		open := m.open
+		return func() tea.Msg { return ticketOpenedMsg{open(target)} }
+	case key.Matches(msg, m.keys.More):
+		if !m.overview {
+			return nil
 		}
+		view := m.shownView()
+		budget := m.checkBudgets[view]
+		if budget == 0 {
+			budget = trackerCheckBatch
+		}
+		m.checkBudgets[view] = budget + trackerCheckBatch
+		return m.pumpChecks()
+	case key.Matches(msg, m.keys.Refresh):
+		if m.showingBoard() {
+			return m.syncTracker()
+		}
+		if !ok {
+			if m.overview {
+				return m.refreshAttentionSample()
+			}
+			return nil
+		}
+		m.ticketReads.discard(item.Key)
 		// An image that failed gets another try when the ticket is read again.
 		for attachment := range m.tried {
 			if m.images[attachment] == nil {
 				delete(m.tried, attachment)
 			}
 		}
-		return m.read(item.Key)
+		var refresh tea.Cmd
+		if m.showingBoard() {
+			refresh = tea.Batch(m.ticketReads.ensure(m.ctx, item.Key).checkPolicy(m.e, item.Key), m.startSpinner())
+		} else {
+			refresh = m.read(item.Key)
+		}
+		if m.overview && m.whoIncomplete {
+			m.whoStarted = false
+			return tea.Batch(refresh, m.actionIdentity())
+		}
+		return refresh
 	case key.Matches(msg, m.keys.Search):
-		m.onTicket = false
+		m.setReading(false)
+	}
+	// Number keys open a fix whenever the Workfile pane is on screen.
+	if n, isFix := fixKey(msg); isFix && ok && !m.showingBoard() {
+		return m.openFix(n)
 	}
 	if !m.onTicket {
 		return m.updateList(msg)
 	}
 	if key.Matches(msg, m.keys.Clear) {
-		m.onTicket = false
+		m.setReading(false)
 		return nil
 	}
 	var cmd tea.Cmd
+	if m.readerWorkfile {
+		m.side, cmd = m.side.Update(msg)
+		return cmd
+	}
 	m.pane, cmd = m.pane.Update(msg)
-	m.side.SetYOffset(m.pane.YOffset())
 	return cmd
 }
 
 // quit frees the terminal's copies of the images on the way out.
 func (m *trackerModel) quit() tea.Cmd {
+	m.ticketReads.cancelAll()
 	if held := m.forgetAll(); held != "" {
 		return tea.Sequence(tea.Raw(held), tea.Quit)
 	}
@@ -487,6 +605,12 @@ func (m *trackerModel) forgetAll() string {
 		for _, p := range held {
 			b.WriteString(forget(p.id))
 		}
+	}
+	for _, p := range m.headings {
+		b.WriteString(forget(p.id))
+	}
+	for _, p := range m.flows {
+		b.WriteString(forget(p.id))
 	}
 	return b.String()
 }
@@ -510,6 +634,18 @@ func (m *trackerModel) allocate() int {
 			delete(m.titles, ticket)
 		}
 	}
+	for heading, p := range m.headings {
+		if p.id == id {
+			delete(m.headings, heading)
+			delete(m.headingTried, heading)
+		}
+	}
+	for spec, p := range m.flows {
+		if p.id == id {
+			delete(m.flows, spec)
+			delete(m.flowTried, spec)
+		}
+	}
 	return id
 }
 
@@ -519,7 +655,10 @@ func (m *trackerModel) loadImages(d workfile.Detail) tea.Cmd {
 	if !m.gfx.on {
 		return nil
 	}
-	blocks := append(slices.Clone(d.Body), commentText(d.Comments)...)
+	blocks := slices.Clone(d.Body)
+	if m.e.tracker.ShowComments() {
+		blocks = append(blocks, commentText(d.Comments)...)
+	}
 	var cmds []tea.Cmd
 	for _, b := range blocks {
 		if b.Kind != workfile.BlockImage || b.Attachment == "" || m.tried[b.Attachment] || len(cmds) == maxTicketImages {
@@ -619,16 +758,12 @@ func (m *trackerModel) resizeImages() tea.Cmd {
 }
 
 // layout gives the list the top half and the ticket the rest, edge to edge. The
-// header and the help line take one row each.
+// masthead, tabs, column headings, preview heading and help stay outside it.
 func (m *trackerModel) layout() {
-	rows := m.listRows()
-	left, right := m.columns()
-	m.list.SetSize(m.width, rows)
-	m.pane.SetWidth(left)
-	m.side.SetWidth(right)
-	height := max(1, m.height-rows-1-m.topRows())
-	m.pane.SetHeight(height)
-	m.side.SetHeight(height)
+	if m.pickingProject || m.pickingPR {
+		m.resizeProjectPicker()
+	}
+	m.list.SetSize(m.width, m.listRows())
 	m.help.SetWidth(m.width - len(ticketIndent))
 	m.fill(false)
 }
@@ -644,28 +779,53 @@ func (m *trackerModel) columns() (left, right int) {
 	return left, m.width - left - 1
 }
 
-// topRows is the rows above the list: the scope line and the header.
-func (m *trackerModel) topRows() int { return 1 + len(m.t.scopeLines(m.e.w, 1)) }
+// topRows counts the masthead and tabs, plus space for headings in list views.
+func (m *trackerModel) topRows() int {
+	if m.shownView().board() {
+		return trackerHeaderRows
+	}
+	return trackerHeaderRows + 2
+}
 
 // listRows is the top half, or less when there are few tickets, so the room
 // goes to the ticket. It follows everything read, not the view or the search,
 // so the screen does not jump.
 func (m *trackerModel) listRows() int {
-	half := max(3, (m.height-1-m.topRows())/2)
+	if m.shownView().board() {
+		return 0
+	}
+	half := max(1, (m.height-3-m.topRows())/2)
 	if len(m.all) > 0 {
 		return min(half, max(3, len(m.all)))
 	}
 	return half
 }
 
-func (m *trackerModel) fill(top bool) {
-	main, side := m.ticketText()
-	m.pane.SetContent(main)
-	m.side.SetContent(side)
-	if top {
-		m.pane.GotoTop()
+// switchView moves to the previous or next view, wrapping at the ends.
+func (m *trackerModel) switchView(back bool) tea.Cmd {
+	count := len(m.views())
+	step := 1
+	if back {
+		step = count - 1
 	}
-	m.side.SetYOffset(m.pane.YOffset())
+	wasBoard := m.shownView().board()
+	m.view = (m.view + step) % count
+	m.tabFocus = m.tabFocus && m.shownView().board()
+	if wasBoard || m.shownView().board() {
+		m.onTicket = false
+		m.readerWorkfile = false
+	}
+	return tea.Batch(m.findMe(), m.showTickets())
+}
+
+// atBoardTop is true when up has no card above the selected one.
+func (m *trackerModel) atBoardTop() bool {
+	for _, l := range m.boardLanes() {
+		if at := slices.Index(l.indices, m.list.Index()); at >= 0 {
+			return at == 0
+		}
+	}
+	return true
 }
 
 func (m *trackerModel) View() tea.View {
@@ -675,11 +835,48 @@ func (m *trackerModel) View() tea.View {
 }
 
 func (m *trackerModel) helpKeys() []key.Binding {
+	if m.showingBoard() && !m.list.SettingFilter() {
+		move, views, read := m.keys.Move, m.keys.View, m.keys.Read
+		move.SetHelp("↑↓←→", "move")
+		views.SetHelp("↑ then ←→", "view")
+		if m.tabFocus {
+			return []key.Binding{views, m.keys.Project, m.keys.Refresh, key.NewBinding(key.WithKeys("down"), key.WithHelp("↓/esc", "back to cards")), m.keys.Quit}
+		}
+		read.SetHelp("enter", "preview")
+		return append(append([]key.Binding{move, m.keys.Project, m.keys.Refresh, read, views, m.keys.Search, m.keys.Open}, m.attentionKeys()...), m.keys.Quit)
+	}
 	if m.list.SettingFilter() {
 		return []key.Binding{m.keys.Keep, m.keys.Clear}
 	}
 	if m.onTicket {
-		return []key.Binding{m.keys.Move, m.keys.Focus, m.keys.View, m.keys.Refresh, m.keys.Open, m.keys.Quit}
+		scroll := m.keys.Move
+		scroll.SetHelp("↑↓", "scroll")
+		keys := []key.Binding{scroll, m.keys.Workfile, m.keys.Focus}
+		keys = append(keys, m.fixHelp()...)
+		keys = append(keys, m.keys.View, m.keys.Refresh, m.keys.Open)
+		return append(append(keys, m.attentionKeys()...), m.keys.Quit)
 	}
-	return []key.Binding{m.keys.View, m.keys.Search, m.keys.Read, m.keys.Refresh, m.keys.Open, m.keys.Quit}
+	keys := []key.Binding{m.keys.Move, m.keys.Project, m.keys.Refresh}
+	if !m.shownView().board() {
+		keys = append(keys, m.fixHelp()...)
+	}
+	keys = append(keys, m.keys.View, m.keys.Search, m.keys.Read, m.keys.Open)
+	return append(append(keys, m.attentionKeys()...), m.keys.Quit)
+}
+
+func (m *trackerModel) attentionKeys() []key.Binding {
+	if !m.overview {
+		return nil
+	}
+	var keys []key.Binding
+	if m.actionURL(false) != "" {
+		keys = append(keys, m.keys.PR)
+	}
+	if m.actionURL(true) != "" {
+		keys = append(keys, m.keys.Checks)
+	}
+	if checked, total := m.checkProgress(m.shownView()); checked < total {
+		keys = append(keys, m.keys.More)
+	}
+	return keys
 }

@@ -49,7 +49,7 @@ func TestListingAsksOnlyForWhatItShows(t *testing.T) {
 	if calls != 1 || len(got) != 2 {
 		t.Fatalf("%d calls, %+v", calls, got)
 	}
-	want := workfile.Listing{Key: "APP-1", Title: "First", Status: "In Review", State: "review", Assignee: "Alice", AssigneeID: "example-alice", Type: "Bug", URL: "https://" + c.Workspace.Providers[c.Workspace.Policy.Tracker].Site + "/browse/APP-1"}
+	want := workfile.Listing{Origin: "APP", Key: "APP-1", Title: "First", Status: "In Review", State: "review", Assignee: "Alice", AssigneeID: "example-alice", Type: "Bug", URL: "https://" + c.Workspace.Providers[c.Workspace.Policy.Tracker].Site + "/browse/APP-1"}
 	if got[0] != want {
 		t.Fatalf("%+v", got[0])
 	}
@@ -212,7 +212,7 @@ func commentAuthors(comments []workfile.Comment) string {
 	return strings.Join(names, " ")
 }
 
-func TestDetailPutsTheNewestCommentFirst(t *testing.T) {
+func TestDetailPutsTheOldestJiraCommentFirst(t *testing.T) {
 	reads := 0
 	c := jiraClient(t, func(*http.Request) (int, string) {
 		reads++
@@ -222,7 +222,7 @@ func TestDetailPutsTheNewestCommentFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := commentAuthors(d.Comments); got != "Bob Alice Charlie" {
+	if got := commentAuthors(d.Comments); got != "Alice Bob Charlie" {
 		t.Fatal(got)
 	}
 	if reads != 1 {
@@ -244,7 +244,7 @@ func TestDetailFetchesTheNewestWhenJiraReturnsOnlySome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := commentAuthors(d.Comments); got != "Charlie Bob" || d.CommentTotal != 3 {
+	if got := commentAuthors(d.Comments); got != "Bob Charlie" || d.CommentTotal != 3 {
 		t.Fatalf("%s of %d", got, d.CommentTotal)
 	}
 }
@@ -272,20 +272,5 @@ func TestDetailKeepsWhatItHasWhenTheNewestComeBackEmpty(t *testing.T) {
 	d, err := c.Detail(context.Background(), "APP-7")
 	if err != nil || commentAuthors(d.Comments) != "Alice" {
 		t.Fatalf("%+v %v", d, err)
-	}
-}
-
-func TestRepliesStayInConversationOrder(t *testing.T) {
-	old, late := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
-	d := workfile.Detail{Comments: []workfile.Comment{
-		{Author: "Alice", Created: old, Replies: []workfile.Comment{{Author: "Bob", Created: old}, {Author: "Charlie", Created: late}}},
-		{Author: "Bob", Created: late},
-	}}
-	newestFirst(d.Comments)
-	if got := commentAuthors(d.Comments); got != "Bob Alice" {
-		t.Fatal(got)
-	}
-	if got := commentAuthors(d.Comments[1].Replies); got != "Bob Charlie" {
-		t.Fatal(got)
 	}
 }

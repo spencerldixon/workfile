@@ -43,6 +43,7 @@ func interactiveStatus(v view, o options, all []workfile.Assessment) bool {
 // the person's identity, for the m key; nil leaves the key out.
 func exploreStatus(ctx context.Context, v view, w *workfile.Workspace, all []workfile.Assessment, o options, who map[string]string) error {
 	m := newStatusModel(newStatusScreen(v, w, all, o), who)
+	m.workflow.gfx = v.outputGraphics()
 	_, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(v.out)).Run()
 	if err != nil && ctx.Err() == nil {
 		return err
@@ -433,15 +434,16 @@ type statusKeys struct {
 // and the panel one at a time.
 type statusModel struct {
 	statusScreen
-	who     map[string]string
-	mine    bool
-	entries []statusEntry
-	sel     int // index into the ticket entries
-	open    bool
-	height  int
-	pane    viewport.Model
-	keys    statusKeys
-	help    bubblehelp.Model
+	who      map[string]string
+	mine     bool
+	entries  []statusEntry
+	sel      int // index into the ticket entries
+	open     bool
+	height   int
+	pane     viewport.Model
+	workflow workflowPreview
+	keys     statusKeys
+	help     bubblehelp.Model
 }
 
 func newStatusModel(s statusScreen, who map[string]string) *statusModel {
@@ -526,7 +528,7 @@ func (m *statusModel) tickets() []statusEntry {
 	return t
 }
 
-func (m *statusModel) Init() tea.Cmd { return nil }
+func (m *statusModel) Init() tea.Cmd { return m.loadWorkflow() }
 
 func (m *statusModel) View() tea.View {
 	v := tea.NewView(m.render())
@@ -539,13 +541,29 @@ func (m *statusModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.v.width = max(20, min(msg.Width, 140))
 		m.height = max(10, msg.Height)
+	case workflowPictureMsg:
+		cmd := m.workflow.receive(msg)
+		m.layout()
+		return m, cmd
 	case tea.KeyPressMsg:
 		if cmd := m.key(msg); cmd != nil {
 			return m, cmd
 		}
 	}
+	cmd := m.loadWorkflow()
 	m.layout()
-	return m, nil
+	return m, cmd
+}
+
+func (m *statusModel) loadWorkflow() tea.Cmd {
+	if !m.workflow.gfx.on {
+		return nil
+	}
+	tickets := m.tickets()
+	if m.sel >= len(tickets) || !m.wide() && !m.open {
+		return nil
+	}
+	return m.workflow.request(m.w.Policy, tickets[m.sel].a, max(1, m.paneWidth()-4))
 }
 
 func (m *statusModel) wide() bool { return m.v.width >= 70 }
@@ -637,7 +655,7 @@ func (m *statusModel) layout() {
 func (m *statusModel) ticketView(a workfile.Assessment, width int) []string {
 	v := m.v
 	v.width = width + 2*len(ticketIndent) + 2
-	tm := &ticketModel{v: v, t: newTheme(m.t.color, ""), w: m.w, a: a}
+	tm := &ticketModel{v: v, t: newTheme(m.t.color, ""), w: m.w, a: a, flow: m.workflow.picture}
 	lines := strings.Split(strings.Trim(tm.render(), "\n"), "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimPrefix(line, ticketIndent)

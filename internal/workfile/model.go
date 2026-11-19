@@ -159,8 +159,13 @@ type Ticket struct {
 	LinkedPRs []string
 }
 
+// FailedCheck is one failing job on a PR's latest commit. URL is where its
+// log is, if the code host gave one. Both come from a provider: untrusted.
+type FailedCheck struct{ Name, URL string }
+
 type Record struct {
 	ID, URL, Title, Summary string
+	ChecksURL               string // optional direct link to this code host's check results
 	// Head is the latest commit, so a check can tell whether a PR changed.
 	Head        string
 	Repository  string

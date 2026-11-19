@@ -26,6 +26,7 @@ func testConnections(ctx context.Context, e env) (int, error) {
 		}
 	}
 	v.heading("connections")
+	defer e.startProgramWork()()
 	code := 0
 	for _, name := range names {
 		detail, err := client.Test(ctx, name)

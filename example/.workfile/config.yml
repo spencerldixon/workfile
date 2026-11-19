@@ -1,0 +1,15 @@
+# Optional shared preferences. No secrets or executable commands belong here.
+# Full reference: docs/configuration.md
+# These settings keep the built-in defaults. Uncomment to start on your tickets.
+tracker:
+  # default_view: me
+  columns: [key, title, status, assignee, action]
+  preview:
+    comments: true
+    workflow: auto
+
+inbox:
+  poll: 2m
+  refresh_every: 5
+  full_every: 15
+  snooze: 1h

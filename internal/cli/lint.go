@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -57,9 +56,7 @@ func lint(_ context.Context, e env) (int, error) {
 		return code, writeLint(v.out, w, problems, warnings, gaps, code)
 	}
 	m := newLintModel(v, w, problems, warnings, gaps)
-	if v.color && isTerminal(v.out) {
-		m.gfx = detectGraphics()
-	}
+	m.gfx = v.outputGraphics()
 	fmt.Fprint(v.out, m.render())
 	return code, nil
 }
@@ -223,49 +220,27 @@ func joinMoves(moves []workfile.Move) string {
 	return strings.Join(names, " or ")
 }
 
-// flow draws the policy: stages in order, shortcuts above and returns below.
-// A move is green when it asks for a gate, red when it is a possible gap, and dim when it asks for nothing. A stage with a gap is red.
+// flow draws the policy with shortcuts above and returns below.
 func (m *lintModel) flow() []string {
 	if m.w == nil || len(m.problems) > 0 {
 		return nil
 	}
-	p := m.w.Policy
 	edges, broken := m.flowEdges()
-	ends := map[string]bool{}
-	for _, stage := range p.States {
-		ends[stage] = p.Transitions[stage].End
+	diagram := newWorkflowDiagram(m.w.Policy, edges, broken, true)
+	var sequence string
+	var img *picture
+	if m.v.color {
+		sequence, img = diagram.printedPicture(m.gfx, m.width(), lintImageID)
 	}
-	layout := newFlowLayout(p.States, ends, edges, broken)
-	flow := &layout
-	lines := []string{m.t.bold("Flow")}
-	if picture, ok := m.flowPicture(flow); ok {
-		return append(lines, append(picture, m.flowKey()...)...)
+	diagramLines := diagram.lines(m.v, m.width(), img)
+	if sequence != "" && len(diagramLines) > 0 {
+		diagramLines[0] = sequence + diagramLines[0]
 	}
-	v := m.v
-	v.width = m.width() + 10
-	if rows, ok := v.textFlow(flow, m.width()); ok {
-		for _, r := range rows {
-			lines = append(lines, strings.TrimRight(v.render(r), " "))
-		}
-		return append(lines, m.flowKey()...)
-	}
-	// Too wide for columns: strips of numbered stages.
-	labels := make([]cell, len(p.States))
-	for i, stage := range p.States {
-		labels[i] = styled(stage, "1")
-		if broken[stage] {
-			labels[i] = styled(stage, "1;"+red)
-		}
-	}
-	for _, r := range v.pipelineRows(p, workfile.Assessment{}, labels, edges) {
-		lines = append(lines, v.render(r))
-	}
+	lines := append([]string{m.t.bold("Flow")}, diagramLines...)
 	return append(lines, m.flowKey()...)
 }
 
-// flowEdges is the forward moves of the policy, each coloured for what it asks
-// for, and the stages that have a possible gap. Returns are left out: gates
-// guard the way forward.
+// flowEdges colours gated moves and highlights possible gaps.
 func (m *lintModel) flowEdges() ([]pipelineEdge, map[string]bool) {
 	p := m.w.Policy
 	open := map[[2]string]bool{}
@@ -276,14 +251,12 @@ func (m *lintModel) flowEdges() ([]pipelineEdge, map[string]bool) {
 			open[[2]string{move.From, move.To}] = true
 		}
 	}
-	edges := slices.DeleteFunc(pipelineEdges(p, workfile.Assessment{}), pipelineEdge.backward)
+	edges := pipelineEdges(p, workfile.Assessment{})
 	for i, e := range edges {
 		from, to := p.States[e.from], p.States[e.to]
 		edges[i].color = muted
-		for _, route := range p.Routes(from) {
-			if route.To == to && len(route.Requires) > 0 {
-				edges[i].color = green
-			}
+		if len(e.gates) > 0 {
+			edges[i].color = green
 		}
 		if open[[2]string{from, to}] {
 			edges[i].color = red
@@ -292,36 +265,15 @@ func (m *lintModel) flowEdges() ([]pipelineEdge, map[string]bool) {
 	return edges, broken
 }
 
-// flowPicture draws the policy as an image on a terminal that can show one. The
-// picture is the text diagram with nicer clothes, so it needs the same key.
-func (m *lintModel) flowPicture(layout *flowLayout) ([]string, bool) {
-	if !m.v.color {
-		return nil, false
-	}
-	img, rows, ok := flowImage(layout, m.gfx, min(m.width(), 120))
-	if !ok {
-		return nil, false
-	}
-	cols := img.Bounds().Dx() / m.gfx.cellW
-	p := picture{id: lintImageID, cols: cols, rows: rows}
-	sequence, err := transmit(img, p)
-	if err != nil {
-		return nil, false
-	}
-	lines := placeholderRows(p)
-	lines[0] = sequence + lines[0]
-	return lines, true
-}
-
 // flowKey says what the colours of the moves mean. Without colour it says
 // nothing, because it would describe differences nobody can see.
 func (m *lintModel) flowKey() []string {
 	if !m.v.color {
 		return nil
 	}
-	keys := []string{m.t.good("→") + " asks for a gate", m.t.dim("→ asks for nothing")}
+	keys := []string{m.t.good("->") + " Asks For A Gate", m.t.dim("-> Asks For Nothing")}
 	if len(m.gaps) > 0 {
-		keys = append(keys, m.t.bad("→")+" possible gap")
+		keys = append(keys, m.t.bad("->")+" Possible Gap")
 	}
 	// The key wraps between entries on a narrow screen.
 	lines := []string{""}

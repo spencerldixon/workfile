@@ -2,9 +2,11 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"slices"
+	"maps"
 	"strings"
+	"time"
 	"unicode"
 
 	"workfile/internal/workfile"
@@ -30,6 +32,9 @@ type tracker interface {
 	Detail(ctx context.Context, key string) (workfile.Detail, error)
 	// Image downloads an image named by a block's Attachment.
 	Image(ctx context.Context, attachment string) ([]byte, error)
+	// Activity reads what happened on these tickets after since, for the
+	// inbox. No keys means no request. Kinds supplied are in Role.Activity.
+	Activity(ctx context.Context, keys []string, since time.Time) ([]workfile.Activity, error)
 }
 
 // trackers lists the adapters for each tracker kind.
@@ -112,16 +117,7 @@ func (c *Client) Detail(ctx context.Context, key string) (workfile.Detail, error
 	if err != nil {
 		return workfile.Detail{}, err
 	}
-	d, err := t.Detail(ctx, key)
-	newestFirst(d.Comments)
-	return d, err
-}
-
-// newestFirst puts the latest comment at the top, whichever tracker wrote them.
-// Comments with no date go last. Replies keep their order, so a conversation
-// still reads from its start.
-func newestFirst(comments []workfile.Comment) {
-	slices.SortStableFunc(comments, func(a, b workfile.Comment) int { return b.Created.Compare(a.Created) })
+	return t.Detail(ctx, key)
 }
 
 func (c *Client) Image(ctx context.Context, attachment string) ([]byte, error) {
@@ -130,4 +126,90 @@ func (c *Client) Image(ctx context.Context, attachment string) ([]byte, error) {
 		return nil, err
 	}
 	return t.Image(ctx, attachment)
+}
+
+// Activity reads one poll's activity: comments on the tickets from the
+// tracker since trackerSince, and PR activity from every code host. A failing
+// connection does not hide the others: their results come back with an error
+// naming each failed connection.
+func (c *Client) Activity(ctx context.Context, q workfile.ActivityQuery, trackerSince time.Time) (workfile.ActivityResult, error) {
+	result := workfile.ActivityResult{Updated: map[string]time.Time{}}
+	var errs []error
+	if t, err := c.tracker(); err != nil {
+		errs = append(errs, err)
+	} else if events, err := t.Activity(ctx, q.Tickets, trackerSince); err != nil {
+		errs = append(errs, fmt.Errorf("%s: %w", c.Workspace.Policy.Tracker, err))
+	} else {
+		result.Events = append(result.Events, events...)
+	}
+	err := c.eachHost(func(name string, host codeHost) error {
+		got, err := host.Activity(ctx, q.PRs)
+		if err != nil {
+			return err
+		}
+		result.Events = append(result.Events, got.Events...)
+		maps.Copy(result.Updated, got.Updated)
+		return nil
+	})
+	if err != nil {
+		errs = append(errs, err)
+	}
+	return result, errors.Join(errs...)
+}
+
+// MyPRs finds open PRs the person wrote or was asked to review, from every
+// code host, in its listed repos. Like Activity, one failing host keeps the
+// others.
+func (c *Client) MyPRs(ctx context.Context) (map[string][]workfile.Record, error) {
+	out := map[string][]workfile.Record{}
+	err := c.eachHost(func(name string, host codeHost) error {
+		records, err := host.Mine(ctx)
+		if err != nil {
+			return err
+		}
+		out[name] = records
+		return nil
+	})
+	return out, err
+}
+
+// FailedChecks reads the failing jobs of one PR, from the code host
+// connection that supplied it.
+func (c *Client) FailedChecks(ctx context.Context, connection string, record workfile.Record) ([]workfile.FailedCheck, error) {
+	if c.Workspace.IsTracker(connection) {
+		return nil, fmt.Errorf("%s is not a code host", connection)
+	}
+	conn, err := c.connection(connection)
+	if err != nil {
+		return nil, err
+	}
+	host, ok := conn.(codeHost)
+	if !ok {
+		return nil, fmt.Errorf("%s is not a code host", connection)
+	}
+	return host.FailedChecks(ctx, record)
+}
+
+// eachHost runs fn for every code host connection, in name order, and joins
+// the errors, each named by its connection.
+func (c *Client) eachHost(fn func(string, codeHost) error) error {
+	var errs []error
+	for _, name := range workfile.SortedKeys(c.Workspace.Providers) {
+		if c.Workspace.IsTracker(name) {
+			continue
+		}
+		conn, err := c.connection(name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+			continue
+		}
+		host, ok := conn.(codeHost)
+		if !ok {
+			continue
+		}
+		if err := fn(name, host); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
 }

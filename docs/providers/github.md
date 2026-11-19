@@ -42,7 +42,8 @@ and [token setup](https://docs.github.com/en/authentication/keeping-your-account
 
 - `repos: [app, api]` reads only those two. A PR in any other repository is never linked, even when its title names a ticket.
 - `repos: all` reads every repository in the organisation that is not archived.
-- A listed repository that is archived or hidden from your token is reported, not silently dropped.
+- `wf setup --test` fails if a listed repository is archived or hidden from your
+  token. It also fails if GitHub reports PRs but withholds the sampled PR.
 - You must write one or the other. There is no default that reads more than you chose.
 
 Why explicit? Anyone reading `providers.yml` sees what workfile reads, and a
@@ -82,12 +83,35 @@ repeated links do not duplicate it.
 | `github.state` | `open` or `merged`. A queued PR is still `open`. |
 | `github.merge_queue` | `queued` when the PR has a merge queue entry; otherwise `none`. Missing membership is unknown. |
 | `github.author` | The login of the person who wrote the PR. |
-| `github.review_requests` | The logins of people asked by name to review. |
+| `github.review_requests` | Requested user logins, or `team:slug` for a team request. Team membership is not guessed. |
+| `github.changes_requested` | Logins whose latest opinion requests changes. |
+| `github.mergeable` | `mergeable` or `conflicting`. GitHub's `UNKNOWN` stays unavailable. |
 
 Approvals count each reviewer once. If a reviewer's latest opinion asks for
 changes or was dismissed, it is not an approval. A comment-only review does not
 cancel an earlier approval. With `by`, the names must be people whose account
 for this connection is their GitHub login.
+
+### Action inbox
+
+`wf tracker` reads conflicts and requested changes in the normal linked-PR
+request, alongside CI and review requests. It adds no separate requests for
+these fields. A direct checks link is supplied for `c` in the tracker.
+When you open a ticket whose PR has failing checks, the tracker makes one more
+request for that PR, to name the failing jobs and link to their logs.
+Review requests are evidence of waiting, not approvals. An empty request list
+and an unavailable request list are different. User and team requests are both
+preserved, but a team request never implies that a particular member was asked.
+
+### Inbox activity
+
+`wf inbox` polls only open PRs on work in flight, in two steps. One small
+GraphQL query per 100 PRs asks only when each was last updated. Only PRs
+updated since the last poll have their timeline read: the newest 50 comments,
+reviews, review requests and commits since the last look. A poll where nothing changed is
+one request, plus two searches that find open PRs you wrote or were asked to
+review (`author:@me`, `review-requested:@me`), limited to the repos in scope.
+Each reads one page of 50.
 
 ### Merge queues
 

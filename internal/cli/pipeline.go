@@ -8,34 +8,10 @@ import (
 	"workfile/internal/workfile"
 )
 
-func (v view) stateLabel(a workfile.Assessment, from, state string, current bool) cell {
-	color := muted
-	if from == a.Ticket.State {
-		for _, r := range a.Routes {
-			if r.To == state {
-				color = routeColor(r)
-				break
-			}
-		}
-	}
-	if current {
-		color = green
-		if a.Ticket.Error != "" || a.Violation() || a.Blocked() {
-			color = red
-		}
-		color = "1;4;" + color
-		if !v.color {
-			state += " (current)"
-		}
-	} else if color != muted {
-		color = "1;" + color
-	}
-	return styled(state, color)
-}
-
 type pipelineEdge struct {
 	from, to, lane int
 	color          string
+	gates          []string
 }
 
 func (e pipelineEdge) low() int       { return min(e.from, e.to) }
@@ -56,11 +32,11 @@ func pipelineEdges(p workfile.Policy, a workfile.Assessment) []pipelineEdge {
 			if !ok || to == from {
 				continue
 			}
-			e := pipelineEdge{from: from, to: to, lane: -1, color: muted}
+			e := pipelineEdge{from: from, to: to, lane: -1, color: muted, gates: route.Requires}
 			if state == a.Ticket.State {
 				for _, r := range a.Routes {
 					if r.To == route.To {
-						e.color = routeColor(r)
+						e.color = moveTone(r)
 						break
 					}
 				}
@@ -79,18 +55,12 @@ func pipelineEdges(p workfile.Policy, a workfile.Assessment) []pipelineEdge {
 	return edges
 }
 
-func (v view) pipelineLabels(p workfile.Policy, a workfile.Assessment) []cell {
-	labels := make([]cell, len(p.States))
-	for i, state := range p.States {
-		labels[i] = v.stateLabel(a, a.Ticket.State, state, state == a.Ticket.State)
-		// A short marker keeps the chain compact and works without colour. The
-		// underlined current state remains unchanged in coloured output.
-		labels[i].text = clean(state)
-		if state == a.Ticket.State {
-			labels[i].text += "*"
-		}
+func gateLabel(gates []string) string {
+	names := make([]string, len(gates))
+	for i, gate := range gates {
+		names[i] = "🔒 " + boardStateTitle(gate)
 	}
-	return labels
+	return "[" + strings.Join(names, ", ") + "]"
 }
 
 func chainArrow(edges []pipelineEdge, from int, gap int) cell {
@@ -98,6 +68,9 @@ func chainArrow(edges []pipelineEdge, from int, gap int) cell {
 	found := false
 	for _, e := range edges {
 		if e.from == from && e.to == from+1 {
+			if len(e.gates) > 0 {
+				return styled("-"+gateLabel(e.gates)+"-> ", e.color)
+			}
 			color, found = e.color, true
 			break
 		}
@@ -107,25 +80,18 @@ func chainArrow(edges []pipelineEdge, from int, gap int) cell {
 	}
 	switch gap {
 	case 5:
-		return styled(" ──→ ", color)
-	case 3:
-		return styled(" → ", color)
+		return styled(" --> ", color)
+	case 4:
+		return styled(" -> ", color)
 	default:
-		return styled("→", color)
+		return styled(">", color)
 	}
-}
-
-func (v view) pipeline(p workfile.Policy, a workfile.Assessment) []row {
-	if len(p.States) == 0 {
-		return nil
-	}
-	return v.pipelineRows(p, a, v.pipelineLabels(p, a), pipelineEdges(p, a))
 }
 
 // pipelineRows draws the chain, shortcuts and returns for labels and edges the
-// caller has already styled. a only supplies the current stage, if any.
-func (v view) pipelineRows(p workfile.Policy, a workfile.Assessment, labels []cell, edges []pipelineEdge) []row {
-	for _, gap := range []int{5, 3, 1} {
+// caller has already styled.
+func (v view) pipelineRows(labels []cell, edges []pipelineEdge) []row {
+	for _, gap := range []int{5, 4, 1} {
 		var chain row
 		anchors := make([]int, len(labels))
 		for i, label := range labels {
@@ -139,21 +105,22 @@ func (v view) pipelineRows(p workfile.Policy, a workfile.Assessment, labels []ce
 		if width > v.innerWidth() {
 			continue
 		}
-		result := pipelineArcs(edges, anchors, width, true)
-		result = append(result, chain)
-		result = append(result, pipelineArcs(edges, anchors, width, false)...)
-		if slices.Contains(p.States, a.Ticket.State) {
-			result = append(result, textRows("* current stage", "", muted, "", v.innerWidth())...)
+		result, forwardFit := pipelineArcs(edges, anchors, width, true)
+		returns, returnsFit := pipelineArcs(edges, anchors, width, false)
+		if !forwardFit || !returnsFit {
+			continue
 		}
+		result = append(result, chain)
+		result = append(result, returns...)
 		return result
 	}
-	return v.pipelineReferences(p, a, labels, edges)
+	return v.pipelineReferences(labels, edges)
 }
 
 // Draw forward shortcuts above the chain and returns below it. Each endpoint
 // is anchored to the centre of its one state label. Plain vertical strokes at
 // crossings are bridges, not junctions; arrowheads touch destination labels.
-func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []row {
+func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) ([]row, bool) {
 	var arcs []pipelineEdge
 	lanes := 0
 	for _, e := range edges {
@@ -164,7 +131,7 @@ func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []
 		lanes = max(lanes, e.lane+1)
 	}
 	if lanes == 0 {
-		return nil
+		return nil, true
 	}
 	height := lanes * 2
 	grid := make([][]cell, height)
@@ -186,11 +153,11 @@ func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []
 		y := arcRow(e)
 		left, right := anchors[e.low()], anchors[e.high()]
 		for x := left + 1; x < right; x++ {
-			grid[y][x] = styled("─", e.color)
+			grid[y][x] = styled("-", e.color)
 		}
-		arrow := "→"
+		arrow := ">"
 		if e.backward() {
-			arrow = "←"
+			arrow = "<"
 		}
 		grid[y][(left+right)/2] = styled(arrow, e.color)
 	}
@@ -202,30 +169,18 @@ func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []
 				start, end = y+1, height
 			}
 			for at := start; at < end; at++ {
-				grid[at][x] = styled("│", e.color)
+				grid[at][x] = styled("|", e.color)
 			}
 		}
 	}
 	for _, e := range arcs {
 		y := arcRow(e)
 		left, right := anchors[e.low()], anchors[e.high()]
-		leftCorner, rightCorner := "└", "┘"
+		grid[y][left], grid[y][right] = styled("+", e.color), styled("+", e.color)
 		if above {
-			leftCorner, rightCorner = "┌", "┐"
-		}
-		// Routes sharing an endpoint really do join at that stage; unlike
-		// unrelated crossings, these need a visible branch junction.
-		if grid[y][left].text == "│" {
-			leftCorner = "├"
-		}
-		if grid[y][right].text == "│" {
-			rightCorner = "┤"
-		}
-		grid[y][left], grid[y][right] = styled(leftCorner, e.color), styled(rightCorner, e.color)
-		if above {
-			grid[height-1][anchors[e.to]] = styled("↓", e.color)
+			grid[height-1][anchors[e.to]] = styled("v", e.color)
 		} else {
-			grid[0][anchors[e.to]] = styled("↑", e.color)
+			grid[0][anchors[e.to]] = styled("^", e.color)
 		}
 	}
 	// Keep a direction arrow on each arc even when its midpoint crosses a
@@ -233,9 +188,9 @@ func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []
 	for _, e := range arcs {
 		y := arcRow(e)
 		left, right := anchors[e.low()], anchors[e.high()]
-		arrow := "→"
+		arrow := ">"
 		if e.backward() {
-			arrow = "←"
+			arrow = "<"
 		}
 		found := false
 		for x := left + 1; x < right; x++ {
@@ -247,7 +202,7 @@ func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []
 		middle := (left + right) / 2
 		for distance := 0; distance < right-left; distance++ {
 			for _, x := range []int{middle - distance, middle + distance} {
-				if x > left && x < right && grid[y][x].text == "─" {
+				if x > left && x < right && grid[y][x].text == "-" {
 					grid[y][x] = styled(arrow, e.color)
 					found = true
 					break
@@ -257,6 +212,29 @@ func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []
 				break
 			}
 		}
+	}
+	for _, e := range arcs {
+		if len(e.gates) == 0 {
+			continue
+		}
+		y := arcRow(e)
+		left, right := anchors[e.low()], anchors[e.high()]
+		label := styled(gateLabel(e.gates), e.color)
+		size := rowWidth(row{label})
+		start := left + 1
+		for x := start; x < right; x++ {
+			if grid[y][x].text != "-" {
+				start = x + 1
+			}
+			if x-start+1 == size {
+				break
+			}
+		}
+		if start+size > right {
+			return nil, false
+		}
+		clear(grid[y][start : start+size])
+		grid[y][start] = label
 	}
 	result := make([]row, len(grid))
 	for y, cells := range grid {
@@ -269,14 +247,14 @@ func pipelineArcs(edges []pipelineEdge, anchors []int, width int, above bool) []
 			}
 		}
 	}
-	return result
+	return result, true
 }
 
 // A graph wider than the terminal becomes horizontal strips of numbered
 // labels. Cross-strip moves, shortcuts and returns refer to those numbers;
 // names are still printed once, and no connector implies an unconfigured move.
-func (v view) pipelineReferences(p workfile.Policy, a workfile.Assessment, labels []cell, edges []pipelineEdge) []row {
-	result := textRows("Links use stage numbers.", "", muted, "", v.innerWidth())
+func (v view) pipelineReferences(labels []cell, edges []pipelineEdge) []row {
+	result := textRows("Links Use Stage Numbers.", "", muted, "", v.innerWidth())
 	groups := make([]int, len(labels))
 	var strip row
 	group := 0
@@ -284,7 +262,7 @@ func (v view) pipelineReferences(p workfile.Policy, a workfile.Assessment, label
 		label.text = fmt.Sprintf("%d.%s", i+1, label.text)
 		var addition row
 		if len(strip) > 0 {
-			addition = append(addition, chainArrow(edges, i-1, 3))
+			addition = append(addition, chainArrow(edges, i-1, 4))
 		}
 		addition = append(addition, label)
 		if len(strip) > 0 && rowWidth(strip)+rowWidth(addition) > v.innerWidth() {
@@ -306,35 +284,36 @@ func (v view) pipelineReferences(p workfile.Policy, a workfile.Assessment, label
 			if e.from != from || e.to == from+1 && groups[e.from] == groups[e.to] {
 				continue
 			}
-			arrow := "→ "
-			if e.backward() {
-				arrow = "↩ "
+			label := "-> " + fmt.Sprint(e.to+1)
+			if len(e.gates) > 0 {
+				label += " " + gateLabel(e.gates)
 			}
-			link := styled(arrow+fmt.Sprint(e.to+1), e.color)
+			link := styled(label, e.color)
+			if rowWidth(row{prefix, link}) > v.innerWidth() {
+				if len(references) > 0 {
+					result = append(result, references)
+					references = nil
+				}
+				result = append(result, textRows(prefix.text+link.text, "", e.color, "", v.innerWidth())...)
+				continue
+			}
 			if len(references) == 0 {
 				references = row{prefix}
 			}
 			addition := row{link}
 			if len(references) > 1 {
-				addition = append(row{styled(" · ", muted)}, addition...)
+				addition = append(row{styled(", ", muted)}, addition...)
 			}
-			if rowWidth(references)+rowWidth(addition) > v.innerWidth() {
+			if len(references) > 1 && rowWidth(references)+rowWidth(addition) > v.innerWidth() {
 				result = append(result, references)
 				references = row{prefix}
 				addition = row{link}
-				if rowWidth(references)+rowWidth(addition) > v.innerWidth() {
-					result = append(result, references)
-					references = nil
-				}
 			}
 			references = append(references, addition...)
 		}
 		if len(references) > 0 {
-			result = append(result, splitRow(references, v.innerWidth())...)
+			result = append(result, references)
 		}
-	}
-	if slices.Contains(p.States, a.Ticket.State) {
-		result = append(result, textRows("* current stage", "", muted, "", v.innerWidth())...)
 	}
 	return result
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"workfile/internal/workfile"
 )
@@ -256,6 +257,10 @@ func conformTracker(t *testing.T, f trackerFixture) {
 		noLeak(t, "Identity", err, tokens)
 		_, err = tr.Test(ctx)
 		noLeak(t, "Test", err, tokens)
+		if len(workfile.Kinds[f.Provider.Kind].Tracker.Activity) > 0 {
+			_, err = tr.Activity(ctx, []string{f.InScope}, time.Time{})
+			noLeak(t, "Activity", err, tokens)
+		}
 	})
 
 	t.Run("FactsKnownOrExplained", func(t *testing.T) {
@@ -496,6 +501,10 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 		noLeak(t, "Identity", err, tokens)
 		_, err = h.Test(ctx)
 		noLeak(t, "Test", err, tokens)
+		_, err = h.Activity(ctx, []workfile.PRCursor{{ID: "app#1"}})
+		noLeak(t, "Activity", err, tokens)
+		_, err = h.Mine(ctx)
+		noLeak(t, "Mine", err, tokens)
 	})
 
 	t.Run("FactsKnownOrExplained", func(t *testing.T) {

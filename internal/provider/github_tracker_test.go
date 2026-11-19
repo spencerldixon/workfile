@@ -261,7 +261,7 @@ func TestGitHubListingReadsEveryPage(t *testing.T) {
 		t.Fatalf("%d listings in %d requests, cursors %v", len(listing), rec.count(), after)
 	}
 	first := listing[0]
-	want := workfile.Listing{Key: "app#1", Title: "Ticket 1", Status: "In review", State: "review", Assignee: "Bob", AssigneeID: "example-bob", Type: "Bug", URL: "https://github.com/example-team/app/issues/1"}
+	want := workfile.Listing{Origin: "app", Key: "app#1", Title: "Ticket 1", Status: "In review", State: "review", Assignee: "Bob", AssigneeID: "example-bob", Type: "Bug", URL: "https://github.com/example-team/app/issues/1"}
 	if first != want {
 		t.Fatalf("got %+v", first)
 	}
