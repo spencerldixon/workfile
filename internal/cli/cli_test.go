@@ -9,41 +9,86 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mattn/go-runewidth"
 	"workfile/internal/workfile"
 )
 
 type fakeSource struct {
+	mu           sync.Mutex
 	tickets      []workfile.Ticket
 	limit        int
 	keys, tested []string
 	testErrors   map[string]error
 	// wf tickets
-	listing     []workfile.Listing
-	listingErr  error
-	scope       string
-	identityErr error
-	identities  int
-	details     map[string]workfile.Detail
-	detailErr   error
-	policyErr   error
-	detailReads []string
-	policyReads []string
-	images      map[string][]byte
-	imageReads  []string
+	listing      []workfile.Listing
+	listingReads int
+	listingErr   error
+	scope        string
+	identityErr  error
+	identities   int
+	details      map[string]workfile.Detail
+	detailErr    error
+	policyErr    error
+	detailReads  []string
+	policyReads  []string
+	records      map[string]map[string][]workfile.Record
+	images       map[string][]byte
+	imageReads   []string
+	// wf inbox
+	activity        []workfile.Activity
+	activityErr     error
+	activityQueries []workfile.ActivityQuery
+	activitySince   []time.Time
+	updated         map[string]time.Time
+	myPRs           map[string][]workfile.Record
+	myPRsErr        error
+	myPRsReads      int
+	// failing jobs, by record ID
+	failedChecks     map[string][]workfile.FailedCheck
+	failedCheckReads []string
+}
+
+func (f *fakeSource) FailedChecks(_ context.Context, connection string, record workfile.Record) ([]workfile.FailedCheck, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failedCheckReads = append(f.failedCheckReads, connection+"/"+record.ID)
+	return f.failedChecks[record.ID], nil
+}
+
+func (f *fakeSource) Activity(_ context.Context, q workfile.ActivityQuery, since time.Time) (workfile.ActivityResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.activityQueries = append(f.activityQueries, q)
+	f.activitySince = append(f.activitySince, since)
+	return workfile.ActivityResult{Events: f.activity, Updated: f.updated}, f.activityErr
+}
+func (f *fakeSource) MyPRs(context.Context) (map[string][]workfile.Record, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.myPRsReads++
+	return f.myPRs, f.myPRsErr
 }
 
 func (f *fakeSource) Listing(_ context.Context, scope string) ([]workfile.Listing, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listingReads++
 	f.scope = scope
 	return f.listing, f.listingErr
 }
 func (f *fakeSource) Detail(_ context.Context, key string) (workfile.Detail, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.detailReads = append(f.detailReads, key)
 	return f.details[key], f.detailErr
 }
 func (f *fakeSource) Image(_ context.Context, attachment string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.imageReads = append(f.imageReads, attachment)
 	if data, ok := f.images[attachment]; ok {
 		return data, nil
@@ -52,6 +97,8 @@ func (f *fakeSource) Image(_ context.Context, attachment string) ([]byte, error)
 }
 
 func (f *fakeSource) Tickets(_ context.Context, keys []string, limit int) ([]workfile.Ticket, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.limit = limit
 	f.keys = keys
 	f.policyReads = append(f.policyReads, keys...)
@@ -68,9 +115,19 @@ func (f *fakeSource) Tickets(_ context.Context, keys []string, limit int) ([]wor
 	return result, nil
 }
 func (f *fakeSource) Records(_ context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error) {
-	return tickets, nil, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	result := slices.Clone(tickets)
+	for i := range result {
+		if records, ok := f.records[result[i].Key]; ok {
+			result[i].Records = records
+		}
+	}
+	return result, nil, nil
 }
 func (f *fakeSource) Identity(context.Context, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.identities++
 	return "example-bob", f.identityErr
 }

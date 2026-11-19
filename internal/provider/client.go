@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"workfile/internal/workfile"
@@ -21,6 +22,7 @@ type Client struct {
 	Credentials            workfile.Credentials
 	githubURL, jiraGateway string
 	jiraBases              map[string]string
+	jiraMedia              sync.Map // connection/attachment id -> *jiraMediaIdentity
 	Now                    func() time.Time
 }
 

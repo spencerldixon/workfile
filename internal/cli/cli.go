@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"workfile/internal/provider"
 	"workfile/internal/snapshot"
@@ -24,6 +25,7 @@ Usage: wf <command> [options]
 
   setup                       Connect your tools and write .workfile/
   tracker                     Your tracker, scoped to the team: browse and read tickets
+  inbox                       What happened to your work, and what wants you now
   status [TICKET ...]         Where work is, and what it needs
   check TICKET --to STAGE     May this ticket move now? (exit 0 yes, 1 no, 2 cannot tell)
   lint                        Is the policy sound? Which gates guard each stage
@@ -40,7 +42,7 @@ Options for status:
   --evidence                  Show the evidence for each requirement
 
 Options for tracker:
-  --view all|me|STAGE         Start on this view (left and right to switch)
+  --view VIEW                 Start on all, me, a stage or a saved view
 
 Options:
   --test [NAME ...]           setup: test your connections, or the named ones
@@ -98,6 +100,9 @@ type source interface {
 	Listing(context.Context, string) ([]workfile.Listing, error)
 	Detail(context.Context, string) (workfile.Detail, error)
 	Image(context.Context, string) ([]byte, error)
+	Activity(context.Context, workfile.ActivityQuery, time.Time) (workfile.ActivityResult, error)
+	MyPRs(context.Context) (map[string][]workfile.Record, error)
+	FailedChecks(ctx context.Context, connection string, record workfile.Record) ([]workfile.FailedCheck, error)
 }
 
 // command is one wf command. Each has its own file, named after it.
@@ -112,11 +117,12 @@ type command struct {
 // env is what a command works with. w and client are nil for a noWorkspace
 // command.
 type env struct {
-	view   view
-	w      *workfile.Workspace
-	client source
-	o      options
-	errOut io.Writer
+	view    view
+	w       *workfile.Workspace
+	client  source
+	o       options
+	errOut  io.Writer
+	tracker workfile.TrackerSettings
 	// connect opens the providers of a workspace. A noWorkspace command that
 	// reads tickets, such as setup --test, calls it after loading one itself.
 	connect func(*workfile.Workspace) source
@@ -127,6 +133,7 @@ type env struct {
 var commands = map[string]command{
 	"setup":   setupCommand,
 	"tracker": trackerCommand,
+	"inbox":   inboxCommand,
 	"status":  statusCommand,
 	"check":   checkCommand,
 	"lint":    lintCommand,

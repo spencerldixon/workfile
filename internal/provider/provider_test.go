@@ -379,7 +379,7 @@ func TestConnectionChecksReadIdentityAndScope(t *testing.T) {
 				return 200, `{"data":{"viewer":{"login":"example-bob"}}}`
 			}
 			if strings.Contains(body["query"].(string), "organization(login") {
-				return 200, `{"data":{"organization":{"repositories":{"nodes":[{"name":"api"}]}}}}`
+				return 200, `{"data":{"organization":{"repositories":{"nodes":[{"name":"app"},{"name":"api"}]}}}}`
 			}
 			if body["variables"].(map[string]any)["first"] != float64(1) {
 				t.Error("connection check must read at most one PR")

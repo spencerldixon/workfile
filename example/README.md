@@ -1,4 +1,4 @@
-# Example policies
+# Example policies and config
 
 Everything here is made up: the organisation, the projects, the people and the
 account IDs. The files hold the names of credentials, never the credentials
@@ -7,7 +7,8 @@ themselves.
 - [`.workfile/`](.workfile/): Jira tickets with GitHub PRs. Work needs a good
   description, a PR, passing CI (continuous integration: automated checks for a
   change), and reviews. High-risk PRs also need a named reviewer's
-  approval.
+  approval. Includes optional [`config.yml`](.workfile/config.yml) for tracker
+  and inbox preferences.
 - [`branching/.workfile/`](branching/.workfile/): twelve stages with QA and
   security branches, a shortcut to release, different gates for each
   destination, cancelling, and valid returns. Code review also needs passing CI.
@@ -28,6 +29,12 @@ Then change the site, projects, repos, statuses, organisation and people to
 match your team. Make your private credentials file (see
 [Using wf](../docs/usage.md#personal-files-and-settings)), and run
 `wf setup --test --dir /path/to/your-project`.
+
+The shared `config.yml` spells out built-in preferences without changing them.
+Uncomment `default_view: me` to start tracker on your assigned tickets, or edit
+other settings for your team. Keep tokens, identity overrides
+and agent commands in private files. See [Configuration](../docs/configuration.md)
+for all settings, board views and precedence.
 
 The GitHub example needs at least one PR before a ticket reaches review. Rules
 about reviews do not need a PR to exist: they are skipped when no PR is linked.

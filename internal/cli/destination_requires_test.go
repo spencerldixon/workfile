@@ -25,7 +25,7 @@ func TestDestinationRequirementsReachStatusJSONAndHealth(t *testing.T) {
 		t.Fatalf("shortcut not actionable: %s", out)
 	}
 	pipeline, _, _ := strings.Cut(out[strings.Index(out, "WHERE IT IS"):], "Ready to move")
-	for _, state := range []string{"todo", "ready", "done"} {
+	for _, state := range []string{"Todo", "Ready", "Done"} {
 		if strings.Count(pipeline, state) != 1 {
 			t.Fatalf("%s repeated in pipeline: %s", state, pipeline)
 		}

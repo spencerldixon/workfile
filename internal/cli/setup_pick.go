@@ -55,8 +55,9 @@ func chosenPicks(order []string, set map[string]bool) []string {
 func anyPicked(set map[string]bool) bool { return len(set) > 0 }
 
 type pickDelegate struct {
-	t      theme
-	picked map[string]bool
+	t            theme
+	picked       map[string]bool
+	single, nerd bool
 }
 
 func (pickDelegate) Height() int                         { return 1 }
@@ -68,33 +69,40 @@ func (d pickDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 		return
 	}
 	line := runewidth.Truncate(p.label, max(m.Width()-6, 4), "…")
-	box := d.t.dim("[ ]")
+	active := index == m.Index()
+	mark := d.t.dim(setupIcon(d.nerd, "○", "\uf10c"))
+	if d.single {
+		if active {
+			mark = d.t.accent(setupIcon(d.nerd, "●", "\uf192"))
+			line = d.t.accent(line)
+		}
+		fmt.Fprint(w, mark+" "+line)
+		return
+	}
 	if d.picked[p.key] {
-		box = d.t.good("[✓]")
+		mark = d.t.good(setupIcon(d.nerd, "✓", "\uf00c"))
 	} else {
 		line = d.t.dim(line)
 	}
-	if index == m.Index() {
-		if d.picked[p.key] {
-			line = d.t.bold(line)
-		}
-		fmt.Fprint(w, d.t.accent("› ")+box+" "+line)
+	if active {
+		fmt.Fprint(w, d.t.accent(setupIcon(d.nerd, "›", "\uf054"))+" "+mark+" "+d.t.accent(line))
 		return
 	}
-	fmt.Fprint(w, "  "+box+" "+line)
+	fmt.Fprint(w, "  "+mark+" "+line)
 }
 
-// picker is a filterable list where space ticks rows. It is used for Jira
-// projects and GitHub repositories.
+// picker displays provider and scope choices.
 type picker struct {
-	list   list.Model
-	picked map[string]bool
-	order  []string
+	list         list.Model
+	theme        theme
+	single, nerd bool
+	picked       map[string]bool
+	order        []string
 }
 
 func newPicker(t theme, styles textinput.Styles, faint lipgloss.Style) picker {
 	picked := map[string]bool{}
-	l := list.New(nil, pickDelegate{t, picked}, 40, 6)
+	l := list.New(nil, pickDelegate{t: t, picked: picked}, 40, 6)
 	l.SetShowTitle(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
@@ -106,7 +114,13 @@ func newPicker(t theme, styles textinput.Styles, faint lipgloss.Style) picker {
 	l.Styles.Filter = styles
 	l.Styles.NoItems = faint
 	l.FilterInput.SetStyles(styles)
-	return picker{list: l, picked: picked}
+	return picker{list: l, theme: t, picked: picked}
+}
+
+func (p *picker) setSingle(single, filter bool) {
+	p.single = single
+	p.list.SetFilteringEnabled(filter)
+	p.list.SetDelegate(pickDelegate{t: p.theme, picked: p.picked, single: single, nerd: p.nerd})
 }
 
 func (p *picker) setItems(items []pickItem) {
@@ -133,6 +147,7 @@ func (p *picker) toggle() {
 func (p *picker) chosen() []string { return chosenPicks(p.order, p.picked) }
 
 func (p *picker) size(width int) {
+	p.list.SetDelegate(pickDelegate{t: p.theme, picked: p.picked, single: p.single, nerd: p.nerd})
 	p.list.SetSize(width, min(9, max(4, len(p.list.Items())+1))) // one row is the filter line
 }
 
@@ -143,7 +158,9 @@ func (p *picker) key(msg tea.KeyPressMsg) (cmd tea.Cmd, done bool) {
 	if !p.filtering() {
 		switch k {
 		case "space", " ":
-			p.toggle()
+			if !p.single {
+				p.toggle()
+			}
 			return nil, false
 		case "enter":
 			return nil, true

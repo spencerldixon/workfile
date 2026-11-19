@@ -116,8 +116,9 @@ a section below says it is for old output only.
 
 ### Panels, not boxes
 
-- Draw each section as a **panel**: a title and a soft background. No edge bar
-  (`▌`) and no box-drawing borders. Space and the background do the grouping.
+- Draw each section as a **panel**: a title and a soft background. Space and
+  the background do the grouping. A left border may mark the currently selected
+  item; remove it when selection moves. Keep other panels and items borderless.
 - Build panels with Lip Gloss. Take the background from the terminal's own
   background, so it follows the person's theme. If the terminal does not
   answer, draw the panel with no background at all.

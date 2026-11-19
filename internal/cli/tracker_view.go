@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,23 +13,118 @@ import (
 	"workfile/internal/workfile"
 )
 
+const trackerHeaderRows = 3
+
 func (m *trackerModel) render() string {
-	lines := append(m.t.scopeLines(m.e.w, m.width-2*len(ticketIndent)), m.header())
-	rows := m.listRows()
-	list := m.listLines()
-	lines = append(lines, list[:min(rows, len(list))]...)
-	for len(lines) < rows+m.topRows() {
-		lines = append(lines, "")
+	content := m.renderContent()
+	if m.pickingProject || m.pickingPR {
+		return m.renderProjectPicker(content)
+	}
+	return content
+}
+
+func (m *trackerModel) renderContent() string {
+	lines := []string{m.masthead(), "", m.header()}
+	if m.showingBoard() {
+		height := max(0, m.height-1)
+		lines = append(lines, m.boardLines(height-len(lines))...)
+		lines = fitTrackerRows(lines, height)
+	} else {
+		if !m.onTicket && !m.shownView().board() {
+			lines = append(lines, "", m.columnHeadings())
+			lines = append(lines, fitTrackerRows(m.listLines(), m.listRows())...)
+		}
+		lines = append(lines, "", m.previewHeading())
+		lines = append(lines, m.readerHeader...)
+		lines = append(lines, m.previewLines()...)
+	}
+	return strings.Join(append(lines, m.footer()), "\n")
+}
+
+// fitTrackerRows keeps the next section anchored when results fill fewer rows.
+func fitTrackerRows(lines []string, height int) []string {
+	if len(lines) >= height {
+		return lines[:height]
+	}
+	return append(lines, make([]string, height-len(lines))...)
+}
+
+func (m *trackerModel) previewLines() []string {
+	left, right := m.columns()
+	if m.onTicket && m.readerWorkfile && right == 0 {
+		return strings.Split(m.side.View(), "\n")
 	}
 	main := strings.Split(m.pane.View(), "\n")
-	if _, right := m.columns(); right > 0 {
-		for i, line := range strings.Split(m.side.View(), "\n") {
+	if right > 0 {
+		side := strings.Split(m.side.View(), "\n")
+		for i, line := range side {
 			if i < len(main) {
-				main[i] += " " + line
+				main[i] = m.t.onPanel(main[i], left) + " " + line
 			}
 		}
 	}
-	return strings.Join(append(append(lines, main...), m.footer()), "\n")
+	return main
+}
+
+// masthead keeps the app and scope on one quiet line, above the views.
+func (m *trackerModel) masthead() string {
+	label := m.t.bold("workfile") + m.t.dim(" / tracker")
+	room := m.width - 2*len(ticketIndent) - ansi.StringWidth(label) - 3
+	scope := scopeText(m.e.w, max(0, room))
+	if project := m.projectOrigins[m.shownView()]; project != "" {
+		scope = ansi.Truncate(clean(project), max(0, room), "…")
+	}
+	if room < 4 {
+		scope = ""
+	}
+	return m.bar(label, m.t.dim(scope), m.width)
+}
+
+// bar aligns a label and secondary text with the ticket panels' inset.
+func (m *trackerModel) bar(left, right string, width int) string {
+	inner := max(0, width-2*len(ticketIndent))
+	return ticketIndent + alignPair(left, right, inner) + ticketIndent
+}
+
+// previewHeading stays outside the scrolling content, so focus is always clear.
+func (m *trackerModel) previewHeading() string {
+	label, hint := "Ticket preview", "enter to read"
+	if m.onTicket {
+		label, hint = "Ticket · reading", "tab to list"
+		if m.shownView().board() {
+			hint = "esc to board"
+		}
+	}
+	if _, ok := m.selected(); !ok {
+		hint = ""
+	}
+	left, right := m.columns()
+	if m.onTicket && m.readerWorkfile && right == 0 {
+		label, hint = "Workfile · reading", "w ticket"
+	}
+	if runewidth.StringWidth(label)+runewidth.StringWidth(hint)+4 > left-2*len(ticketIndent) {
+		hint = ""
+	}
+	if right == 0 {
+		return m.bar(m.highlight(label), m.t.dim(hint), left)
+	}
+	workfile, workfileHint := "Workfile", ""
+	if m.onTicket && m.readerWorkfile {
+		workfile, workfileHint = "Workfile · reading", "w ticket"
+		label, hint = "Ticket", ""
+	}
+	return m.bar(m.highlight(label), m.t.dim(hint), left) + " " +
+		m.bar(m.highlight(workfile), m.t.dim(workfileHint), right)
+}
+
+// highlight is a small title chip, not a background for the section's content.
+func (m *trackerModel) highlight(label string) string {
+	if !m.t.color {
+		return label
+	}
+	return m.t.render(" "+label+" ", func(st lipgloss.Style) lipgloss.Style {
+		return st.Bold(true).Reverse(true)
+	})
 }
 
 // tab draws one view's name. The current one stands out by more than colour.
@@ -37,12 +133,26 @@ func (m *trackerModel) tab(view ticketView, counts bool) string {
 	label := view.label()
 	if counts && (!view.me || m.me != "") {
 		label += fmt.Sprintf(" %d", m.counts[view])
+		if view.attention() != "" {
+			// The "+" slot is kept as a space once checks finish, so the
+			// tabs after it do not move as tickets are read.
+			mark := " "
+			if checked, total := m.checkProgress(view); checked < total || m.whoLoading {
+				mark = "+"
+			}
+			label += mark
+		}
 	}
 	switch {
 	case view != m.shownView():
 		return " " + m.t.dim(label) + " "
+	case m.t.color && m.tabFocus:
+		// Lip Gloss styles underlined spaces separately and drops reverse video.
+		return ansi.Style{}.Bold().Underline(true).Reverse(true).Styled(" " + label + " ")
 	case m.t.color:
-		return m.t.render(" "+label+" ", func(st lipgloss.Style) lipgloss.Style { return st.Reverse(true).Bold(true) })
+		// highlight pads one space each side, the same room as the other tabs,
+		// so the strip does not shift as the current view changes.
+		return m.highlight(label)
 	}
 	return "[" + label + "]"
 }
@@ -63,19 +173,11 @@ func (m *trackerModel) tabs(room int) string {
 	if line := row(false); ansi.StringWidth(line) <= room {
 		return line
 	}
-	return m.tab(m.shownView(), false)
+	return ansi.Truncate(m.tab(m.shownView(), false), max(0, room), "…")
 }
 
-// header says what the list holds: the views, the search, and how many tickets
-// of the view the search leaves. It runs the full width.
+// header shows the view tabs, ticket search and sync time.
 func (m *trackerModel) header() string {
-	right := ""
-	if m.loaded {
-		right = fmt.Sprintf("%d of %d", len(m.list.VisibleItems()), m.total)
-	}
-	if m.busy() {
-		right = strings.TrimSpace(m.spin.View() + " " + right)
-	}
 	query := ""
 	switch m.list.FilterState() {
 	case list.Filtering:
@@ -85,7 +187,16 @@ func (m *trackerModel) header() string {
 	}
 	margin := len(ticketIndent)
 	inner := m.width - 2*margin
-	searchRoom := min(runewidth.StringWidth(query)+2, inner/2)
+	searchRoom := 0
+	if query != "" {
+		searchRoom = min(runewidth.StringWidth(query)+2, inner/3)
+	}
+	syncRoom := max(0, inner-ansi.StringWidth(m.tab(m.shownView(), false))-searchRoom-3)
+	spinner := "  "
+	if m.loaded && !m.refresh.syncing && m.busy() {
+		spinner = m.spin.View() + " "
+	}
+	right := spinner + ansi.Truncate(m.syncCaption(syncRoom), syncRoom, "…")
 	tabs := m.tabs(inner - ansi.StringWidth(right) - searchRoom - 1)
 	line := ticketIndent + tabs
 	used := margin + ansi.StringWidth(tabs)
@@ -99,25 +210,24 @@ func (m *trackerModel) header() string {
 	return m.t.onPanel(ansi.Truncate(line+strings.Repeat(" ", max(1, gap))+m.t.dim(right)+ticketIndent, m.width, ""), m.width)
 }
 
-// footer is the keys, and how far through the ticket the reader is when it does
-// not all fit.
+// footer shows the keys for the current screen.
 func (m *trackerModel) footer() string {
-	right := ""
-	if m.pane.TotalLineCount() > m.pane.VisibleLineCount() {
-		right = fmt.Sprintf("%d%%", int(m.pane.ScrollPercent()*100))
-	}
-	margin := len(ticketIndent)
-	room := m.width - 2*margin - len(right) - 1
-	// The help line can overflow when even its "…" does not fit, so cut it.
-	left := ansi.Truncate(m.help.ShortHelpView(m.helpKeys()), max(0, room), "")
+	room := max(0, m.width-2*len(ticketIndent))
+	left := ansi.Truncate(m.help.ShortHelpView(m.helpKeys()), room, "")
 	if m.notice != "" {
-		left = m.t.bad("! " + m.notice)
+		left = ansi.Truncate(m.t.bad("! "+clean(m.notice)), room, "…")
 	}
-	gap := m.width - margin - ansi.StringWidth(left) - len(right) - margin
-	return ticketIndent + left + strings.Repeat(" ", max(1, gap)) + m.t.dim(right)
+	return m.t.onPanel(ticketIndent+left, m.width)
 }
 
 func (m *trackerModel) listLines() []string {
+	if message := m.resultMessage(); message != nil {
+		return message
+	}
+	return strings.Split(m.list.View(), "\n")
+}
+
+func (m *trackerModel) resultMessage() []string {
 	message := func(text string) []string { return fit(text, ticketIndent, ticketIndent, m.width-len(ticketIndent)) }
 	switch {
 	case !m.loaded:
@@ -129,7 +239,7 @@ func (m *trackerModel) listLines() []string {
 	case len(m.list.VisibleItems()) == 0:
 		return message("No tickets match this search.")
 	}
-	return strings.Split(m.list.View(), "\n")
+	return nil
 }
 
 // emptyView says why a view has nothing in it.
@@ -140,46 +250,90 @@ func (m *trackerModel) emptyView() string {
 		return "Finding your tickets…"
 	case view.me && m.me == "":
 		return cannotFindMe
-	case view.me:
+	case view.attention() != "" && m.whoLoading:
+		return "Identifying action owners…"
+	case view.attention() != "":
+		checked, total := m.checkProgress(view)
+		unclear := ""
+		if count := m.unclearChecks(view); count > 0 {
+			unclear = fmt.Sprintf(" %d have unavailable evidence or unclear ownership.", count)
+		}
+		if checked < total {
+			return fmt.Sprintf("No matching checked tickets. %d of %d checked; press n to check more.", checked, total) + unclear
+		}
+		return "No tickets match this attention view." + unclear
+	case view.me && view.custom == nil:
 		return "Nothing assigned to you."
 	}
 	return "Nothing in " + view.label() + "."
 }
 
+// trackerColumn is shared by headings and rows. The title gets spare room;
+// narrow terminals drop assignee, then status, regardless of configured order.
+type trackerColumn struct {
+	name  string
+	width int
+}
+
+func (m *trackerModel) rowColumns() []trackerColumn {
+	names := m.e.tracker.Columns
+	widths := map[string]int{
+		"key":    min(max(3, m.keyWidth), max(3, m.width-12)),
+		"status": max(8, m.statusWidth+2), "assignee": 16,
+		"action": min(44, max(24, m.width/3)),
+	}
+	measure := func() int {
+		room := m.width - 2*len(ticketIndent) - 2*(len(names)-1)
+		for _, name := range names {
+			room -= widths[name]
+		}
+		return room
+	}
+	for _, drop := range []struct {
+		name    string
+		minimum int
+	}{{"assignee", 24}, {"status", 16}, {"action", 16}} {
+		if slices.Contains(names, drop.name) && measure() < drop.minimum {
+			names = slices.DeleteFunc(slices.Clone(names), func(name string) bool { return name == drop.name })
+		}
+	}
+	widths["title"] = max(1, measure())
+	var cols []trackerColumn
+	for _, name := range names {
+		cols = append(cols, trackerColumn{name, widths[name]})
+	}
+	return cols
+}
+
+func (m *trackerModel) columnHeadings() string {
+	var labels []string
+	for _, col := range m.rowColumns() {
+		label := map[string]string{"key": "Key", "title": "Title", "status": "  Status", "assignee": "Assignee", "action": "Next action"}[col.name]
+		labels = append(labels, pad(label, col.width))
+	}
+	return m.t.onPanel(m.t.bold(ticketIndent+strings.Join(labels, "  ")), m.width)
+}
+
 // row draws one ticket across the full width. The key leads, the title gets the
 // room, and the status and assignee sit at the right edge. Narrow terminals drop
 // the assignee, then the status, so the key and title stay readable. The current
-// row is a bright bar while the list has focus and a soft one otherwise.
+// focused row is highlighted edge to edge; content sections remain unfilled.
 func (m *trackerModel) row(item ticketItem, selected bool, matches []int) string {
-	const whoWidth = 16
-	margin := len(ticketIndent)
-	width := m.width - margin
-	status := runewidth.Truncate(clean(item.Status), m.statusWidth, "…")
-	who := runewidth.Truncate(clean(assigneeName(item.Listing)), whoWidth, "…")
-	titleWidth := width - margin - m.keyWidth - 2
-	showWho := titleWidth-m.statusWidth-2-whoWidth-2 >= 24
-	showStatus := titleWidth-m.statusWidth-2 >= 16
-	switch {
-	case showWho:
-		titleWidth -= m.statusWidth + whoWidth + 4
-	case showStatus:
-		titleWidth -= m.statusWidth + 2
-	}
-	titleWidth = max(1, titleWidth)
-	key := clean(item.Key)
-	title := runewidth.Truncate(clean(item.Title), titleWidth, "…")
-
 	base := lipgloss.NewStyle()
 	bar := selected && !m.onTicket
-	if bar {
-		base = base.Reverse(true)
+	// With a card background the bar is that grey fill, so colours stay
+	// readable. Without one, fall back to reverse video.
+	fill := bar && m.t.color && m.boardSelectedTheme.bg != ""
+	if fill {
+		base = base.Bold(true)
+	} else if bar {
+		base = base.Bold(true).Reverse(true)
+	} else if selected {
+		base = base.Faint(true)
 	}
 	soft := base
-	if !bar {
+	if !bar || fill {
 		soft = soft.Faint(true)
-	}
-	if selected {
-		base = base.Bold(true)
 	}
 	hits := map[int]bool{}
 	for _, i := range matches {
@@ -189,25 +343,90 @@ func (m *trackerModel) row(item ticketItem, selected bool, matches []int) string
 	if selected {
 		cursor = "▸ "
 	}
-	line := m.paint(cursor, 0, nil, base) +
-		m.paint(key, 0, hits, base.Bold(true)) +
-		m.paint(strings.Repeat(" ", m.keyWidth-runewidth.StringWidth(key)+2), 0, nil, base) +
-		m.paint(title, len([]rune(key))+1, hits, base) +
-		m.paint(strings.Repeat(" ", titleWidth-runewidth.StringWidth(title)), 0, nil, base)
-	if showStatus || showWho {
-		line += m.paint("  "+pad(status, m.statusWidth), 0, nil, soft)
-	}
-	if showWho {
-		line += m.paint("  "+pad(who, whoWidth), 0, nil, soft)
+	line := m.paint(cursor, 0, nil, base)
+	for i, col := range m.rowColumns() {
+		if i > 0 {
+			line += m.paint("  ", 0, nil, base)
+		}
+		text, style, offset := "", base, 0
+		highlights := hits
+		room := col.width
+		switch col.name {
+		case "key":
+			text, style = item.Key, base.Bold(true)
+		case "title":
+			text, offset = item.Title, len([]rune(item.Key))+1
+		case "status":
+			icon, signalStyle := m.statusSignal(item, soft)
+			// Keep the focus bar solid. The icon preserves meaning without
+			// reversing semantic colours into coloured background patches.
+			if bar && !fill {
+				signalStyle = base
+			}
+			line += m.paint(icon+" ", 0, nil, signalStyle)
+			room -= 2
+			text, style = item.Status, signalStyle
+			offset = len([]rune(item.Key + " " + item.Title + " " + item.Assignee + " "))
+		case "action":
+			result := m.nextActions(item.Key)
+			text, highlights = trackerActionText(item.Key, result), nil
+			style = soft
+			if !bar || fill {
+				style = attentionStyle(result.State, soft)
+			}
+		case "assignee":
+			text, style = assigneeName(item.Listing), soft
+			if item.Assignee == "" {
+				highlights = nil
+			}
+			offset = len([]rune(item.Key + " " + item.Title + " "))
+		}
+		text = runewidth.Truncate(clean(text), room, "…")
+		line += m.paint(text, offset, highlights, style)
+		line += m.paint(strings.Repeat(" ", max(0, room-runewidth.StringWidth(text))), 0, nil, base)
 	}
 	line += m.paint(strings.Repeat(" ", max(0, m.width-ansi.StringWidth(line))), 0, nil, base)
 	if !m.t.color {
 		return strings.TrimRight(line, " ")
 	}
-	if selected && !bar {
-		return m.t.onPanel(line, m.width)
+	if fill {
+		return m.boardSelectedTheme.onPanel(line, m.width)
 	}
 	return line
+}
+
+// statusSignal annotates the tracker stage, never inferring readiness from its
+// name. Unread tickets stay neutral. Cached assessments need no extra reads.
+func (m *trackerModel) statusSignal(item ticketItem, neutral lipgloss.Style) (string, lipgloss.Style) {
+	bad := lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(1))
+	good := lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(2))
+	if r := m.ticketReads.byKey[item.Key]; r != nil {
+		if m.overview && r.policyDone() {
+			state := m.nextActions(item.Key).State
+			return attentionIcon(state), attentionStyle(state, neutral)
+		}
+		switch {
+		case r.policyErr != nil:
+			return "!", bad
+		case r.policy != nil:
+			switch r.policy.Standing() {
+			case workfile.CannotCheck:
+				return "!", bad
+			case workfile.OutOfPolicy:
+				return "‼", bad
+			case workfile.Blocked:
+				return "✗", bad
+			case workfile.NeedsWork:
+				return "✓", good
+			case workfile.Done:
+				return "·", neutral
+			}
+		}
+	}
+	if m.e.w.Policy.Transitions[item.State].End {
+		return "·", neutral
+	}
+	return "→", neutral
 }
 
 // paint styles text, underlining the characters a search matched. offset is
@@ -241,17 +460,17 @@ func (m *trackerModel) paint(text string, offset int, hits map[int]bool, st lipg
 	return b.String()
 }
 
-// minCommentWidth is the narrowest a reply's block gets.
-const minCommentWidth = 24
-
 // textWidth is the room for text inside the ticket's panels.
 func (m *trackerModel) textWidth() int {
 	left, _ := m.columns()
-	return max(10, left-4)
+	return previewTextWidth(left)
 }
 
 // imageWidth leaves room for an image inside a comment or a reply.
-func (m *trackerModel) imageWidth() int { return max(1, m.textWidth()-6) }
+func (m *trackerModel) imageWidth() int {
+	_, width := m.previewRenderer().commentSize(1)
+	return max(1, width)
+}
 
 // fit wraps styled text to width, breaking long words, and indents it.
 func fit(text, first, rest string, width int) []string {
@@ -264,289 +483,6 @@ func fit(text, first, rest string, width int) []string {
 		}
 	}
 	return lines
-}
-
-// ticketBlock is one block of the ticket: a panel, or with flat a plain heading.
-// indent moves it in from the left, which is how a reply sits inside the
-// comment it answers.
-type ticketBlock struct {
-	lines  []string
-	indent int
-	flat   bool
-}
-
-func panelBlocks(all [][]string) []ticketBlock {
-	blocks := make([]ticketBlock, len(all))
-	for i, lines := range all {
-		blocks[i] = ticketBlock{lines: lines}
-	}
-	return blocks
-}
-
-// sections stacks blocks with a gap between them. Each panel runs to the right
-// edge of its column.
-func (m *trackerModel) sections(all []ticketBlock, width int) string {
-	var lines []string
-	for _, b := range all {
-		if len(b.lines) == 0 {
-			continue
-		}
-		if b.flat {
-			for _, line := range b.lines {
-				lines = append(lines, ticketIndent+line)
-			}
-		} else {
-			lead := strings.Repeat(" ", b.indent)
-			for _, line := range strings.Split(m.t.panel(strings.Join(b.lines, "\n"), width-b.indent), "\n") {
-				lines = append(lines, lead+line)
-			}
-		}
-		lines = append(lines, "")
-	}
-	return strings.Join(lines, "\n")
-}
-
-// ticketText is the bottom half, as the ticket's column and Workfile's. On a
-// narrow terminal both share one column, with blockers before the description so
-// the next action is on the first screen.
-func (m *trackerModel) ticketText() (main, side string) {
-	item, ok := m.selected()
-	if !ok {
-		return "", ""
-	}
-	r := m.reads[item.Key]
-	left, right := m.columns()
-	wide := right > 0
-	ticket := m.ticketBody(r)
-	policyWidth := left
-	if wide {
-		policyWidth = right
-	}
-	lead, tail := m.policy(r, policyWidth)
-	head := ticketBlock{lines: m.identity(item)}
-	if wide {
-		return m.sections(append([]ticketBlock{head}, ticket...), left), m.sections(panelBlocks(append(lead, tail...)), right)
-	}
-	all := append([]ticketBlock{head}, panelBlocks(lead)...)
-	return m.sections(append(append(all, ticket...), panelBlocks(tail)...), left), ""
-}
-
-// ticketBody is the ticket's own text, in the tracker's words.
-func (m *trackerModel) ticketBody(r *ticketRead) []ticketBlock {
-	width := m.textWidth()
-	switch {
-	case r == nil || !r.detailDone():
-		return []ticketBlock{{lines: []string{m.t.dim("Reading the ticket…")}}}
-	case r.detailErr != nil:
-		return []ticketBlock{{lines: fit(m.t.bad("! Cannot read this ticket: "+clean(r.detailErr.Error())), "", "", width)}}
-	}
-	return append([]ticketBlock{{lines: m.body(*r.detail)}}, m.comments(*r.detail)...)
-}
-
-// policy is Workfile's view of the ticket: where it is and what it needs, then
-// its PRs and next moves.
-func (m *trackerModel) policy(r *ticketRead, panel int) (lead, tail [][]string) {
-	width := max(10, panel-4)
-	switch {
-	case r == nil || !r.policyDone():
-		return [][]string{{m.t.dim("Checking the policy…")}}, nil
-	case r.policyErr != nil:
-		return [][]string{fit(m.t.bad("! Cannot check the policy: "+clean(r.policyErr.Error())), "", "", width)}, nil
-	case r.policy.Ticket.Error != "":
-		return [][]string{fit(m.t.bad("! Cannot check the policy: "+clean(r.policy.Ticket.Error)), "", "", width)}, nil
-	}
-	v := m.v
-	v.width = panel + len(ticketIndent) // the ticket screen's panels sit one indent in
-	t := newTicketModel(v, m.e.w, *r.policy)
-	return [][]string{t.track(), t.attention()}, [][]string{t.pullRequests(), t.nextMoves()}
-}
-
-func (m *trackerModel) identity(item ticketItem) []string {
-	width := m.textWidth()
-	var facts string
-	for _, fact := range []string{item.Type, item.Status, assigneeName(item.Listing)} {
-		if fact != "" {
-			facts += " · " + clean(fact)
-		}
-	}
-	lines := fit(m.t.bold(m.v.link(item.Key, item.URL))+m.t.dim(facts), "", "", width)
-	if !m.v.hyperlinks() {
-		lines = append(lines, fit(m.t.dim(clean(item.URL)), "", "", width)...)
-	}
-	lines = append(lines, "")
-	if p := m.titles[item.Key]; p != nil && p.width == width {
-		return append(lines, placeholderRows(p.picture)...)
-	}
-	return append(lines, fit(m.t.bold(clean(item.Title)), "", "", width)...)
-}
-
-func (m *trackerModel) body(d workfile.Detail) []string {
-	if len(d.Body) == 0 {
-		return []string{m.t.dim("No description.")}
-	}
-	return m.blocks(d.Body, m.textWidth())
-}
-
-// comments is a heading, then a block for each comment.
-func (m *trackerModel) comments(d workfile.Detail) []ticketBlock {
-	if len(d.Comments) == 0 {
-		return []ticketBlock{{lines: []string{m.t.dim("No comments.")}}}
-	}
-	heading := []string{m.t.bold(fmt.Sprintf("Comments (%d)", d.CommentTotal))}
-	if shown := countComments(d.Comments); shown < d.CommentTotal {
-		heading = append(heading, fit(m.t.dim(fmt.Sprintf("Showing %d of %d. Press o to read them all.", shown, d.CommentTotal)), "", "", m.textWidth())...)
-	}
-	blocks := []ticketBlock{{lines: heading, flat: true}}
-	for _, c := range d.Comments {
-		blocks = append(blocks, m.comment(c, 0)...)
-	}
-	return blocks
-}
-
-func countComments(comments []workfile.Comment) int {
-	n := len(comments)
-	for _, c := range comments {
-		n += countComments(c.Replies)
-	}
-	return n
-}
-
-// comment is one comment's block, then a block for each reply, indented so a
-// thread reads at a glance. Deep threads stop indenting, so the text keeps room.
-func (m *trackerModel) comment(c workfile.Comment, depth int) []ticketBlock {
-	left, _ := m.columns()
-	indent := max(0, min(min(depth, 4)*3, left-minCommentWidth))
-	width := max(10, left-indent-4)
-	who := m.t.bold(clean(c.Author))
-	if depth > 0 {
-		who = m.t.dim("↳ ") + who
-	}
-	if when := ago(c.Created, m.now()); when != "" {
-		who += m.t.dim(" · " + when)
-	}
-	blocks := []ticketBlock{{lines: append(fit(who, "", "", width), m.blocks(c.Body, width)...), indent: indent}}
-	for _, reply := range c.Replies {
-		blocks = append(blocks, m.comment(reply, depth+1)...)
-	}
-	return blocks
-}
-
-// blocks draws a ticket's rich text, with a blank line between blocks. Items of
-// one list stay together.
-func (m *trackerModel) blocks(blocks []workfile.Block, width int) []string {
-	var lines []string
-	for i, b := range blocks {
-		if i > 0 && !(b.Kind == workfile.BlockList && blocks[i-1].Kind == workfile.BlockList) {
-			lines = append(lines, "")
-		}
-		lines = append(lines, m.block(b, width)...)
-	}
-	return lines
-}
-
-func (m *trackerModel) block(b workfile.Block, width int) []string {
-	indent := ""
-	if b.Quoted {
-		indent = "  "
-	}
-	switch b.Kind {
-	case workfile.BlockHeading:
-		return fit(m.t.bold(m.plain(b.Spans)), indent, indent, width)
-	case workfile.BlockList:
-		lead := indent + strings.Repeat("  ", min(b.Level, 4))
-		marker := clean(b.Marker) + " "
-		return fit(m.spans(b.Spans), lead+marker, lead+strings.Repeat(" ", runewidth.StringWidth(marker)), width)
-	case workfile.BlockCode:
-		var lines []string
-		wrappedCode := ansi.Hardwrap(m.plainLines(b.Spans), max(4, width-len(indent)-2), true)
-		for _, line := range strings.Split(wrappedCode, "\n") {
-			lines = append(lines, indent+"  "+m.t.accent(line))
-		}
-		return lines
-	case workfile.BlockTable:
-		var lines []string
-		for i, row := range b.Rows {
-			cells := make([]string, len(row))
-			for j, cell := range row {
-				cells[j] = clean(cell)
-			}
-			text := strings.Join(cells, " · ")
-			if i == 0 && b.Header {
-				text = m.t.bold(text)
-			}
-			lines = append(lines, fit(text, indent, indent, width)...)
-		}
-		return lines
-	case workfile.BlockRule:
-		return []string{indent + m.t.dim(strings.Repeat("─", max(1, width-len(indent))))}
-	case workfile.BlockImage:
-		if p := m.images[b.Attachment]; p != nil && m.textWidth() >= minImageWidth && p.cols <= width {
-			return placeholderRows(p.picture)
-		}
-		return fit(m.t.dim(strings.TrimSpace("[image] "+clean(b.Name))), indent, indent, width)
-	}
-	text := m.spans(b.Spans)
-	if b.Quoted {
-		text = m.t.dim(m.plain(b.Spans))
-	}
-	return fit(text, indent, indent, width)
-}
-
-func (m *trackerModel) plain(spans []workfile.Span) string {
-	return strings.ReplaceAll(m.plainLines(spans), "\n", " ")
-}
-
-// plainLines is the text of spans, safe to draw, keeping its line breaks.
-func (m *trackerModel) plainLines(spans []workfile.Span) string {
-	var b strings.Builder
-	for _, s := range spans {
-		parts := strings.Split(s.Text, "\n")
-		for i, part := range parts {
-			if i > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(clean(part))
-		}
-	}
-	return b.String()
-}
-
-// spans styles rich text. Every piece goes through clean, and view.link allows
-// only safe web addresses, so ticket text cannot reach the terminal raw.
-func (m *trackerModel) spans(spans []workfile.Span) string {
-	var b strings.Builder
-	for _, s := range spans {
-		for i, part := range strings.Split(s.Text, "\n") {
-			if i > 0 {
-				b.WriteByte('\n')
-			}
-			b.WriteString(m.span(s, part))
-		}
-	}
-	return b.String()
-}
-
-func (m *trackerModel) span(s workfile.Span, text string) string {
-	if text == "" {
-		return ""
-	}
-	styled := clean(text)
-	if s.Link != "" {
-		styled = m.v.link(text, s.Link)
-		if !m.v.hyperlinks() && clean(s.Link) != styled {
-			styled += " (" + clean(s.Link) + ")"
-		}
-	}
-	if s.Code {
-		styled = m.t.accent(styled)
-	}
-	if s.Italic {
-		styled = m.t.render(styled, func(st lipgloss.Style) lipgloss.Style { return st.Italic(true) })
-	}
-	if s.Bold {
-		styled = m.t.bold(styled)
-	}
-	return styled
 }
 
 // ago says when something happened in plain words, or nothing if it is not known.

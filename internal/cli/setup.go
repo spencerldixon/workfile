@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/mail"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/term"
 	"workfile/internal/provider"
@@ -19,8 +16,7 @@ import (
 
 type setupSource interface {
 	Identity(context.Context, string) (string, error)
-	Test(context.Context, string) (string, error)
-	SetupRepos(context.Context) ([]provider.SetupRepo, error)
+	SetupRepos(context.Context, string) ([]provider.SetupRepo, error)
 	SetupProjects(context.Context) ([]provider.SetupProject, error)
 	SetupStatuses(context.Context, string) ([]string, error)
 	SetupPeople(context.Context, string) ([]provider.SetupPerson, error)
@@ -60,7 +56,7 @@ func setup(ctx context.Context, v view, o options) error {
 			return c
 		},
 	})
-	final, err := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(v.out)).Run()
+	final, err := runSyncTUI(ctx, v, m)
 	if err != nil {
 		if ctx.Err() != nil {
 			return errors.New("setup cancelled; no files written")
@@ -68,9 +64,6 @@ func setup(ctx context.Context, v view, o options) error {
 		return err
 	}
 	if fm, ok := final.(*setupModel); ok {
-		if fm.fatal != nil {
-			return fm.fatal
-		}
 		if !fm.saved {
 			return errors.New("setup cancelled; no files written")
 		}
@@ -102,30 +95,6 @@ func setupDirectory(value string) (string, error) {
 		}
 	}
 	return dir, nil
-}
-
-var setupSitePattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.atlassian\.net$`)
-var setupOrgPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
-
-func setupSite(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(value, "https://"), "/"))
-	if !setupSitePattern.MatchString(value) {
-		return "", errors.New("enter a Jira Cloud hostname ending in .atlassian.net")
-	}
-	return value, nil
-}
-func setupEmail(value string) (string, error) {
-	address, err := mail.ParseAddress(value)
-	if err != nil || address.Address != value || strings.ContainsAny(value, "\r\n\x00\"'") {
-		return "", errors.New("enter an email address, such as alice@example.com")
-	}
-	return value, nil
-}
-func setupOrg(value string) (string, error) {
-	if !setupOrgPattern.MatchString(value) {
-		return "", errors.New("enter the organisation name, not a GitHub URL")
-	}
-	return value, nil
 }
 
 func setupStates(statuses []string, order []int) []string {
@@ -196,7 +165,7 @@ func setupProvidersYAML(providers map[string]workfile.Provider) ([]byte, error) 
 				break
 			}
 		}
-		if p.Kind == "jira" && len(p.SkipStatuses) == 0 {
+		if len(p.Statuses) > 0 && len(p.SkipStatuses) == 0 {
 			body.Content = append(body.Content,
 				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "skip_statuses"},
 				&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle})
@@ -212,6 +181,19 @@ func setupProvidersYAML(providers map[string]workfile.Provider) ([]byte, error) 
 	return yaml.Marshal(&doc)
 }
 
+func setupPolicyYAML(p workfile.Policy) ([]byte, error) {
+	transitions := map[string]any{}
+	for state, move := range p.Transitions {
+		if move.End {
+			transitions[state] = map[string]any{"end": true}
+		} else {
+			transitions[state] = map[string]any{"to": move.To}
+		}
+	}
+	policy := map[string]any{"tracker": p.Tracker, "states": p.States, "transitions": transitions, "gates": p.Gates}
+	return setupYAMLSections([]string{"tracker", "states", "transitions", "gates"}, policy)
+}
+
 func saveSetup(dir string, w *workfile.Workspace, credentials string, values map[string]string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
@@ -221,16 +203,7 @@ func saveSetup(dir string, w *workfile.Workspace, credentials string, values map
 		return err
 	}
 	defer os.RemoveAll(staging)
-	transitions := map[string]any{}
-	for state, move := range w.Policy.Transitions {
-		if move.End {
-			transitions[state] = map[string]any{"end": true}
-		} else {
-			transitions[state] = map[string]any{"to": move.To}
-		}
-	}
-	policy := map[string]any{"tracker": w.Policy.Tracker, "states": w.Policy.States, "transitions": transitions, "gates": w.Policy.Gates}
-	policyData, err := setupYAMLSections([]string{"tracker", "states", "transitions", "gates"}, policy)
+	policyData, err := setupPolicyYAML(w.Policy)
 	if err != nil {
 		return err
 	}

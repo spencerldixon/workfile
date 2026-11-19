@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	bhelp "charm.land/bubbles/v2/help"
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"workfile/internal/provider"
@@ -22,27 +26,21 @@ type setupStep int
 
 const (
 	stepWelcome setupStep = iota
+	stepTrackerKind
+	stepCodeHostKind
 	stepFolder
-	stepSite
-	stepEmail
-	stepJiraToken
-	stepJiraTest
-	stepAskGitHub
-	stepOrg
-	stepGitHubToken
-	stepGitHubTest
-	stepRepos
+	stepTrackerSettings
+	stepTrackerTest
+	stepHostSettings
+	stepHostTest
 	stepProjects
+	stepTrackerRepos
+	stepRepos
 	stepStatuses
 	stepPeople
 	stepReview
 	stepSaving
 	stepDone
-)
-
-const (
-	jiraTokenPage   = "https://id.atlassian.com/manage-profile/security/api-tokens"
-	githubTokenPage = "https://github.com/settings/tokens/new?scopes=repo,read:org&description=workfile"
 )
 
 type setupDeps struct {
@@ -54,7 +52,7 @@ type setupDeps struct {
 }
 
 type stageItem struct {
-	index int // position in the statuses Jira returned
+	index int // position in the statuses the tracker returned
 	on    bool
 }
 
@@ -102,30 +100,32 @@ type setupModel struct {
 	width   int
 	animate bool
 	frame   int
+	nerd    bool
 
-	step    setupStep
-	loading bool
-	loadID  int
-	err     string // shown under the current screen
-	opened  string // "", "ok" or "fail": did the browser open?
+	step         setupStep
+	loading      bool
+	loadID       int
+	err          string // shown under the current screen
+	opened       string // "", "ok" or "fail": did the browser open?
+	retry        func() tea.Cmd
+	preview      viewport.Model
+	policyData   string
+	reviewPolicy bool
 
-	input       textinput.Model
-	spin        spinner.Model
-	help        bhelp.Model
-	projectPick picker
-	repoPick    picker
+	input                                                textinput.Model
+	spin                                                 spinner.Model
+	help                                                 bhelp.Model
+	providerPick, projectPick, trackerRepoPick, repoPick picker
+	trackerOptions, hostOptions                          []setupOption
 
-	// Answers.
-	dir, site, email, jiraToken string
-	github                      bool
-	org, githubToken            string
-	projects                    []string
-	repos                       []string
-	statuses                    []string
-	items                       []stageItem
-	cursor                      int
-	people                      []provider.SetupPerson
-	peopleErr                   bool
+	dir                                     string
+	tracker, host                           setupConnection
+	fieldIndex                              int
+	projects, trackerRepos, repos, statuses []string
+	items                                   []stageItem
+	cursor, statusOffset, height            int
+	people                                  []provider.SetupPerson
+	peopleErr                               bool
 
 	// Connection.
 	key    string
@@ -133,12 +133,11 @@ type setupModel struct {
 	values map[string]string
 	client setupSource
 
-	statusFor    string
-	haveProjects bool
-	haveRepos    bool
+	statusFor                   string
+	haveProjects                bool
+	haveTrackerRepos, haveRepos bool
 
 	saved bool
-	fatal error
 }
 
 func newSetupModel(ctx context.Context, v view, d setupDeps) *setupModel {
@@ -168,25 +167,41 @@ func newSetupModel(ctx context.Context, v view, d setupDeps) *setupModel {
 	return &setupModel{
 		ctx: ctx, v: v, t: t, deps: d,
 		width:   v.width,
+		height:  24,
+		preview: viewport.New(),
 		animate: v.color,
+		nerd:    v.color && os.Getenv("WORKFILE_ICONS") == "nerd",
 		input:   ti, spin: sp, help: h,
-		projectPick: newPicker(t, inputStyles, faint),
-		repoPick:    newPicker(t, inputStyles, faint),
-		dir:         d.dir,
-		key:         fmt.Sprintf("WF_%X", time.Now().UnixNano()),
+		providerPick:    newPicker(t, inputStyles, faint),
+		projectPick:     newPicker(t, inputStyles, faint),
+		trackerRepoPick: newPicker(t, inputStyles, faint),
+		repoPick:        newPicker(t, inputStyles, faint),
+		trackerOptions:  setupOptions(true),
+		hostOptions:     setupOptions(false),
+		dir:             d.dir,
+		key:             fmt.Sprintf("WF_%X", time.Now().UnixNano()),
 	}
 }
 
 // ---- layout ----------------------------------------------------------------
 
-func (m *setupModel) panelWidth() int { return max(24, min(m.width, 76)) }
+func (m *setupModel) panelWidth() int { return max(20, m.width) }
 func (m *setupModel) inner() int      { return m.panelWidth() - 4 }
+func (m *setupModel) busy() bool      { return m.loading }
 
 func (m *setupModel) resize() {
 	m.input.SetWidth(max(8, m.inner()-4))
 	m.help.SetWidth(max(10, m.width-2))
-	m.projectPick.size(m.inner())
-	m.repoPick.size(m.inner())
+	for _, p := range []*picker{&m.providerPick, &m.projectPick, &m.trackerRepoPick, &m.repoPick} {
+		p.nerd = m.nerd
+		p.size(m.inner())
+	}
+	m.providerPick.setSingle(true, false)
+	m.projectPick.setSingle(m.singleProject(), true)
+	m.scrollStatuses()
+	m.preview.SetWidth(m.inner())
+	m.preview.SetHeight(max(4, m.height-10))
+	m.preview.SetContent(m.t.para(m.policyData, m.inner()))
 }
 
 // ---- tea.Model -------------------------------------------------------------
@@ -201,19 +216,21 @@ func (m *setupModel) Init() tea.Cmd {
 }
 
 func animTick() tea.Cmd {
-	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg { return animTickMsg{} })
+	return tea.Tick(animationFrameTime, func(time.Time) tea.Msg { return animTickMsg{} })
 }
 
 func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = max(20, msg.Width)
+		m.width, m.height = max(20, msg.Width), msg.Height
 		m.resize()
 		return m, nil
 	case animTickMsg:
-		if m.frame < animLast && (m.step == stepWelcome || m.step == stepDone) {
+		if m.frame < animLast && m.step == stepWelcome {
 			m.frame++
-			return m, animTick()
+			if m.frame < animLast {
+				return m, animTick()
+			}
 		}
 		return m, nil
 	case spinner.TickMsg:
@@ -255,23 +272,33 @@ func (m *setupModel) passThrough(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	if m.isInput() {
 		m.input, cmd = m.input.Update(msg)
-	} else if m.step == stepProjects && !m.loading {
-		m.projectPick.list, cmd = m.projectPick.list.Update(msg)
-	} else if m.step == stepRepos && !m.loading {
-		m.repoPick.list, cmd = m.repoPick.list.Update(msg)
+	} else if p := m.currentPicker(); p != nil && !m.loading && m.retry == nil {
+		p.list, cmd = p.list.Update(msg)
 	}
 	return m, cmd
 }
 
-func (m *setupModel) isInput() bool {
+func (m *setupModel) currentPicker() *picker {
 	switch m.step {
-	case stepFolder, stepSite, stepEmail, stepJiraToken, stepOrg, stepGitHubToken:
-		return true
+	case stepTrackerKind, stepCodeHostKind:
+		return &m.providerPick
+	case stepProjects:
+		return &m.projectPick
+	case stepTrackerRepos:
+		return &m.trackerRepoPick
+	case stepRepos:
+		return &m.repoPick
 	}
-	return false
+	return nil
 }
 
-func (m *setupModel) isToken() bool { return m.step == stepJiraToken || m.step == stepGitHubToken }
+func (m *setupModel) isInput() bool {
+	return m.step == stepFolder || m.step == stepTrackerSettings || m.step == stepHostSettings
+}
+
+func (m *setupModel) isToken() bool {
+	return m.step != stepFolder && m.isInput() && m.field().Key == "token"
+}
 
 // ---- keys ------------------------------------------------------------------
 
@@ -285,6 +312,16 @@ func (m *setupModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if m.retry != nil {
+		switch k {
+		case "enter":
+			return m.retry()
+		case "esc":
+			m.retry = nil
+			return m.goBack()
+		}
+		return nil
+	}
 	switch m.step {
 	case stepWelcome:
 		if m.frame < animLast {
@@ -292,9 +329,9 @@ func (m *setupModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if k == "enter" {
-			return m.focus(stepFolder, false)
+			return m.showOptions(stepTrackerKind)
 		}
-	case stepFolder, stepSite, stepEmail, stepJiraToken, stepOrg, stepGitHubToken:
+	case stepFolder, stepTrackerSettings, stepHostSettings:
 		switch k {
 		case "enter":
 			return m.submit()
@@ -310,31 +347,32 @@ func (m *setupModel) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		m.input, cmd = m.input.Update(msg)
 		m.err = ""
 		return cmd
-	case stepAskGitHub:
-		switch k {
-		case "left", "right", "h", "l", "tab", "shift+tab":
-			m.github = !m.github
-		case "y":
-			m.github = true
-		case "n":
-			m.github = false
-		case "enter":
-			return m.afterChoice()
-		case "esc":
-			return m.goBack()
-		}
+	case stepTrackerKind, stepCodeHostKind:
+		return m.pickKey(&m.providerPick, msg, m.chooseProvider)
 	case stepProjects:
 		return m.pickKey(&m.projectPick, msg, m.chooseProjects)
-	case stepRepos:
-		return m.pickKey(&m.repoPick, msg, m.chooseRepos)
+	case stepTrackerRepos, stepRepos:
+		return m.pickKey(m.currentPicker(), msg, m.chooseRepos)
 	case stepStatuses:
 		return m.statusKey(k)
 	case stepReview:
 		switch k {
+		case "p":
+			m.reviewPolicy = !m.reviewPolicy
 		case "enter":
 			return m.save()
 		case "esc":
+			if m.reviewPolicy {
+				m.reviewPolicy = false
+				return nil
+			}
 			return m.goBack()
+		default:
+			if m.reviewPolicy {
+				var cmd tea.Cmd
+				m.preview, cmd = m.preview.Update(msg)
+				return cmd
+			}
 		}
 	case stepDone:
 		switch k {
@@ -360,6 +398,7 @@ func (m *setupModel) pickKey(p *picker, msg tea.KeyPressMsg, next func() tea.Cmd
 
 func (m *setupModel) statusKey(k string) tea.Cmd {
 	m.err = ""
+	defer m.scrollStatuses()
 	switch k {
 	case "up", "k":
 		m.cursor = max(0, m.cursor-1)
@@ -413,133 +452,57 @@ func (m *setupModel) chosen() []int {
 func (m *setupModel) goBack() tea.Cmd {
 	m.err = ""
 	switch m.step {
-	case stepFolder:
+	case stepTrackerKind:
 		m.step = stepWelcome
-		return nil
-	case stepSite:
-		return m.focus(stepFolder, false)
-	case stepEmail:
-		return m.focus(stepSite, false)
-	case stepJiraToken, stepJiraTest:
-		return m.focus(stepEmail, false)
-	case stepAskGitHub:
-		return m.focus(stepJiraToken, false)
-	case stepOrg:
-		m.step = stepAskGitHub
-		return nil
-	case stepGitHubToken, stepGitHubTest:
-		return m.focus(stepOrg, false)
-	case stepRepos:
-		return m.focus(stepGitHubToken, false)
+	case stepCodeHostKind:
+		return m.showOptions(stepTrackerKind)
+	case stepFolder:
+		return m.showOptions(stepCodeHostKind)
+	case stepTrackerSettings, stepHostSettings:
+		if m.fieldIndex > 0 {
+			return m.focus(m.step, m.fieldIndex-1)
+		}
+		if m.step == stepHostSettings {
+			return m.lastField(stepTrackerSettings)
+		}
+		return m.focus(stepFolder, 0)
+	case stepTrackerTest:
+		return m.lastField(stepTrackerSettings)
+	case stepHostTest:
+		return m.lastField(stepHostSettings)
 	case stepProjects:
-		if m.github {
-			return m.showRepos()
+		if m.host.kind != "" {
+			return m.lastField(stepHostSettings)
 		}
-		m.step = stepAskGitHub
-		return nil
-	case stepStatuses:
+		return m.lastField(stepTrackerSettings)
+	case stepTrackerRepos:
 		return m.showProjects()
-	case stepPeople, stepReview, stepSaving:
+	case stepRepos:
+		if m.trackerSetting("repos") {
+			return m.showRepos(stepTrackerRepos)
+		}
+		return m.showProjects()
+	case stepStatuses:
+		if m.host.kind != "" {
+			return m.showRepos(stepRepos)
+		}
+		if m.trackerSetting("repos") {
+			return m.showRepos(stepTrackerRepos)
+		}
+		return m.showProjects()
+	case stepPeople, stepReview:
 		m.step = stepStatuses
-		return nil
 	}
 	return nil
 }
 
-func (m *setupModel) focus(step setupStep, open bool) tea.Cmd {
-	m.step, m.err, m.loading = step, "", false
-	in := &m.input
-	in.Reset()
-	in.EchoMode = textinput.EchoNormal
-	switch step {
-	case stepFolder:
-		in.SetValue(m.dir)
-		in.Placeholder = ""
-	case stepSite:
-		in.SetValue(m.site)
-		in.Placeholder = "example-team.atlassian.net"
-	case stepEmail:
-		in.SetValue(m.email)
-		in.Placeholder = "alice@example.com"
-	case stepJiraToken:
-		in.EchoMode, in.EchoCharacter = textinput.EchoPassword, '*'
-		in.SetValue(m.jiraToken)
-		in.Placeholder = "Paste your token"
-	case stepOrg:
-		in.SetValue(m.org)
-		in.Placeholder = "example-team"
-	case stepGitHubToken:
-		in.EchoMode, in.EchoCharacter = textinput.EchoPassword, '*'
-		in.SetValue(m.githubToken)
-		in.Placeholder = "Paste your token"
-	}
-	in.CursorEnd()
-	m.resize()
-	cmds := []tea.Cmd{in.Focus(), textinput.Blink}
-	if open && m.isToken() {
-		m.opened = ""
-		cmds = append(cmds, m.openPage())
-	}
-	return tea.Batch(cmds...)
+func (m *setupModel) statusRows() int {
+	return max(3, min(len(m.items), m.height-17))
 }
 
-func (m *setupModel) openPage() tea.Cmd {
-	target := jiraTokenPage
-	if m.step == stepGitHubToken {
-		target = githubTokenPage
-	}
-	open := m.deps.open
-	return func() tea.Msg { return openedMsg{err: open(target)} }
-}
-
-func setupToken(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" || strings.ContainsAny(value, "\r\n\x00\"'") || strings.IndexFunc(value, unicode.IsSpace) >= 0 {
-		return "", errors.New("paste only the token, on one line, without quotes")
-	}
-	return value, nil
-}
-
-func (m *setupModel) submit() tea.Cmd {
-	value := strings.TrimSpace(m.input.Value())
-	if value == "" {
-		m.err = "A value is required."
-		if m.isToken() {
-			m.err = "Paste your token to continue."
-		}
-		return nil
-	}
-	var err error
-	switch m.step {
-	case stepFolder:
-		if m.dir, err = setupDirectory(value); err == nil {
-			return m.focus(stepSite, false)
-		}
-	case stepSite:
-		if m.site, err = setupSite(value); err == nil {
-			return m.focus(stepEmail, false)
-		}
-	case stepEmail:
-		if m.email, err = setupEmail(value); err == nil {
-			return m.focus(stepJiraToken, true)
-		}
-	case stepJiraToken:
-		if m.jiraToken, err = setupToken(value); err == nil {
-			return m.test(stepJiraTest)
-		}
-	case stepOrg:
-		if m.org, err = setupOrg(value); err == nil {
-			return m.focus(stepGitHubToken, true)
-		}
-	case stepGitHubToken:
-		if m.githubToken, err = setupToken(value); err == nil {
-			return m.test(stepGitHubTest)
-		}
-	}
-	if err != nil {
-		m.err = capitalise(err.Error()) + "."
-	}
-	return nil
+func (m *setupModel) scrollStatuses() {
+	m.statusOffset = max(0, min(m.statusOffset, m.cursor))
+	m.statusOffset = max(m.statusOffset, m.cursor-m.statusRows()+1)
 }
 
 func capitalise(s string) string {
@@ -549,50 +512,50 @@ func capitalise(s string) string {
 	return strings.ToUpper(s[:1]) + s[1:]
 }
 
-func (m *setupModel) afterChoice() tea.Cmd {
-	if m.github {
-		return m.focus(stepOrg, false)
-	}
-	m.githubToken = ""
-	m.rebuild() // drops GitHub if it was set up and then declined
-	return m.showProjects()
-}
-
 // ---- network ---------------------------------------------------------------
 
 // rebuild creates the workspace and client from the answers so far.
-func (m *setupModel) rebuild() {
-	ref := func(suffix string) string { return "${" + m.key + suffix + "}" }
-	m.values = map[string]string{m.key + "_JIRA_EMAIL": m.email, m.key + "_JIRA_TOKEN": m.jiraToken}
+func (m *setupModel) rebuild(includeHost bool) {
+	m.values = map[string]string{}
+	tracker := m.tracker.kind
 	m.w = &workfile.Workspace{
-		Policy:    workfile.Policy{Tracker: "jira"},
-		Providers: map[string]workfile.Provider{"jira": {Kind: "jira", Site: m.site, Auth: map[string]string{"email": ref("_JIRA_EMAIL"), "token": ref("_JIRA_TOKEN")}}},
+		Policy:    workfile.Policy{Tracker: tracker},
+		Providers: map[string]workfile.Provider{tracker: m.tracker.provider(tracker, m.key, m.values)},
 		People:    map[string]map[string]string{},
 	}
-	if m.github && m.githubToken != "" {
-		m.values[m.key+"_GITHUB_TOKEN"] = m.githubToken
-		m.w.Providers["github"] = workfile.Provider{Kind: "github", Org: m.org, Repos: workfile.Names{"all"}, Auth: map[string]string{"token": ref("_GITHUB_TOKEN")}}
+	if includeHost {
+		host := m.hostName()
+		p := m.host.provider(host, m.key, m.values)
+		p.Repos = workfile.Names{"all"}
+		m.w.Providers[host] = p
 	}
 	m.client = m.deps.connect(m.w, m.values)
 }
 
+func (m *setupModel) trackerSetting(name string) bool {
+	return m.tracker.role != nil && slices.Contains(m.tracker.role.Settings, name)
+}
+
+func (m *setupModel) singleProject() bool { return m.trackerSetting("project") }
+
 func (m *setupModel) begin(step setupStep) int {
-	m.step, m.err, m.loading = step, "", true
+	m.step, m.err, m.loading, m.retry = step, "", true, nil
 	m.loadID++
 	return m.loadID
 }
 
 func (m *setupModel) test(step setupStep) tea.Cmd {
-	m.rebuild()
+	isHost := step == stepHostTest
+	m.rebuild(isHost)
+	name := m.tracker.kind
+	if isHost {
+		name = m.hostName()
+	}
 	id := m.begin(step)
 	ctx, client := m.ctx, m.client
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
-		var err error
-		if step == stepJiraTest {
-			_, err = client.Identity(ctx, "jira")
-		} else {
-			_, err = client.Test(ctx, "github")
-		}
+		// Scope discovery verifies access to the selected projects and repositories.
+		_, err := client.Identity(ctx, name)
 		return testedMsg{id, err}
 	})
 }
@@ -602,34 +565,36 @@ func (m *setupModel) tested(msg testedMsg) tea.Cmd {
 		return nil
 	}
 	m.loading = false
+	isTracker := m.step == stepTrackerTest
 	if msg.err != nil {
-		text := "Could not connect to " + map[setupStep]string{stepJiraTest: "Jira", stepGitHubTest: "GitHub"}[m.step] + ": " + clean(msg.err.Error())
-		back := stepOrg
-		if m.step == stepJiraTest {
-			back = stepSite
+		label := m.connection().label
+		step := stepTrackerSettings
+		if !isTracker {
+			step = stepHostSettings
 		}
-		cmd := m.focus(back, false)
-		m.err = text + " Check the details and try again."
+		cmd := m.lastField(step)
+		m.err = "Could not connect to " + label + ". " + clean(msg.err.Error()) + ". Check the details and try again."
 		return cmd
 	}
-	// A new connection means anything discovered before is out of date.
-	m.haveProjects, m.haveRepos, m.statusFor = false, false, ""
-	if m.step == stepJiraTest {
-		m.step = stepAskGitHub
-		return nil
+	if isTracker && m.host.kind != "" {
+		return m.focus(stepHostSettings, 0)
 	}
-	return m.showRepos()
+	return m.showProjects()
 }
 
-func (m *setupModel) showRepos() tea.Cmd {
-	if m.haveRepos {
-		m.step, m.err = stepRepos, ""
+func (m *setupModel) showRepos(step setupStep) tea.Cmd {
+	if step == stepRepos && m.haveRepos || step == stepTrackerRepos && m.haveTrackerRepos {
+		m.step, m.err = step, ""
 		return nil
 	}
-	id := m.begin(stepRepos)
+	name := m.hostName()
+	if step == stepTrackerRepos {
+		name = m.tracker.kind
+	}
+	id := m.begin(step)
 	ctx, client := m.ctx, m.client
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
-		r, err := client.SetupRepos(ctx)
+		r, err := client.SetupRepos(ctx, name)
 		return reposMsg{id, r, err}
 	})
 }
@@ -640,37 +605,45 @@ func (m *setupModel) gotRepos(msg reposMsg) tea.Cmd {
 	}
 	m.loading = false
 	if msg.err != nil {
-		m.fatal = msg.err
-		return tea.Quit
+		step := m.step
+		m.discoveryError("Could not find repositories", msg.err, func() tea.Cmd { return m.showRepos(step) })
+		return nil
 	}
-	items := []pickItem{{pickAll, "All repositories in " + clean(m.org)}}
+	items := []pickItem{{pickAll, "All repositories"}}
 	for _, r := range msg.repos {
-		items = append(items, pickItem{clean(r.Name), clean(r.Name)})
+		items = append(items, pickItem{r.Name, clean(r.Name)})
 	}
-	m.repoPick.setItems(items)
-	m.haveRepos = true
-	m.step = stepRepos
+	m.currentPicker().setItems(items)
+	if m.step == stepTrackerRepos {
+		m.haveTrackerRepos = true
+	} else {
+		m.haveRepos = true
+	}
 	m.resize()
 	return nil
 }
 
-// chooseRepos keeps the picked repositories, or all of them, and moves on.
 func (m *setupModel) chooseRepos() tea.Cmd {
-	if !anyPicked(m.repoPick.picked) {
+	p := m.currentPicker()
+	if !anyPicked(p.picked) {
 		m.err = "Pick at least one repository."
 		return nil
 	}
-	m.repos = m.repoPick.chosen()
-	return m.showProjects()
+	if m.step == stepTrackerRepos {
+		m.trackerRepos = p.chosen()
+		if m.host.kind != "" {
+			return m.showRepos(stepRepos)
+		}
+	} else {
+		m.repos = p.chosen()
+	}
+	return m.showStatuses()
 }
 
 func (m *setupModel) showProjects() tea.Cmd {
 	if m.haveProjects {
 		m.step, m.err = stepProjects, ""
 		return nil
-	}
-	if m.client == nil {
-		m.rebuild()
 	}
 	id := m.begin(stepProjects)
 	ctx, client := m.ctx, m.client
@@ -680,37 +653,61 @@ func (m *setupModel) showProjects() tea.Cmd {
 	})
 }
 
+func (m *setupModel) discoveryError(summary string, err error, retry func() tea.Cmd) {
+	m.err, m.retry = summary+". "+clean(err.Error())+".", retry
+}
+
 func (m *setupModel) gotProjects(msg projectsMsg) tea.Cmd {
 	if !m.loading || msg.id != m.loadID {
 		return nil
 	}
 	m.loading = false
-	if msg.err != nil {
-		m.fatal = msg.err
-		return tea.Quit
+	if msg.err == nil && len(msg.projects) == 0 {
+		msg.err = errors.New("no visible projects; check your account and token permissions")
 	}
-	if len(msg.projects) == 0 {
-		m.fatal = errors.New("no visible Jira projects; check token permissions")
-		return tea.Quit
+	if msg.err != nil {
+		m.discoveryError("Could not find projects", msg.err, m.showProjects)
+		return nil
 	}
 	items := make([]pickItem, len(msg.projects))
 	for i, p := range msg.projects {
-		items[i] = pickItem{clean(p.Key), clean(p.Key) + "  " + clean(p.Name)}
+		label := clean(p.Key)
+		if m.singleProject() {
+			label = "#" + label
+		}
+		items[i] = pickItem{p.Key, label + "  " + clean(p.Name)}
 	}
 	m.projectPick.setItems(items)
 	m.haveProjects = true
-	m.step = stepProjects
 	m.resize()
 	return nil
 }
 
-// chooseProjects keeps the picked projects and reads their statuses.
 func (m *setupModel) chooseProjects() tea.Cmd {
-	if !anyPicked(m.projectPick.picked) {
-		m.err = "Pick at least one project."
-		return nil
+	if m.singleProject() {
+		item, ok := m.projectPick.list.SelectedItem().(pickItem)
+		if !ok {
+			m.err = "Choose a project."
+			return nil
+		}
+		m.projects = []string{item.key}
+	} else {
+		if !anyPicked(m.projectPick.picked) {
+			m.err = "Pick at least one project."
+			return nil
+		}
+		m.projects = m.projectPick.chosen()
 	}
-	m.projects = m.projectPick.chosen()
+	if m.trackerSetting("repos") {
+		return m.showRepos(stepTrackerRepos)
+	}
+	if m.host.kind != "" {
+		return m.showRepos(stepRepos)
+	}
+	return m.showStatuses()
+}
+
+func (m *setupModel) showStatuses() tea.Cmd {
 	key := strings.Join(m.projects, ",")
 	if m.statusFor == key && len(m.items) > 0 {
 		m.step = stepStatuses
@@ -752,11 +749,14 @@ func (m *setupModel) gotStatuses(msg statusesMsg) tea.Cmd {
 		return nil
 	}
 	m.loading = false
-	if msg.err != nil {
-		m.fatal = msg.err
-		return tea.Quit
+	if msg.err == nil && len(msg.statuses) == 0 {
+		msg.err = errors.New("no statuses available for the selected projects")
 	}
-	m.statuses, m.statusFor, m.cursor = msg.statuses, strings.Join(m.projects, ","), 0
+	if msg.err != nil {
+		m.discoveryError("Could not read workflow statuses", msg.err, m.showStatuses)
+		return nil
+	}
+	m.statuses, m.statusFor, m.cursor, m.statusOffset = msg.statuses, strings.Join(m.projects, ","), 0, 0
 	m.items = make([]stageItem, len(msg.statuses))
 	for i := range msg.statuses {
 		m.items[i] = stageItem{index: i, on: true}
@@ -794,14 +794,37 @@ func (m *setupModel) gotPeople(msg peopleMsg) tea.Cmd {
 	}
 	m.loading = false
 	m.people, m.peopleErr = msg.people, msg.err != nil
-	m.step = stepReview
+	m.step, m.reviewPolicy = stepReview, false
+	if data, err := setupPolicyYAML(m.draft().Policy); err == nil {
+		m.policyData = string(data)
+		m.preview.SetContent(m.t.para(m.policyData, m.inner()))
+		m.preview.GotoTop()
+	}
 	return nil
 }
 
+func (m *setupModel) draft() *workfile.Workspace {
+	w := *m.w
+	w.Providers = maps.Clone(m.w.Providers)
+	setupApply(&w, m.projects, m.statuses, m.chosen(), m.people)
+	tracker := w.Policy.Tracker
+	if m.trackerSetting("repos") {
+		p := w.Providers[tracker]
+		p.Repos = setupRepoNames(m.trackerRepos)
+		w.Providers[tracker] = p
+	}
+	if m.host.kind != "" {
+		name := m.hostName()
+		p := w.Providers[name]
+		p.Repos = setupRepoNames(m.repos)
+		w.Providers[name] = p
+	}
+	return &w
+}
+
 func (m *setupModel) save() tea.Cmd {
-	setupApply(m.w, m.projects, m.statuses, m.chosen(), m.repos, m.people)
 	id := m.begin(stepSaving)
-	dir, w, credentials, values := m.dir, m.w, m.deps.credentials, m.values
+	dir, w, credentials, values := m.dir, m.draft(), m.deps.credentials, m.values
 	return tea.Batch(m.spin.Tick, func() tea.Msg {
 		return savedMsg{id, saveSetup(dir, w, credentials, values)}
 	})
@@ -814,24 +837,30 @@ func (m *setupModel) gotSaved(msg savedMsg) tea.Cmd {
 	m.loading = false
 	if msg.err != nil {
 		m.step = stepReview
-		m.err = "Could not save: " + clean(msg.err.Error())
+		m.err = "Could not apply policy. " + clean(msg.err.Error())
 		return nil
 	}
-	m.saved, m.step, m.frame = true, stepDone, 0
-	if m.animate {
-		return animTick()
-	}
-	m.frame = animLast
+	m.saved, m.step = true, stepDone
 	return nil
 }
 
-// setupApply writes the chosen stages, repositories and people into the
-// workspace. The projects are already set. Every scope setting is written
-// explicitly, and scope itself never is. Statuses that were unticked become
-// skip_statuses, empty when none were.
-func setupApply(w *workfile.Workspace, projects []string, statuses []string, order []int, repos []string, people []provider.SetupPerson) {
-	p := w.Providers["jira"]
-	p.Projects, p.KeepDoneFor, p.Scope = workfile.Names(projects), "14d", ""
+func setupRepoNames(repos []string) workfile.Names {
+	if len(repos) == 0 {
+		return workfile.Names{"all"}
+	}
+	return workfile.Names(repos)
+}
+
+func setupApply(w *workfile.Workspace, projects []string, statuses []string, order []int, people []provider.SetupPerson) {
+	name := w.Policy.Tracker
+	p := w.Providers[name]
+	role := workfile.Kinds[p.Kind].Tracker
+	if slices.Contains(role.Settings, "project") {
+		p.Project, _ = strconv.Atoi(projects[0])
+	} else {
+		p.Projects = workfile.Names(projects)
+	}
+	p.KeepDoneFor = "14d"
 	kept := map[int]bool{}
 	for _, n := range order {
 		kept[n] = true
@@ -841,13 +870,6 @@ func setupApply(w *workfile.Workspace, projects []string, statuses []string, ord
 		if !kept[i] {
 			p.SkipStatuses = append(p.SkipStatuses, name)
 		}
-	}
-	if g, ok := w.Providers["github"]; ok {
-		g.Repos = workfile.Names(repos)
-		if len(repos) == 0 {
-			g.Repos = workfile.Names{"all"}
-		}
-		w.Providers["github"] = g
 	}
 	w.Policy.States = setupStates(statuses, order)
 	w.Policy.Gates = map[string][]workfile.Rule{}
@@ -862,7 +884,7 @@ func setupApply(w *workfile.Workspace, projects []string, statuses []string, ord
 			w.Policy.Transitions[state] = workfile.Transition{To: []string{w.Policy.States[i+1]}}
 		}
 	}
-	w.Providers["jira"] = p
+	w.Providers[name] = p
 
 	w.People = map[string]map[string]string{}
 	names := make([]string, len(people))
@@ -876,6 +898,6 @@ func setupApply(w *workfile.Workspace, projects []string, statuses []string, ord
 	}
 	aliases := setupStates(names, indices)
 	for i, person := range people {
-		w.People[aliases[i]] = map[string]string{"name": clean(person.DisplayName), "jira": person.AccountID}
+		w.People[aliases[i]] = map[string]string{"name": clean(person.DisplayName), name: person.AccountID}
 	}
 }

@@ -12,13 +12,14 @@ Every rule that applies must pass.
 | File | What it holds |
 | --- | --- |
 | `.workfile/policy.yml` | Stages, moves between stages, and gates. |
-| `.workfile/providers.yml` | Your Jira and GitHub connections, the search or project that picks your tickets, status names, and where credentials come from. |
+| `.workfile/providers.yml` | Connections, project and repository scope, status mappings, and credential references. |
 | `.workfile/people.yml` | Optional. Names and accounts for people, used by `by` and `--user`. |
+| `.workfile/config.yml` | Optional tracker and inbox preferences, not policy rules. See [Configuration](configuration.md). |
 
-Each file is one YAML document. Mistakes are errors, not guesses. That covers
-unknown fields, unknown gates or attributes, repeated keys, and names that point
-to something that does not exist. Every command checks your files before it
-connects to anything.
+Each file is one YAML document. Mistakes are errors, not guesses: unknown fields,
+unknown gates or attributes, repeated keys, and references to missing names.
+Commands validate policy files before provider reads; tracker and inbox also
+validate their own presentation settings.
 
 ## A small, complete workflow
 
@@ -133,8 +134,9 @@ different review paths, a release shortcut, cancelling, and return loops.
 
 ## Current facts and branching paths
 
-Workfile does not read a ticket's history. It asks one question: do the ticket's
-facts today pass the gates along **at least one forward path** to its stage?
+Policy checks ask one question: do the ticket's facts today pass the gates along
+**at least one forward path** to its stage? They do not reconstruct its route
+from history. Inbox activity and label-author evidence are separate reads.
 
 This matters on a board with branches. A ticket that took the security path is
 not marked wrong for missing a QA sign-off. If no path passes, Workfile explains
@@ -284,7 +286,7 @@ github_client:
   provider: github
   org: example-client
   auth:
-    token: ${CLIENT_GITHUB_TOKEN}
+    token: ${EXAMPLE_GITHUB_TOKEN}
 ```
 
 Then write `github_client.approvals` in rules. People named in `by` rules for

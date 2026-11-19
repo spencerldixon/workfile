@@ -61,4 +61,7 @@ type Detail struct {
 // the identity to compare. Type and both assignee fields may be empty.
 type Listing struct {
 	Key, Title, Status, State, Assignee, AssigneeID, Type, URL string
+	// Origin identifies a source within the configured tracker scope. Adapters
+	// supply it (for example a project or repository); views only compare it.
+	Origin string
 }

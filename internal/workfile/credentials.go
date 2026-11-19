@@ -37,7 +37,9 @@ func PersonalDir() string {
 // ~/.config/workfile/<workspace>/config.yml.
 type WorkspaceSettings struct {
 	// OnlyMine limits ticket listings to tickets assigned to the person.
-	OnlyMine bool `yaml:"only_mine"`
+	OnlyMine bool            `yaml:"only_mine"`
+	Tracker  TrackerSettings `yaml:"tracker"`
+	Inbox    InboxSettings   `yaml:"inbox"`
 }
 
 func WorkspaceSettingsPath(name string) string {
@@ -152,18 +154,22 @@ type Personal struct {
 	// provider type.
 	Me map[string]string
 	// Person is the person's name in people.yml. Set as me.person.
-	Person string
+	Person  string
+	Tracker TrackerSettings
+	Inbox   InboxSettings
 }
 
 func ReadPersonal() (Personal, error) {
 	var config struct {
-		Me map[string]string `yaml:"me"`
+		Me      map[string]string `yaml:"me"`
+		Tracker TrackerSettings   `yaml:"tracker"`
+		Inbox   InboxSettings     `yaml:"inbox"`
 	}
 	path := PersonalPath("config.yml")
 	if err := ReadYAML(path, &config, true); err != nil {
 		return Personal{}, err
 	}
-	p := Personal{Me: config.Me}
+	p := Personal{Me: config.Me, Tracker: config.Tracker, Inbox: config.Inbox}
 	if person, ok := p.Me["person"]; ok {
 		p.Person = person
 		delete(p.Me, "person")

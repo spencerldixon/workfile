@@ -1,0 +1,541 @@
+<!doctype html>
+<!-- Throwaway wf setup prototype. Compare three progress indicators on the guided layout. -->
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wf setup · design mockups</title>
+<style>
+  @font-face {
+    font-family: "Workfile Terminal";
+    src: local("MesloLGSNFM-Regular"), local("MesloLGS Nerd Font Mono Regular");
+    font-weight: 400;
+  }
+  @font-face {
+    font-family: "Workfile Terminal";
+    src: local("MesloLGSNFM-Bold"), local("MesloLGS Nerd Font Mono Bold");
+    font-weight: 700;
+  }
+  :root { color-scheme: dark; font: 14px system-ui, sans-serif; background: #141414; color: #ededed; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px 16px 90px; }
+  main { max-width: 940px; margin: auto; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  p { margin: 0 0 20px; color: #b9b9b9; }
+  button, select { font: inherit; color: inherit; background: #272727; border: 1px solid #555; border-radius: 5px; padding: 6px 10px; }
+  button { cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  :focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-block: 12px; }
+  .terminal { width: fit-content; max-width: 100%; overflow-x: auto; background: #1c1c1c; border: 1px solid #393939; border-radius: 9px; }
+  .terminal-bar { padding: 9px 14px; border-bottom: 1px solid #393939; font: 12px ui-monospace, monospace; color: #b9b9b9; }
+  .screen { font: 14px/1.55 "Workfile Terminal", ui-monospace, SFMono-Regular, Menlo, monospace; width: calc(var(--columns) * 1ch + 32px); padding: 14px 16px 20px; }
+  .terminal-output { white-space: pre; }
+  b { font-weight: bold; }
+  .dim { color: #aaa; }
+  .good { color: #a5d6a7; }
+  .active { color: #86dbe8; font-weight: 700; }
+  .art { line-height: 1.12; }
+  .panel { display: inline-block; background: #252525; }
+  .plain :is(.dim, .good, .active) { color: inherit; }
+  .plain .panel { background: transparent; }
+  .switcher { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #202020; border: 1px solid #555; padding: 6px; border-radius: 9px; display: flex; align-items: center; gap: 9px; white-space: nowrap; box-shadow: 0 3px 18px #0008; }
+  #variant-name { min-width: 130px; text-align: center; }
+</style>
+<main>
+  <h1>Workfile setup mockups</h1>
+  <p>Compare progress indicators with the bottom arrows. Pick a wordmark and replay the intro.</p>
+  <div class="controls">
+    <label>Screen <select id="step"></select></label>
+    <label>Width <select id="width"><option>40</option><option>60</option><option selected>80</option></select> columns</label>
+    <label>Wordmark <select id="wordmark"><option value="slab">Slab</option><option value="print">Newsprint</option><option value="pixel" selected>Pixel</option></select></label>
+    <label>Intro <select id="intro"><option value="stamp">Letter by letter</option><option value="sweep" selected>Diagonal sweep</option><option value="rise">Rise into place</option></select></label>
+    <button id="replay">Replay intro</button>
+    <label><input id="icons" type="checkbox" checked> Nerd Font</label>
+    <label><input id="colour" type="checkbox" checked> Colour</label>
+  </div>
+  <div class="terminal">
+    <div class="terminal-bar">$ wf setup</div>
+    <div id="screen" class="screen" tabindex="0" aria-label="Terminal preview"></div>
+  </div>
+  <div class="controls">
+    <button id="back">Back</button>
+    <button id="next">Begin</button>
+    <label id="pick-control" hidden>Selection <select id="pick"></select></label>
+  </div>
+</main>
+<nav class="switcher" aria-label="Layout variants">
+  <button id="prev-variant" aria-label="Previous layout">←</button>
+  <span id="variant-name" aria-live="polite"></span>
+  <button id="next-variant" aria-label="Next layout">→</button>
+</nav>
+<script>
+const variants = ["A · Route", "B · Meter", "C · Now and next"];
+const phases = ["Providers", "Connections", "Scope", "Policy"];
+const maxFrame = 30;
+const glyphs = {
+  providers: ["\uf1e6", "+"], connections: ["\uf0c1", "↔"], scope: ["\uf07c", "•"],
+  policy: ["\uf15c", "≡"], next: ["\uf054", "›"], pass: ["\uf00c", "✓"],
+  radio: ["\uf192", "●"], empty: ["\uf10c", "○"], token: ["\uf084", "→"],
+  jira: ["\ue75c", ""], github: ["\uf09b", ""],
+};
+const icon = name => glyphs[name][$("icons").checked ? 0 : 1];
+
+// The mock catalog mirrors the role memberships in internal/workfile/kinds.go.
+// Provider-specific fields and examples live with each role in the catalog.
+const githubConnection = [
+  ["Organisation", "example-team"],
+  ["Classic token", "****************"],
+  ["Permissions", "repo, read:org; authorise SSO if required"],
+];
+const providers = [
+  {
+    id: "jira", tracker: {
+      label: "Jira", icon: "jira", detail: "Track issues from Jira projects",
+      connection: [
+        ["Site", "example-team.atlassian.net"],
+        ["Email", "alice@example.com"],
+        ["API token", "****************"],
+      ],
+      tokenPage: "Open Atlassian API tokens",
+      scopeTitle: "Choose Jira projects",
+      scopeRows: [[true, "APP  Example App"], [false, "DOC  Example Docs"]],
+      scope: "APP", statuses: ["To Do", "In Progress", "In Review", "Done"],
+    },
+  },
+  {
+    id: "github",
+    tracker: {
+      label: "GitHub Issues", icon: "github", detail: "Track issues from a GitHub project",
+      connection: githubConnection, tokenPage: "Open GitHub token page",
+      scopeTitle: "Choose a project and repositories",
+      scopeRows: [[true, "Project #4  Example App"], [true, "example-app"]],
+      scope: "Project #4 · example-app", statuses: ["Backlog", "Doing", "Review", "Done"],
+    },
+    codeHost: {
+      label: "GitHub", icon: "github", detail: "Read pull requests and checks",
+      connection: githubConnection, tokenPage: "Open GitHub token page",
+      scopeTitle: "Choose code repositories",
+      scopeRows: [[false, "All repositories"], [true, "example-app"], [false, "example-docs"]],
+      scope: "example-app",
+    },
+  },
+];
+const trackerOptions = providers.filter(provider => provider.tracker);
+const hostOptions = [...providers.filter(provider => provider.codeHost), {
+  id: "skip", codeHost: { label: "Skip for now", detail: "Set up a tracker-only workflow" },
+}];
+const steps = [
+  ["Welcome", -1], ["Tracker", 0], ["Code host", 0],
+  ["Connect tracker", 1], ["Connect code host", 1],
+  ["Tracker scope", 2], ["Code host scope", 2],
+  ["Workflow", 3], ["Policy preview", 3], ["Done", 4],
+];
+const title = [
+  ["      ", "      ", "##  ##", "##  ##", "######", "######", " ## ##"],
+  ["      ", "      ", " #### ", "##  ##", "##  ##", "##  ##", " #### "],
+  ["      ", "      ", "## ###", "###   ", "##    ", "##    ", "##    "],
+  ["##    ", "##    ", "##  ##", "## ## ", "####  ", "## ## ", "##  ##"],
+  ["  ####", " ##   ", "##### ", " ##   ", " ##   ", " ##   ", " ##   "],
+  [" ## ", "    ", "### ", " ## ", " ## ", " ## ", "####"],
+  ["### ", " ## ", " ## ", " ## ", " ## ", " ## ", "  ##"],
+  ["      ", "      ", " #### ", "##  ##", "######", "##    ", " #####"],
+];
+const compactTitle = [
+  ["    ", "    ", "#  #", "#  #", "####", "####", "#  #"],
+  ["    ", "    ", " ## ", "#  #", "#  #", "#  #", " ## "],
+  ["    ", "    ", "# ##", "##  ", "#   ", "#   ", "#   "],
+  ["#   ", "#   ", "#  #", "# # ", "##  ", "# # ", "#  #"],
+  ["  ##", " #  ", "####", " #  ", " #  ", " #  ", " #  "],
+  [" # ", "   ", "## ", " # ", " # ", " # ", "###"],
+  ["## ", " # ", " # ", " # ", " # ", " # ", "  #"],
+  ["    ", "    ", " ## ", "#  #", "####", "#   ", " ###"],
+];
+const slabTitle = [
+  ["#     #", "#     #", "#  #  #", "#  #  #", "#######", "#######", " ## ## "],
+  [" ##### ", "#######", "##   ##", "##   ##", "##   ##", "#######", " ##### "],
+  ["###### ", "#######", "##   ##", "###### ", "####   ", "## ##  ", "##  ###"],
+  ["##  ###", "## ### ", "#####  ", "####   ", "#####  ", "## ### ", "##  ###"],
+  ["######", "######", "##    ", "##### ", "##### ", "##    ", "##    "],
+  ["####", "####", " ## ", " ## ", " ## ", "####", "####"],
+  ["##    ", "##    ", "##    ", "##    ", "##    ", "######", "######"],
+  ["######", "######", "##    ", "##### ", "##### ", "##    ", "######"],
+];
+const slabCompact = [
+  ["#  #", "#  #", "#  #", "####", "####", "####", " ###"],
+  [" ## ", "####", "#  #", "#  #", "#  #", "####", " ## "],
+  ["### ", "####", "#  #", "### ", "##  ", "# # ", "#  #"],
+  ["#  #", "# ##", "### ", "##  ", "### ", "# ##", "#  #"],
+  ["####", "####", "#   ", "### ", "### ", "#   ", "#   "],
+  ["###", "###", " # ", " # ", " # ", "###", "###"],
+  ["#   ", "#   ", "#   ", "#   ", "#   ", "####", "####"],
+  ["####", "####", "#   ", "### ", "### ", "#   ", "####"],
+];
+
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const screen = $("screen");
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const variantKeys = ["A", "B", "C"];
+let variant = Math.max(0, variantKeys.indexOf(params.get("variant")));
+let step = 0;
+let trackerIndex = -1;
+let hostIndex = -1;
+let frame = maxFrame;
+let timer;
+const blank = ["", ""];
+const confirm = "enter continue · esc back";
+
+const trackerProvider = () => trackerOptions[trackerIndex] ?? trackerOptions[0];
+const hostProvider = () => hostOptions[hostIndex] ?? hostOptions[0];
+const hasHost = () => hostProvider().id !== "skip";
+
+function menu(options, role, selected) {
+  return options.flatMap(({ [role]: provider }, i) => {
+    const brand = provider.icon && icon(provider.icon);
+    const prefix = icon(i === selected ? "radio" : "empty") + " ";
+    return [
+      [selected === i ? "active" : "", prefix + (brand ? brand + " " : "") + provider.label],
+      ["dim", (brand ? "    " : "  ") + provider.detail],
+      ...(i === options.length - 1 ? [] : [blank]),
+    ];
+  });
+}
+function connection(role, provider) {
+  return {
+    title: "Connect " + provider.label,
+    copy: "Enter the details for your " + role + ". Workfile tests access before continuing.",
+    rows: [...provider.connection.map(([label, value]) => ["", label + "  " + value]),
+      blank, ["active", icon("token") + "  ctrl+o  " + provider.tokenPage]],
+    keys: "enter test connection · esc back",
+  };
+}
+function scope(provider) {
+  return {
+    title: provider.scopeTitle,
+    copy: "Choose what Workfile should read.",
+    rows: [["good", icon("pass") + " Connected to " + provider.label], blank,
+      ...provider.scopeRows.map(([included, line], i) => [
+        i === 0 ? "active" : included ? "good" : "dim",
+        (i === 0 ? icon("next") + " " : "  ") + icon(included ? "pass" : "empty") + " " + line,
+      ])],
+    keys: "↑/↓ move · space tick · / filter\n" + confirm,
+  };
+}
+function policy(tracker, host) {
+  const states = tracker.statuses.map(name => name.toLowerCase().replaceAll(" ", "_"));
+  const connections = [["", "Tracker    " + tracker.label + " · " + tracker.scope],
+    ["", "Code host  " + (hasHost() ? host.label + " · " + host.scope : "Skipped")]];
+  return {
+    title: "Review and apply policy",
+    copy: "Write a starter workflow to ~/projects/example-app/.workfile/.",
+    rows: [...connections, blank, ["b", "policy.yml"], ["dim", "tracker: tracker"],
+      ["dim", "states:"], ...states.map(state => ["dim", "  - " + state]),
+      ["dim", "transitions:"],
+      ...states.map((state, i) => ["dim", "  " + state + ": " +
+        (i === states.length - 1 ? "{end: true}" : "{to: [" + states[i + 1] + "]}")]),
+      ["dim", "gates: {}"], blank,
+      ["", "Add your team's checks in policy.yml."],
+      ["dim", "Provider settings go in providers.yml. Tokens go in your private credentials file."]],
+    keys: "enter apply policy · esc back",
+  };
+}
+function currentScreen() {
+  const tracker = trackerProvider().tracker;
+  const host = hostProvider().codeHost;
+  switch (step) {
+    case 0: return {
+      title: "Set up your workflow",
+      copy: "Choose where you track work and where you review code. Then preview the policy Workfile will apply to this workspace.",
+      keys: "enter begin · ctrl+c quit",
+    };
+    case 1: return {
+      title: "Where does your team track work?",
+      copy: "Choose the tracker Workfile reads for tickets and their statuses.",
+      rows: menu(trackerOptions, "tracker", trackerIndex),
+      keys: "↑/↓ choose · enter confirm · esc back",
+    };
+    case 2: return {
+      title: "Where does your team review code?",
+      copy: "Choose a code host to include pull requests, reviews and checks.",
+      rows: menu(hostOptions, "codeHost", hostIndex),
+      keys: "↑/↓ choose · enter confirm · esc back",
+    };
+    case 3: return connection("tracker", tracker);
+    case 4: return connection("code host", host);
+    case 5: return scope(tracker);
+    case 6: return scope(host);
+    case 7: return {
+      title: "Put the workflow stages in order",
+      copy: "Use the statuses tickets move through. The last stage marks completed work.",
+      rows: tracker.statuses.map((status, i) => [i === 1 ? "active" : "good",
+        (i === 1 ? icon("next") + " " : "  ") + icon("pass") + " " + status]),
+      keys: "space tick · shift+↑/↓ reorder\n" + confirm,
+    };
+    case 8: return policy(tracker, host);
+    case 9: return {
+      title: icon("pass") + " Policy applied",
+      copy: "Workfile saved your workspace in ~/projects/example-app/.workfile/.",
+      rows: [["b", "cd ~/projects/example-app"], ["b", "wf status"]],
+      keys: "enter close",
+    };
+  }
+}
+
+function wrap(text, width) {
+  return text.split("\n").flatMap(paragraph => {
+    if (paragraph.length <= width) return [paragraph];
+    const indent = paragraph.match(/^ */)[0];
+    const words = paragraph.trim().split(/ +/);
+    const lines = [];
+    let line = indent;
+    for (const word of words) {
+      if (line.trim() && line.length + word.length + 1 <= width) {
+        line += " " + word;
+        continue;
+      }
+      if (line.trim()) {
+        lines.push(line);
+        line = indent;
+      }
+      let rest = word;
+      while (line.length + rest.length > width) {
+        const count = width - line.length;
+        lines.push(line + rest.slice(0, count));
+        rest = rest.slice(count);
+        line = indent;
+      }
+      line += rest;
+    }
+    lines.push(line);
+    return lines;
+  });
+}
+const row = (style, text, width) => wrap(text, width).map(line => [style, line]);
+function panel(data, width) {
+  const rows = [...row("b", data.title, width), blank, ...row("", data.copy, width)];
+  if (data.rows) {
+    rows.push(blank);
+    for (const [style, text] of data.rows) rows.push(...row(style, text, width));
+  }
+  return rows;
+}
+function intro(columns) {
+  const wordmark = $("wordmark").value;
+  const compact = columns < 60;
+  const font = wordmark === "pixel" ? (compact ? compactTitle : title) :
+    (compact ? slabCompact : slabTitle);
+  const mask = font[0].map((_, y) => font.map(glyph => glyph[y]).join(" "));
+  const width = mask[0].length + (wordmark === "slab" ? 1 : 0);
+  const inset = " ".repeat(Math.floor((columns - width) / 2));
+  const animation = $("intro").value;
+  const letterAt = font.flatMap((glyph, letter) => Array(glyph[0].length + 1).fill(letter));
+  const height = mask.length + (wordmark === "slab" ? 1 : 0);
+  return Array.from({ length: height }, (_, y) => {
+    const cells = [["", inset]];
+    for (let x = 0; x < width; x++) {
+      const onFace = mask[y]?.[x] === "#";
+      const shadow = !onFace && wordmark === "slab" && mask[y - 1]?.[x - 1] === "#";
+      let mark = onFace ? "#" : shadow ? "/" : " ";
+      if (onFace && wordmark === "print") {
+        const interior = mask[y - 1]?.[x] === "#" && mask[y + 1]?.[x] === "#" &&
+          mask[y][x - 1] === "#" && mask[y][x + 1] === "#";
+        mark = interior ? "=" : (y + x) % 3 === 0 ? "#" : "@";
+      }
+      if (mark !== " " && frame < maxFrame) {
+        const position = {
+          stamp: letterAt[shadow ? x - 1 : x] / font.length,
+          sweep: (x + 2 * y) / (width + 2 * (height - 1)),
+          rise: (height - 1 - y) / height + x / (width * height),
+        }[animation];
+        const elapsed = frame / maxFrame - position;
+        mark = elapsed < 0 ? " " : elapsed < .09 ? "." : mark;
+      }
+      const tone = shadow ? "dim" : "active";
+      const last = cells.at(-1);
+      if (last[0] === tone) last[1] += mark;
+      else cells.push([tone, mark]);
+    }
+    return cells;
+  });
+}
+
+function route(phase, columns) {
+  const names = columns < 60 ? ["Providers", "Connect", "Scope", "Policy"] : phases;
+  const gap = columns < 60 ? " " : "   ";
+  const labels = names.flatMap((name, i) => {
+    const current = i === phase;
+    const mark = icon(i < phase ? "pass" : phases[i].toLowerCase());
+    return [[i < phase ? "good" : current ? "active" : "dim", mark + " " + name],
+      ...(i === names.length - 1 ? [] : [["", gap]])];
+  });
+  return [labels];
+}
+
+function meter(phase, columns) {
+  const segmentWidth = columns < 60 ? 7 : 11;
+  const segments = phases.flatMap((_, i) => [
+    [i < phase ? "good" : i === phase ? "active" : "dim",
+      (i < phase ? "━" : i === phase ? "═" : "╌").repeat(segmentWidth)],
+    ...(i === phases.length - 1 ? [] : [["", " "]]),
+  ]);
+  return [segments, [
+    ["active", icon(phases[phase].toLowerCase()) + " " + phases[phase]],
+    ["dim", "   " + (phase + 1) + " of " + phases.length],
+  ]];
+}
+
+function nowAndNext(phase) {
+  return [
+    [["active", icon(phases[phase].toLowerCase()) + "  Now  " + steps[step][0]],
+      ["dim", "  ·  " + (phase + 1) + "/" + phases.length]],
+    ["dim", icon("next") + "  Next " + (steps[followingStep(1)]?.[0] ?? "Done")],
+  ];
+}
+
+function guided(data, columns, phase) {
+  const progress = [route, meter, nowAndNext][variant];
+  const header = phase < 0 ? intro(columns) : phase < phases.length ? progress(phase, columns) : [];
+  const body = panel(data, columns - 4).map(([style, text]) => [style, "  " + text, "panel"]);
+  return [...header, blank, ["", "", "panel"], ...body, ["", "", "panel"], blank];
+}
+
+if (params.has("intro") && ["stamp", "sweep", "rise"].includes(params.get("intro"))) {
+  $("intro").value = params.get("intro");
+}
+if (["slab", "print", "pixel"].includes(params.get("wordmark"))) $("wordmark").value = params.get("wordmark");
+function updateURL() {
+  const url = new URL(location.href);
+  url.searchParams.set("variant", variantKeys[variant]);
+  url.searchParams.set("intro", $("intro").value);
+  url.searchParams.set("wordmark", $("wordmark").value);
+  history.replaceState(null, "", url);
+}
+function renderControls() {
+  const phaseOptions = steps.flatMap(([name], index) =>
+    (index === 4 || index === 6) && !hasHost() ? [] : [new Option(name, index)]);
+  $("step").replaceChildren(...phaseOptions);
+  $("step").value = step;
+  $("back").disabled = step === 0;
+  $("next").disabled = (step === 1 && trackerIndex < 0) || (step === 2 && hostIndex < 0);
+  $("next").textContent = step === 0 ? "Begin" : step === 8 ? "Apply policy (demo)" :
+    step === 9 ? "Start over" : "Continue";
+  const pickingTracker = step === 1;
+  $("pick-control").hidden = !pickingTracker && step !== 2;
+  if (!$("pick-control").hidden) {
+    const role = pickingTracker ? "tracker" : "codeHost";
+    const options = pickingTracker ? trackerOptions : hostOptions;
+    const selected = pickingTracker ? trackerIndex : hostIndex;
+    $("pick").replaceChildren(new Option("Choose…", -1),
+      ...options.map((provider, index) => new Option(provider[role].label, index)));
+    $("pick").value = selected;
+  }
+}
+function render() {
+  const data = currentScreen();
+  const columns = Number($("width").value);
+  screen.classList.toggle("plain", !$("colour").checked);
+  screen.style.setProperty("--columns", columns);
+  const help = step === 0 && frame < maxFrame ? "any key skip" : data.keys;
+  const lines = [...guided(data, columns, steps[step][1]), ...row("dim", help, columns)];
+  const output = document.createElement("div");
+  output.className = "terminal-output";
+  output.setAttribute("aria-label", steps[step][0] + " terminal preview");
+  for (const [i, line] of lines.entries()) {
+    const lineNode = document.createElement("div");
+    if (step === 0 && i < 7 + ($("wordmark").value === "slab" ? 1 : 0)) lineNode.className = "art";
+    const segments = Array.isArray(line[0]) ? line : [line];
+    for (const [style, text, background] of segments) {
+      const node = document.createElement(style === "b" ? "b" : "span");
+      node.className = [style, background].filter(Boolean).join(" ");
+      node.textContent = background ? text.padEnd(columns) : text;
+      lineNode.append(node);
+    }
+    if (!segments.some(([, text, background]) => text || background)) lineNode.append("\u00a0");
+    output.append(lineNode);
+  }
+  screen.replaceChildren(output);
+  $("variant-name").textContent = variants[variant];
+}
+function stop() {
+  clearInterval(timer);
+  frame = maxFrame;
+}
+function replay() {
+  stop();
+  step = 0;
+  if (!reducedMotion.matches) {
+    frame = 0;
+    timer = setInterval(() => {
+      if (++frame >= maxFrame) stop();
+      render();
+    }, 32);
+  }
+  renderControls();
+  render();
+}
+function go(index) {
+  stop();
+  step = index;
+  renderControls();
+  render();
+}
+function advance(direction) {
+  if (direction > 0 && $("next").disabled) return;
+  if (step === 9 && direction > 0) {
+    trackerIndex = hostIndex = -1;
+    replay();
+    return;
+  }
+  const index = followingStep(direction);
+  if (steps[index]) go(index);
+}
+function followingStep(direction) {
+  const index = step + direction;
+  return !hasHost() && (index === 4 || index === 6) ? index + direction : index;
+}
+$("step").onchange = event => go(Number(event.target.value));
+$("width").onchange = render;
+$("intro").onchange = () => { updateURL(); replay(); };
+$("wordmark").onchange = () => { updateURL(); replay(); };
+$("icons").onchange = render;
+$("colour").onchange = render;
+$("replay").onclick = replay;
+$("back").onclick = () => advance(-1);
+$("next").onclick = () => advance(1);
+$("pick").onchange = event => {
+  if (step === 1) trackerIndex = Number(event.target.value);
+  if (step === 2) hostIndex = Number(event.target.value);
+  renderControls();
+  render();
+};
+function changeVariant(direction) {
+  variant = (variant + direction + variants.length) % variants.length;
+  updateURL();
+  render();
+}
+$("prev-variant").onclick = () => changeVariant(-1);
+$("next-variant").onclick = () => changeVariant(1);
+document.addEventListener("keydown", event => {
+  if (event.target.closest("input, textarea, select, button, [contenteditable]")) return;
+  if (step === 0 && frame < maxFrame) {
+    event.preventDefault();
+    stop();
+    render();
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+    event.preventDefault();
+    changeVariant(event.key === "ArrowLeft" ? -1 : 1);
+  } else if ((event.key === "ArrowDown" || event.key === "ArrowUp") && (step === 1 || step === 2)) {
+    event.preventDefault();
+    const delta = event.key === "ArrowDown" ? 1 : -1;
+    const options = step === 1 ? trackerOptions : hostOptions;
+    const index = step === 1 ? trackerIndex : hostIndex;
+    const next = index < 0 ? (delta > 0 ? 0 : options.length - 1) : (index + delta + options.length) % options.length;
+    $("pick").onchange({ target: { value: next } });
+  } else if (event.key === "Enter" || event.key === "Escape") {
+    event.preventDefault();
+    advance(event.key === "Enter" ? 1 : -1);
+  }
+});
+replay();
+</script>
+</html>

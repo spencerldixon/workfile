@@ -158,7 +158,7 @@ func readProject[T any](ctx context.Context, c githubTracker, token, query strin
 		return none, err
 	}
 	if response.Organization == nil || response.Organization.ProjectV2 == nil {
-		return none, fmt.Errorf("cannot find project %d in %s; check the project and org settings", p.Project, p.Org)
+		return none, fmt.Errorf("cannot find project %v in %s; check the project and org settings", sent["project"], p.Org)
 	}
 	return *response.Organization.ProjectV2, nil
 }
@@ -481,7 +481,8 @@ func (c githubTracker) Listing(ctx context.Context, scope string) ([]workfile.Li
 	for _, item := range items {
 		issue := item.Content
 		entry := workfile.Listing{
-			Key: issue.key(), Title: issue.Title, Status: item.status(), State: stateFor(p, item.status()),
+			Origin: issue.Repository.Name,
+			Key:    issue.key(), Title: issue.Title, Status: item.status(), State: stateFor(p, item.status()),
 			Assignee: issue.assignee().displayName(), AssigneeID: issue.assignee().Login, URL: issue.URL,
 		}
 		if issue.IssueType != nil {
@@ -583,6 +584,7 @@ func (c githubTracker) Detail(ctx context.Context, key string) (workfile.Detail,
 		}
 		d.Comments = append(d.Comments, comment)
 	}
+	slices.SortStableFunc(d.Comments, func(a, b workfile.Comment) int { return b.Created.Compare(a.Created) })
 	return d, nil
 }
 
@@ -608,4 +610,10 @@ func (c githubTracker) Image(ctx context.Context, attachment string) ([]byte, er
 		return nil, err
 	}
 	return c.download(ctx, u.String(), "Bearer "+token)
+}
+
+// Activity is not read from GitHub Issues yet; Role.Activity lists none. The
+// inbox still shows policy rows for its tickets.
+func (c githubTracker) Activity(context.Context, []string, time.Time) ([]workfile.Activity, error) {
+	return nil, nil
 }

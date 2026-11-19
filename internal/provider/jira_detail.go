@@ -3,10 +3,11 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
+	"strings"
 	"time"
 
 	"workfile/internal/workfile"
@@ -37,7 +38,8 @@ func (c jiraTracker) Listing(ctx context.Context, scope string) ([]workfile.List
 	items := make([]workfile.Listing, 0, len(issues))
 	for _, issue := range issues {
 		f := issue.Fields
-		items = append(items, workfile.Listing{Key: issue.Key, Title: f.Summary, Status: f.Status.Name, State: jiraState(p, f.Status.Name), Assignee: f.Assignee.DisplayName, AssigneeID: f.Assignee.AccountID, Type: f.IssueType.Name, URL: "https://" + p.Site + "/browse/" + url.PathEscape(issue.Key)})
+		origin, _, _ := strings.Cut(issue.Key, "-")
+		items = append(items, workfile.Listing{Origin: origin, Key: issue.Key, Title: f.Summary, Status: f.Status.Name, State: jiraState(p, f.Status.Name), Assignee: f.Assignee.DisplayName, AssigneeID: f.Assignee.AccountID, Type: f.IssueType.Name, URL: "https://" + p.Site + "/browse/" + url.PathEscape(issue.Key)})
 	}
 	return items, nil
 }
@@ -49,6 +51,7 @@ type jiraComments struct {
 	Comments []struct {
 		Author struct {
 			DisplayName string `json:"displayName"`
+			AccountID   string `json:"accountId"`
 		}
 		Created string
 		Body    json.RawMessage
@@ -66,7 +69,7 @@ func (c jiraTracker) Detail(ctx context.Context, key string) (workfile.Detail, e
 		Fields struct {
 			Description json.RawMessage
 			Comment     jiraComments
-			Attachment  []struct{ ID, Filename string }
+			Attachment  []struct{ ID, Filename, MimeType string }
 		}
 	}
 	endpoint := base + "/rest/api/3/issue/" + url.PathEscape(key) + "?fields=description,comment,attachment"
@@ -76,7 +79,7 @@ func (c jiraTracker) Detail(ctx context.Context, key string) (workfile.Detail, e
 	f := issue.Fields
 	files := make([]jiraFile, len(f.Attachment))
 	for i, a := range f.Attachment {
-		files[i] = jiraFile{a.ID, a.Filename}
+		files[i] = jiraFile{id: a.ID, name: a.Filename, mimeType: a.MimeType}
 	}
 	// A ticket embeds only some of a long thread, and not the newest. One more
 	// read gets those. If it fails, the ticket is still worth showing.
@@ -94,16 +97,31 @@ func (c jiraTracker) Detail(ctx context.Context, key string) (workfile.Detail, e
 		created, _ := time.Parse("2006-01-02T15:04:05.000-0700", comment.Created)
 		d.Comments = append(d.Comments, workfile.Comment{Author: comment.Author.DisplayName, Created: created, Body: matchImages(document(comment.Body), files)})
 	}
+	// Jira's default activity order is oldest first. Keep the newest page
+	// when the preview is partial, and show unknown dates after known ones.
+	slices.SortStableFunc(d.Comments, func(a, b workfile.Comment) int {
+		switch {
+		case a.Created.IsZero():
+			if b.Created.IsZero() {
+				return 0
+			}
+			return 1
+		case b.Created.IsZero():
+			return -1
+		default:
+			return a.Created.Compare(b.Created)
+		}
+	})
 	return d, nil
 }
 
 // jiraFile is a file attached to a ticket.
-type jiraFile struct{ id, name string }
+type jiraFile struct{ id, name, mimeType string }
 
 // matchImages swaps each image block's media id, which document leaves in
 // Attachment, for the id of the file it shows. Jira's image nodes use a media
 // id that is not the attachment id, so the file name usually decides. An image
-// with no file keeps its name and loses its Attachment.
+// with no direct match retains an opaque media locator when possible.
 func matchImages(blocks []workfile.Block, files []jiraFile) []workfile.Block {
 	for i := range blocks {
 		b := &blocks[i]
@@ -121,6 +139,9 @@ func matchImages(blocks []workfile.Block, files []jiraFile) []workfile.Block {
 				break
 			}
 		}
+		if b.Attachment == "" {
+			b.Attachment = jiraMediaReference(media, files)
+		}
 	}
 	return blocks
 }
@@ -132,13 +153,25 @@ var attachmentID = regexp.MustCompile(`^[0-9]+$`)
 // this client follows no redirects, so redirect=false asks Jira for the bytes
 // itself. The token never reaches another host.
 func (c jiraTracker) Image(ctx context.Context, id string) ([]byte, error) {
+	var media string
+	var candidates []string
 	if !attachmentID.MatchString(id) {
-		return nil, errors.New("not an attachment id")
+		var err error
+		media, candidates, err = parseJiraMediaReference(id)
+		if err != nil {
+			return nil, err
+		}
 	}
 	name := c.name
 	base, auth, err := c.jira(ctx, name)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if media != "" {
+		id, err = c.mediaAttachment(ctx, base, auth, media, candidates)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return c.download(ctx, base+"/rest/api/3/attachment/content/"+id+"?redirect=false", auth)
 }

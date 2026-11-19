@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"image"
 	"slices"
 	"sort"
 )
@@ -13,34 +14,43 @@ import (
 // stage. The order of stacked stages and of the lines that share a gap is chosen
 // to leave as few crossings and overlaps as possible.
 type flowLayout struct {
-	nodes []flowNode
-	moves []flowMove
-	cols  int // columns
-	rows  int // the most stages in one column
-	lanes int // runs above the stages, for moves that skip columns
+	nodes       []flowNode
+	moves       []flowMove
+	cols        int // columns
+	rows        int // the most stages in one column
+	lanes       int // runs above the stages, for moves that skip columns
+	returnLanes int // return moves run below all stages
 	// uses lists, for each gap between columns, the vertical lines that run in
 	// it, left to right. tops lists, for each stage, the lines that touch its
 	// top edge, left to right.
 	uses [][]flowUse
 	tops [][]flowUse
+	// bottoms lists, for each stage with nothing below it, the returns that leave
+	// or arrive by its bottom edge, left to right.
+	bottoms [][]flowUse
 }
 
 type flowNode struct {
 	name     string
+	gates    []string
 	col, row int
 	home     int // the row it would have in policy order
 	broken   bool
+	current  bool   // the ticket's stage; the other stages are drawn quietly
+	tone     string // green when the ticket can move on, red when it is blocked
 }
 
 const (
 	moveStraight = iota // same row, next column
 	moveElbow           // next column, another row
 	moveLong            // skips a column: goes over the top
+	moveReturn          // goes back to an earlier column, below the stages
 )
 
 type flowMove struct {
 	from, to int // node indexes
 	color    string
+	gates    []string
 	kind     int
 	lane     int // long moves: 0 is nearest the stages
 }
@@ -57,8 +67,11 @@ type flowPoint struct{ x, y int }
 // ticket. edges are the forward moves, already coloured.
 func newFlowLayout(stages []string, ends map[string]bool, edges []pipelineEdge, broken map[string]bool) flowLayout {
 	rank := make([]int, len(stages))
+	// Returns go back, so they never push a stage further along.
 	for _, e := range edges {
-		rank[e.to] = max(rank[e.to], rank[e.from]+1)
+		if !e.backward() {
+			rank[e.to] = max(rank[e.to], rank[e.from]+1)
+		}
 	}
 	last := 0
 	for _, r := range rank {
@@ -79,7 +92,7 @@ func newFlowLayout(stages []string, ends map[string]bool, edges []pipelineEdge, 
 		l.rows = max(l.rows, n)
 	}
 	for _, e := range edges {
-		l.moves = append(l.moves, flowMove{from: e.from, to: e.to, color: e.color})
+		l.moves = append(l.moves, flowMove{from: e.from, to: e.to, color: e.color, gates: e.gates})
 	}
 	l.arrange()
 	l.optimise()
@@ -92,10 +105,25 @@ func newFlowLayout(stages []string, ends map[string]bool, edges []pipelineEdge, 
 func (l *flowLayout) arrange() {
 	l.uses = make([][]flowUse, max(0, l.cols-1))
 	l.tops = make([][]flowUse, len(l.nodes))
+	l.bottoms = make([][]flowUse, len(l.nodes))
 	for i := range l.moves {
 		m := &l.moves[i]
 		from, to := l.nodes[m.from], l.nodes[m.to]
 		switch gap := to.col - from.col; {
+		case gap < 0:
+			// A stage with nothing below it leaves and arrives by its bottom
+			// edge, straight down to the returns. One boxed in uses the gaps.
+			m.kind = moveReturn
+			if l.lowest(m.from) {
+				l.bottoms[m.from] = append(l.bottoms[m.from], flowUse{i, false})
+			} else {
+				l.uses[from.col-1] = append(l.uses[from.col-1], flowUse{i, false})
+			}
+			if l.lowest(m.to) {
+				l.bottoms[m.to] = append(l.bottoms[m.to], flowUse{i, true})
+			} else {
+				l.uses[to.col] = append(l.uses[to.col], flowUse{i, true})
+			}
 		case gap == 1 && from.row == to.row:
 			m.kind = moveStraight
 		case gap == 1:
@@ -155,6 +183,44 @@ func (l *flowLayout) arrange() {
 		used = append(used, taken{low, high, lane})
 		l.lanes = max(l.lanes, lane+1)
 	}
+	// Along the bottom of a stage, returns leaving sit left of returns
+	// arriving. Leaving, the nearest destination is leftmost; arriving, the
+	// furthest source is, so the deeper lanes wrap around the shallower ones.
+	for node, uses := range l.bottoms {
+		sort.SliceStable(uses, func(a, b int) bool {
+			x, y := uses[a], uses[b]
+			if x.arrive != y.arrive {
+				return !x.arrive
+			}
+			if x.arrive {
+				return l.nodes[l.moves[x.move].from].col > l.nodes[l.moves[y.move].from].col
+			}
+			return l.nodes[l.moves[x.move].to].col > l.nodes[l.moves[y.move].to].col
+		})
+		l.bottoms[node] = uses
+	}
+	// Shorter returns get the shallower lanes, so returns nest instead of crossing.
+	var returns []int
+	for i, m := range l.moves {
+		if m.kind == moveReturn {
+			returns = append(returns, i)
+		}
+	}
+	back := func(i int) int { return l.nodes[l.moves[i].from].col - l.nodes[l.moves[i].to].col }
+	sort.SliceStable(returns, func(a, b int) bool { return back(returns[a]) < back(returns[b]) })
+	l.returnLanes = 0
+	used = nil
+	for _, i := range returns {
+		m := l.moves[i]
+		low, high := l.nodes[m.to].col, l.nodes[m.from].col
+		lane := 0
+		for slices.ContainsFunc(used, func(o taken) bool { return o.lane == lane && low <= o.high && o.low <= high }) {
+			lane++
+		}
+		l.moves[i].lane = lane
+		used = append(used, taken{low, high, lane})
+		l.returnLanes = max(l.returnLanes, lane+1)
+	}
 }
 
 // optimise reorders stacked stages, then the lines in each gap, to lower the
@@ -166,7 +232,7 @@ func (l *flowLayout) optimise() {
 		for c := 0; c < l.cols; c++ {
 			var members []int
 			for i, n := range l.nodes {
-				if n.col == c {
+				if n.col == c && len(n.gates) == 0 {
 					members = append(members, i)
 				}
 			}
@@ -314,8 +380,11 @@ type flowGeometry interface {
 	gapX(gap, slot int) int
 	topX(node, slot int) int
 	topY(node int) int // where a move touches the top of a stage
+	bottomX(node, slot int) int
+	bottomY(node int) int // where a return touches the bottom of a stage
 	rowY(row int) int
 	laneY(lane int) int
+	returnY(lane int) int
 }
 
 // slot finds where a move's end sits: in a gap, or along the top of a stage.
@@ -333,14 +402,86 @@ func (l *flowLayout) slot(move int, arrive bool) (top bool, id, index int) {
 	return false, 0, 0
 }
 
-// route is the corners of a move, from the stage it leaves to the stage it
-// reaches. It arrives going right, or going down onto the top of a stage.
+// lowest reports whether no stage sits below this one in its column.
+func (l *flowLayout) lowest(node int) bool {
+	n := l.nodes[node]
+	return !slices.ContainsFunc(l.nodes, func(o flowNode) bool { return o.col == n.col && o.row > n.row })
+}
+
+// bottomSlot finds a return's end along the bottom of a stage, if it is there.
+func (l *flowLayout) bottomSlot(move int, arrive bool) (node, index int, ok bool) {
+	for node, uses := range l.bottoms {
+		if i := slices.Index(uses, flowUse{move, arrive}); i >= 0 {
+			return node, i, true
+		}
+	}
+	return 0, 0, false
+}
+
+func (l *flowLayout) paths(g flowGeometry) [][]flowPoint {
+	paths := make([][]flowPoint, len(l.moves))
+	for i := range l.moves {
+		paths[i] = l.route(i, g)
+	}
+	return paths
+}
+
+// flowLabelBox finds a clear horizontal run, leaving the corners and arrowhead visible.
+// The caller can fall back to route references when every run is too crowded.
+func flowLabelBox(paths [][]flowPoint, move, width, height int) (image.Rectangle, bool) {
+	var blocked []image.Rectangle
+	for i, path := range paths {
+		if i == move {
+			continue
+		}
+		for j, end := range path[1:] {
+			start := path[j]
+			blocked = append(blocked, image.Rect(min(start.x, end.x), min(start.y, end.y), max(start.x, end.x)+1, max(start.y, end.y)+1))
+		}
+	}
+	path := paths[move]
+	for j, end := range path[1:] {
+		start := path[j]
+		if start.y != end.y {
+			continue
+		}
+		y := start.y - height/2
+		left, right := min(start.x, end.x), max(start.x, end.x)
+		for x := left + 1; x+width <= right; x++ {
+			box := image.Rect(x, y, x+width, y+height)
+			if !slices.ContainsFunc(blocked, box.Overlaps) {
+				return box, true
+			}
+		}
+	}
+	return image.Rectangle{}, false
+}
+
+// route returns the corners of a move in travel order.
 func (l *flowLayout) route(i int, g flowGeometry) []flowPoint {
 	m := l.moves[i]
 	from, to := l.nodes[m.from], l.nodes[m.to]
 	y0, y1 := g.rowY(from.row), g.rowY(to.row)
 	start, end := flowPoint{g.startX(m.from), y0}, flowPoint{g.endX(m.to), y1}
 	switch m.kind {
+	case moveReturn:
+		lane := g.returnY(m.lane)
+		var path []flowPoint
+		if node, slot, ok := l.bottomSlot(i, false); ok {
+			x := g.bottomX(node, slot)
+			path = append(path, flowPoint{x, g.bottomY(m.from)}, flowPoint{x, lane})
+		} else {
+			_, gap, slot := l.slot(i, false)
+			x := g.gapX(gap, slot)
+			path = append(path, flowPoint{g.endX(m.from), y0}, flowPoint{x, y0}, flowPoint{x, lane})
+		}
+		if node, slot, ok := l.bottomSlot(i, true); ok {
+			x := g.bottomX(node, slot)
+			return append(path, flowPoint{x, lane}, flowPoint{x, g.bottomY(m.to)})
+		}
+		_, gap, slot := l.slot(i, true)
+		x := g.gapX(gap, slot)
+		return append(path, flowPoint{x, lane}, flowPoint{x, y1}, flowPoint{g.startX(m.to), y1})
 	case moveStraight:
 		return []flowPoint{start, end}
 	case moveElbow:
@@ -380,6 +521,11 @@ func (g unitGeometry) gapX(gap, slot int) int {
 func (g unitGeometry) topX(node, slot int) int {
 	return g.endX(node) + (slot+1)*unitStage/(len(g.l.tops[node])+1)
 }
-func (g unitGeometry) topY(node int) int  { return g.rowY(g.l.nodes[node].row) - 1 }
-func (g unitGeometry) rowY(row int) int   { return g.l.lanes*2 + 2 + row*unitRow }
-func (g unitGeometry) laneY(lane int) int { return (g.l.lanes - 1 - lane) * 2 }
+func (g unitGeometry) topY(node int) int { return g.rowY(g.l.nodes[node].row) - 1 }
+func (g unitGeometry) bottomX(node, slot int) int {
+	return g.endX(node) + (slot+1)*unitStage/(len(g.l.bottoms[node])+1)
+}
+func (g unitGeometry) bottomY(node int) int { return g.rowY(g.l.nodes[node].row) + 1 }
+func (g unitGeometry) rowY(row int) int     { return g.l.lanes*2 + 2 + row*unitRow }
+func (g unitGeometry) laneY(lane int) int   { return (g.l.lanes - 1 - lane) * 2 }
+func (g unitGeometry) returnY(lane int) int { return g.rowY(g.l.rows-1) + (lane+1)*2 }

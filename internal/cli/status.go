@@ -52,7 +52,9 @@ func status(ctx context.Context, e env) (int, error) {
 	if o.stage != "" && !slices.Contains(w.Policy.States, o.stage) {
 		return 2, fmt.Errorf("%s is not a stage in policy.yml", o.stage)
 	}
+	finish := e.startProgramWork()
 	r, err := assess(ctx, e)
+	finish()
 	if err != nil {
 		return 2, err
 	}
@@ -68,7 +70,9 @@ func status(ctx context.Context, e env) (int, error) {
 		// list is already someone's. Without an answer the key is left out.
 		var me map[string]string
 		if r.who == nil {
+			finish := e.startProgramWork()
 			me, _ = identity(ctx, w, e.client)
+			finish()
 		}
 		return code, exploreStatus(ctx, v, w, r.all, o, me)
 	}
@@ -120,8 +124,9 @@ func (v view) statusReport(w *workfile.Workspace, all []workfile.Assessment, o o
 	if len(o.keys) > 0 {
 		shown := slices.DeleteFunc(slices.Clone(all), func(a workfile.Assessment) bool { return o.failing && group(a) >= 3 })
 		if len(shown) > 0 {
-			for _, a := range shown {
-				fmt.Fprint(v.out, newTicketModel(v, w, a).render())
+			gfx := v.outputGraphics()
+			for i, a := range shown {
+				fmt.Fprint(v.out, newTicketModel(v, w, a).printed(gfx, firstImageID+i))
 			}
 			return
 		}

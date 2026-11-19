@@ -45,13 +45,13 @@ func TestMergeStatusesKeepsFirstSeenOrder(t *testing.T) {
 
 func TestSetupPickersFilterThenToggle(t *testing.T) {
 	d, _ := newDriver(t, 60, setupFake{})
-	d.skipGitHub()
+	d.connectJira("")
 	d.want("Which projects does your team work in?")
 	d.press("/", "w", "e", "b", "enter")
 	d.press("space")
-	d.want("[✓] WEB")
+	d.want("✓ WEB")
 	d.press("esc")
-	d.want("[ ] APP")
+	d.want("○ APP")
 	if got := strings.Join(d.m.projectPick.chosen(), ","); got != "WEB" {
 		t.Fatalf("picked %q", got)
 	}
@@ -61,7 +61,7 @@ func TestSetupPickersFilterThenToggle(t *testing.T) {
 func TestSetupProjectsNeedOne(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d, _ := newDriver(t, width, setupFake{})
-		d.skipGitHub()
+		d.connectJira("")
 		d.want("Which projects does your team work in?")
 		d.want("Nothing picked yet")
 		d.press("enter")
@@ -75,37 +75,33 @@ func TestSetupProjectsNeedOne(t *testing.T) {
 func TestSetupReposNeedOneAndAllClearsTheRest(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d, _ := newDriver(t, width, setupFake{})
-		d.toGitHubChoice()
-		d.press("y", "enter")
-		d.typeText("example-team")
-		d.press("enter")
+		d.toHostToken()
 		d.typeText("example-github-token")
 		d.press("enter")
-		d.want("Which repositories does your team ship from?")
-		d.want("All repositories in")
+		d.want("Which projects does your team work in?")
+		d.press("space", "enter")
+		d.want("Choose repositories for pull requests")
+		d.want("All repositories")
 		d.press("enter")
 		d.want("Pick at least one repository")
 		d.press("down", "space", "down", "space")
 		d.want("2 repositories picked")
 		d.press("esc")
-		d.want("Create a GitHub token")
+		d.want("Which projects does your team work in?")
 	}
 }
 
 func TestSetupWritesExplicitScope(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d, root := newDriver(t, width, setupFake{})
-		d.toGitHubChoice()
-		d.press("y", "enter")
-		d.typeText("example-team")
-		d.press("enter")
+		d.toHostToken()
 		d.typeText("example-github-token")
 		d.press("enter")
-		d.want("Which repositories does your team ship from?")
-		d.press("down", "space", "down", "space", "enter")
 		d.want("Which projects does your team work in?")
 		d.press("space", "down", "space", "enter")
-		d.want("Which statuses should Workfile track?")
+		d.want("Choose repositories for pull requests")
+		d.press("down", "space", "down", "space", "enter")
+		d.want("Put the workflow stages in order")
 		d.press("down", "space", "enter")
 		d.finish()
 
@@ -134,15 +130,12 @@ func TestSetupWritesExplicitScope(t *testing.T) {
 
 func TestSetupWritesEmptySkipStatusesAndAllRepos(t *testing.T) {
 	d, root := newDriver(t, 60, setupFake{})
-	d.toGitHubChoice()
-	d.press("y", "enter")
-	d.typeText("example-team")
-	d.press("enter")
+	d.toHostToken()
 	d.typeText("example-github-token")
 	d.press("enter")
-	d.want("Which repositories does your team ship from?")
-	d.press("space", "enter")
 	d.want("Which projects does your team work in?")
+	d.press("space", "enter")
+	d.want("Choose repositories for pull requests")
 	d.press("space", "enter", "enter")
 	d.finish()
 	data, err := os.ReadFile(filepath.Join(root, ".workfile", "providers.yml"))

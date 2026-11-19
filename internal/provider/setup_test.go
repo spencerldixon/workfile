@@ -2,12 +2,52 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"workfile/internal/workfile"
 )
+
+func TestSetupGitHubTrackerDiscoversProjectsAndStatusOptions(t *testing.T) {
+	c := client(t, func(r *http.Request) (int, string) {
+		var request struct {
+			Query     string
+			Variables map[string]any
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case strings.Contains(request.Query, "projectsV2("):
+			switch request.Variables["after"] {
+			case nil:
+				return 200, `{"data":{"organization":{"projectsV2":{"nodes":[{"number":4,"title":"Example project"},{"number":3,"title":"Old project","closed":true}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`
+			case "next":
+				return 200, `{"data":{"organization":{"projectsV2":{"nodes":[{"number":2,"title":"Example web"}],"pageInfo":{"hasNextPage":false}}}}}`
+			}
+			t.Fatalf("unexpected cursor: %v", request.Variables)
+		case strings.Contains(request.Query, `field(name: "Status")`):
+			if request.Variables["project"] != float64(4) {
+				t.Fatalf("unexpected project: %v", request.Variables)
+			}
+			return 200, `{"data":{"organization":{"projectV2":{"field":{"options":[{"name":"Backlog"},{"name":"Review"},{"name":"Done"}]}}}}}`
+		}
+		t.Fatal("unexpected discovery query")
+		return 500, `{}`
+	})
+	c.Workspace.Policy.Tracker = "github"
+	ctx := context.Background()
+	projects, err := c.SetupProjects(ctx)
+	if err != nil || len(projects) != 2 || projects[0].Key != "4" || projects[1].Key != "2" {
+		t.Fatalf("projects %v: %v", projects, err)
+	}
+	statuses, err := c.SetupStatuses(ctx, "4")
+	if err != nil || strings.Join(statuses, ",") != "Backlog,Review,Done" {
+		t.Fatalf("statuses %v: %v", statuses, err)
+	}
+}
 
 func TestSetupDiscovery(t *testing.T) {
 	pages := 0
@@ -53,8 +93,19 @@ func TestSetupReposListsUnarchivedRepositories(t *testing.T) {
 	p := c.Workspace.Providers["github"]
 	p.Repos = workfile.Names{"api"} // the choice made so far must not narrow the list
 	c.Workspace.Providers["github"] = p
-	repos, err := c.SetupRepos(context.Background())
+	repos, err := c.SetupRepos(context.Background(), "github")
 	if err != nil || len(repos) != 2 || repos[0].Name != "api" || repos[1].Name != "web" {
 		t.Fatalf("repos %v: %v", repos, err)
+	}
+}
+
+func TestSetupTokenValidation(t *testing.T) {
+	for _, bad := range []string{"", " ", "a b", "a\nb", `"x"`, "x'y"} {
+		if _, err := setupToken(bad); err == nil {
+			t.Fatalf("accepted %q", bad)
+		}
+	}
+	if got, err := setupToken("  example-token  "); err != nil || got != "example-token" {
+		t.Fatal("rejected a good token")
 	}
 }

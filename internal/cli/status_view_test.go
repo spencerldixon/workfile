@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/ansi/kitty"
 	"workfile/internal/workfile"
 )
 
@@ -55,6 +56,20 @@ func TestStatusScreenFitsAndMoves(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestStatusTicketPanelUsesTheSharedKittyDiagram(t *testing.T) {
+	m := statusFixture(t, true, "48;5;236", nil)
+	m.workflow.gfx = testGraphics
+	_, load := m.Update(tea.WindowSizeMsg{Width: 100, Height: 60})
+	_, send := m.Update(load())
+	if raw, ok := send().(tea.RawMsg); !ok || !strings.Contains(raw.Msg.(string), "\x1b_G") {
+		t.Fatal("status did not transmit a workflow image")
+	}
+	if !strings.ContainsRune(m.render(), kitty.Placeholder) {
+		t.Fatal("status did not place the workflow image")
+	}
+	checkStatusWidths(t, m, 100)
 }
 
 func TestStatusScreenListsByWhatToDoWithTheTicketBeside(t *testing.T) {

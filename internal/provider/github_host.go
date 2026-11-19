@@ -43,17 +43,12 @@ func (c githubCodeHost) Test(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	warning := ""
 	if len(missing) > 0 {
-		verb := "is"
-		if len(missing) > 1 {
-			verb = "are"
-		}
-		warning = fmt.Sprintf(" · warning: github.repos lists %s, which %s not in %s or %s archived", strings.Join(missing, ", "), verb, p.Org, verb)
+		return "", fmt.Errorf("cannot verify repositories in %s: %s. Check the token's repository access, spelling, and archive status", p.Org, strings.Join(missing, ", "))
 	}
 	if len(repos) == 0 {
-		return identity + " · connected; no visible active repositories" + warning, nil
+		return "", fmt.Errorf("no active repositories visible in %s. Check the token's repository access", p.Org)
 	}
 	_, err = c.searchPRs(ctx, token, fmt.Sprintf("org:%s is:pr archived:false", p.Org), true)
-	return fmt.Sprintf("%s · %s · %d visible active repositories%s", identity, p.Org, len(repos), warning), err
+	return fmt.Sprintf("%s · %s · %d visible active repositories", identity, p.Org, len(repos)), err
 }

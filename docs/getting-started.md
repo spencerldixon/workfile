@@ -10,7 +10,9 @@ These rules often live in people's heads. Workfile lets you write them down in a
 few small files. Then it checks your real Jira tickets and GitHub pull requests
 against them, and tells you what each one needs next.
 
-Workfile only reads. It never changes a ticket, a label or a pull request.
+Workfile's provider checks only read. It never changes a ticket, label or pull
+request. The inbox can launch an agent command you configure privately; that
+command uses its own access.
 
 ## Do this first
 
@@ -21,12 +23,15 @@ wf lint             # check the policy itself
 ```
 
 Then change `.workfile/policy.yml` until it matches how your team really works.
+Use `wf tracker` to browse tickets and `wf inbox` for activity that needs you.
+Optional `.workfile/config.yml` sets tracker and inbox preferences; see
+[Configuration](configuration.md) and the [example config](../example/.workfile/config.yml).
 
 ## The words you will see
 
 | Word | Meaning |
 | --- | --- |
-| **Provider** | A tool workfile reads from. Jira holds tickets. GitHub holds pull requests (PRs). |
+| **Provider** | A tool Workfile reads. Jira and GitHub Issues hold tickets; GitHub also holds pull requests (PRs). |
 | **Connection** | One configured provider, such as `jira` or `github`. Listed in `providers.yml`. |
 | **Scope** | The slice of work workfile reads: your Jira projects, your GitHub repos, and how long finished work stays. |
 | **Stage** | A step in your workflow, such as `todo`, `doing`, `review`, `done`. Listed in order in `policy.yml` under `states`. |
@@ -113,7 +118,8 @@ Example: a ticket in `review` with no linked PR is **out of policy**. It should
 not have got there without one. A ticket in `doing` with no PR is only **needs
 work**. It just cannot move on yet.
 
-Workfile judges tickets by the facts today. It does not read history.
+Workfile judges policy by today's facts, not by the route a ticket took.
+Inbox separately reads recent activity.
 
 Some workflows branch, such as a QA path or a security path. A ticket only has
 to pass the gates on **one** valid path to its stage.
@@ -130,24 +136,26 @@ computer. It reads saved snapshots, so it adds no requests.
 ## What you will do
 
 1. **Install** `wf`. See the [README](../README.md#install).
-2. **Run `wf setup`.** Pick a folder, connect Jira and optional GitHub, paste
-   your tokens (they show as `*`), pick your projects and repos, tick the
-   statuses you want, and confirm. Setup writes `.workfile/` and saves tokens
-   privately. See [setup details](usage.md#setup-connect-your-tools).
+2. **Run `wf setup`.** Choose your tracker and optional code host. Pick a
+   folder, connect each provider, and choose the projects, repositories and
+   statuses you use. Review and apply the policy to write `.workfile/` and save
+   your tokens privately. See [setup details](usage.md#setup-connect-your-tools).
 3. **Prefer to do it by hand?** Copy an example from [`example/`](../example/)
    and edit it. Credentials never go in the project files.
 4. **Check the connections** with `wf setup --test`.
 5. **Look at your work** with `wf status --me`, then `wf status`.
 6. **Add your team's gates** to `policy.yml`. The starter has none, so every
-   ticket reads as ready.
-7. **Run `wf lint`.** It catches plain mistakes and proves no path skips a gate.
-   Run it in CI.
+   forward move is allowed unless evidence is unavailable. Terminal-stage tickets
+   are done, and unmapped statuses still cannot be checked.
+7. **Run `wf lint`.** It catches policy mistakes and flags paths that can skip
+   gates. Gaps are advisory; invalid policy fails. Run it in CI.
 8. **Let agents ask first.** `wf check APP-42 --to done` says whether a move is
    allowed. Exit code `0` means yes.
 
 ## Where to read next
 
 - [Using wf](usage.md): every command and option.
+- [Configuration](configuration.md): shared preferences, personal settings and credentials.
 - [Writing a policy](policy.md): stages, moves, gates and rules in detail.
 - [Jira provider](providers/jira.md) and [GitHub provider](providers/github.md): tokens, scope and facts.
 - [Building a provider](providers/building-a-provider.md): add a new tracker or code host.

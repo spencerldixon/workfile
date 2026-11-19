@@ -20,6 +20,16 @@ type connection interface {
 type codeHost interface {
 	connection
 	Records(ctx context.Context, tickets []workfile.Ticket, keys workfile.Keys) (map[string][]workfile.Record, error)
+	// Activity reads what happened on these PRs since each cursor, for the
+	// inbox, asking first which changed at all. Kinds are in Role.Activity.
+	Activity(ctx context.Context, prs []workfile.PRCursor) (workfile.ActivityResult, error)
+	// Mine finds open PRs the person wrote or was asked to review, in the
+	// connection's listed repos only.
+	Mine(ctx context.Context) ([]workfile.Record, error)
+	// FailedChecks lists the failing jobs on one PR's latest commit, so a
+	// person can go straight to the log. It is read for one PR at a time,
+	// only when someone opens a ticket whose PR has failing checks.
+	FailedChecks(ctx context.Context, record workfile.Record) ([]workfile.FailedCheck, error)
 }
 
 // codeHosts lists the adapters for each code host kind.

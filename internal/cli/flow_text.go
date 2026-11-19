@@ -1,19 +1,34 @@
 package cli
 
-// textFlow draws a flowLayout with box characters. Stages are plain labels, and
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/mattn/go-runewidth"
+)
+
+// textFlow draws a flowLayout with ASCII connectors. Stages are plain labels, and
 // moves are lines between them. ok is false when it does not fit width.
 func (v view) textFlow(l *flowLayout, width int) ([]row, bool) {
 	// Columns are as wide as their longest name. The gap after a column is wide
 	// enough for each move that runs in it to have its own vertical line.
 	colW := make([]int, l.cols)
 	for _, n := range l.nodes {
-		colW[n.col] = max(colW[n.col], len([]rune(n.name)))
+		colW[n.col] = max(colW[n.col], runewidth.StringWidth(n.name))
+	}
+	gateW := make([]int, len(l.uses))
+	for _, move := range l.moves {
+		if len(move.gates) > 0 && (move.kind == moveStraight || move.kind == moveElbow) {
+			col := l.nodes[move.from].col
+			gateW[col] = max(gateW[col], runewidth.StringWidth(gateLabel(move.gates)))
+		}
 	}
 	gapW := func(roomy bool, g int) int {
 		if roomy {
-			return max(5, 2*len(l.uses[g])+3)
+			return max(5, 2*len(l.uses[g])+3+gateW[g])
 		}
-		return max(4, len(l.uses[g])+3)
+		return max(4, len(l.uses[g])+3, len(l.uses[g])+2+gateW[g])
 	}
 	var g textGeometry
 	for _, roomy := range []bool{true, false} {
@@ -41,17 +56,21 @@ func (v view) textFlow(l *flowLayout, width int) ([]row, bool) {
 	}
 	g.colW = colW
 	height := g.base + (l.rows-1)*2 + 1
+	if l.returnLanes > 0 {
+		height += l.returnLanes + 1
+	}
 	grid := make([][]flowCell, height)
 	for y := range grid {
 		grid[y] = make([]flowCell, g.width)
 	}
+	paths := l.paths(g)
 	// Quiet moves first, so a gap shows on top where lines cross.
 	for _, name := range []string{muted, green, red} {
 		for i, m := range l.moves {
 			if m.color != name {
 				continue
 			}
-			path := l.route(i, g)
+			path := paths[i]
 			for k := 1; k < len(path); k++ {
 				a, b := path[k-1], path[k]
 				for x, y := a.x, a.y; x != b.x || y != b.y; {
@@ -63,25 +82,41 @@ func (v view) textFlow(l *flowLayout, width int) ([]row, bool) {
 				}
 			}
 			end, before := path[len(path)-1], path[len(path)-2]
-			grid[end.y][end.x].arrow = "→"
-			if end.x == before.x {
-				grid[end.y][end.x].arrow = "↓"
+			arrow := ">"
+			switch {
+			case end.x < before.x:
+				arrow = "<"
+			case end.y > before.y:
+				arrow = "v"
+			case end.y < before.y:
+				arrow = "^"
 			}
+			grid[end.y][end.x].arrow = arrow
 		}
 	}
+	for i, move := range l.moves {
+		if len(move.gates) == 0 {
+			continue
+		}
+		label := gateLabel(move.gates)
+		size := runewidth.StringWidth(label)
+		box, ok := flowLabelBox(paths, i, size, 1)
+		if !ok {
+			return nil, false
+		}
+		grid[box.Min.Y][box.Min.X] = flowCell{text: label, style: move.color, span: size}
+	}
+	focused := slices.ContainsFunc(l.nodes, func(n flowNode) bool { return n.current })
 	for _, n := range l.nodes {
-		style := "1"
-		if n.broken {
-			style = "1;" + red
-		}
-		for i, r := range []rune(n.name) {
-			grid[g.rowY(n.row)][g.x0[n.col]+i] = flowCell{text: string(r), style: style}
-		}
+
+		grid[g.rowY(n.row)][g.x0[n.col]] = flowCell{text: n.name, style: n.textStyle(focused), span: runewidth.StringWidth(n.name)}
 	}
 	rows := make([]row, height)
 	for y, cells := range grid {
 		var line row
-		for _, c := range cells {
+		for x := 0; x < len(cells); {
+			c := cells[x]
+			x += max(1, c.span)
 			text, style := c.glyph(), c.style
 			if c.text == "" && c.arrow == "" && c.dirs == 0 {
 				style = ""
@@ -97,6 +132,21 @@ func (v view) textFlow(l *flowLayout, width int) ([]row, bool) {
 	return rows, true
 }
 
+func (n flowNode) textStyle(focused bool) string {
+	style := "1"
+	switch {
+	case len(n.gates) > 0:
+		style = "1;" + n.tone
+	case n.broken:
+		style = "1;" + red
+	case n.current:
+		style = strings.TrimSuffix("1;4;"+n.tone, ";")
+	case focused && !n.current:
+		style = muted
+	}
+	return style
+}
+
 type textGeometry struct {
 	l     *flowLayout
 	x0    []int // left edge of each column
@@ -108,21 +158,30 @@ type textGeometry struct {
 
 func (g textGeometry) startX(node int) int {
 	n := g.l.nodes[node]
-	return g.x0[n.col] + len([]rune(n.name))
+	return g.x0[n.col] + runewidth.StringWidth(n.name)
 }
 func (g textGeometry) endX(node int) int { return g.x0[g.l.nodes[node].col] - 1 }
 func (g textGeometry) gapX(gap, slot int) int {
 	left := g.x0[gap] + g.colW[gap]
 	return min(left+1+slot*2, left+g.gaps[gap]-2)
 }
-func (g textGeometry) rowY(row int) int   { return g.base + row*2 }
-func (g textGeometry) laneY(lane int) int { return g.l.lanes - 1 - lane }
-func (g textGeometry) topY(node int) int  { return g.rowY(g.l.nodes[node].row) - 1 }
+func (g textGeometry) rowY(row int) int     { return g.base + row*2 }
+func (g textGeometry) laneY(lane int) int   { return g.l.lanes - 1 - lane }
+func (g textGeometry) returnY(lane int) int { return g.rowY(g.l.rows-1) + 2 + lane }
+func (g textGeometry) topY(node int) int    { return g.rowY(g.l.nodes[node].row) - 1 }
+func (g textGeometry) bottomY(node int) int { return g.rowY(g.l.nodes[node].row) + 1 }
+
+// Returns along the bottom of a stage are spread under its name.
+func (g textGeometry) bottomX(node, slot int) int {
+	n := g.l.nodes[node]
+	width := runewidth.StringWidth(n.name)
+	return g.x0[n.col] + min(width-1, (slot+1)*width/(len(g.l.bottoms[node])+1))
+}
 
 // Lines along the top of a stage are spread over its name.
 func (g textGeometry) topX(node, slot int) int {
 	n := g.l.nodes[node]
-	width := len([]rune(n.name))
+	width := runewidth.StringWidth(n.name)
 	return g.x0[n.col] + min(width-1, (slot+1)*width/(len(g.l.tops[node])+1))
 }
 
@@ -158,10 +217,11 @@ func sign(n int) int {
 // flowCell is one character of the diagram: a letter of a stage name, or the
 // lines through it as a set of directions.
 type flowCell struct {
+	span  int // columns occupied by a label
 	text  string
 	style string
 	dirs  int
-	arrow string // "→" or "↓" where a move arrives
+	arrow string // ">" or "v" where a move arrives
 }
 
 func (c flowCell) glyph() string {
@@ -175,25 +235,37 @@ func (c flowCell) glyph() string {
 	case 0:
 		return " "
 	case dirUp | dirDown, dirUp, dirDown:
-		return "│"
+		return "|"
 	case dirLeft | dirRight, dirLeft, dirRight:
-		return "─"
-	case dirDown | dirRight:
-		return "┌"
-	case dirDown | dirLeft:
-		return "┐"
-	case dirUp | dirRight:
-		return "└"
-	case dirUp | dirLeft:
-		return "┘"
-	case dirUp | dirDown | dirRight:
-		return "├"
-	case dirUp | dirDown | dirLeft:
-		return "┤"
-	case dirLeft | dirRight | dirDown:
-		return "┬"
-	case dirLeft | dirRight | dirUp:
-		return "┴"
+		return "-"
+	default:
+		return "+"
 	}
-	return "┼"
+}
+
+func (v view) groupedFlowRows(labels []cell, moves []flowRoute) []row {
+	width := v.innerWidth()
+	rows := textRows("Links Use Stage Numbers.", "", muted, "", width)
+	var strip row
+	for i, label := range labels {
+		label.text = fmt.Sprintf("%d.%s", i+1, label.text)
+		if len(strip) > 0 && rowWidth(strip)+3+rowWidth(row{label}) > width {
+			rows = append(rows, splitRow(strip, width)...)
+			strip = nil
+		}
+		if len(strip) > 0 {
+			strip = append(strip, plain("   "))
+		}
+		strip = append(strip, label)
+	}
+	rows = append(rows, splitRow(strip, width)...)
+	for _, move := range moves {
+		link := " -> "
+		if len(move.gates) > 0 {
+			link = " -" + gateLabel(move.gates) + link
+		}
+		text := stageNumbers(move.from) + link + stageNumbers(move.to)
+		rows = append(rows, textRows(text, "", move.color, "", width)...)
+	}
+	return rows
 }

@@ -83,7 +83,13 @@ func TestDetailsGroupsFixesAndNamesWhatEachUnblocks(t *testing.T) {
 func TestDetailsColoursLinksAndUnderlinedCurrentStage(t *testing.T) {
 	w, ticket := complexFixture(t)
 	out := renderDetails(w, ticket, 110, true)
-	for _, want := range []string{"\x1b[1;4;" + green + "mreview", "\x1b[1;" + red + "m→ qa", "\x1b[1;" + green + "m→ security", "\x1b]8;;" + ticket.URL, "\x1b]8;;https://github.com/example-team/web/pull/18"} {
+	stageStyle := func(color string) bool {
+		return regexp.MustCompile(`\x1b\[1;4;` + color + `m([0-9]+\.)?Review`).MatchString(out)
+	}
+	if !stageStyle(green) {
+		t.Error("current stage should be underlined and green")
+	}
+	for _, want := range []string{"\x1b[1;" + red + "m→ qa", "\x1b[1;" + green + "m→ security", "\x1b]8;;" + ticket.URL, "\x1b]8;;https://github.com/example-team/web/pull/18"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing terminal styling/link %q", want)
 		}
@@ -93,7 +99,7 @@ func TestDetailsColoursLinksAndUnderlinedCurrentStage(t *testing.T) {
 	}
 	ticket.Facts["headings"] = []string{"Acceptance Criteria", "Rework"}
 	out = renderDetails(w, ticket, 110, true)
-	if !strings.Contains(out, "\x1b[1;4;"+red+"mreview") || !strings.Contains(out, "\x1b[1;"+green+"m↩ doing") {
+	if !stageStyle(red) || !strings.Contains(out, "\x1b[1;"+green+"m↩ doing") {
 		t.Fatal("blocked forward moves must not block a valid return")
 	}
 }
@@ -176,17 +182,17 @@ func TestPipelineOnlyDrawsConfiguredEdgesAndTerminatesCycles(t *testing.T) {
 	var out bytes.Buffer
 	v := view{out: &out, width: 40}
 	a := w.Assess(ticket)
-	for _, r := range v.pipeline(w.Policy, a) {
+	for _, r := range ticketDiagram(w.Policy, a).textRows(v, v.innerWidth()) {
 		v.line(v.render(r))
 	}
 	text := out.String()
-	if !strings.Contains(text, "intake") || !strings.Contains(text, "triage") {
+	if !strings.Contains(text, "Intake") || !strings.Contains(text, "Triage") {
 		t.Errorf("missing forward states:\n%s", text)
 	}
-	if !strings.Contains(text, "↩") && !strings.Contains(text, "↑") {
+	if !strings.Contains(text, "6 -> 5") {
 		t.Fatalf("configured returns disappeared:\n%s", text)
 	}
-	if strings.Contains(text, "done → cancelled") {
+	if strings.Contains(text, "11.Done -> 12.Cancelled") || strings.Contains(text, "11 -> 12") {
 		t.Fatal("states order invented an edge")
 	}
 }
@@ -218,7 +224,7 @@ func TestTicketViewListsEachPROnceAndNeverRepeatsStates(t *testing.T) {
 			}
 		}
 		track, _, _ := strings.Cut(text[strings.Index(text, "WHERE IT IS"):], "\n\n")
-		if strings.Count(track, "doing") != 1 {
+		if strings.Count(track, "Doing") != 1 {
 			t.Fatalf("%s: the track must show each state once\n%s", dir, track)
 		}
 	}

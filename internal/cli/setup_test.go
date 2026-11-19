@@ -23,11 +23,10 @@ import (
 type setupFake struct{ peopleErr bool }
 
 func (setupFake) Identity(context.Context, string) (string, error) { return "example-user", nil }
-func (setupFake) Test(context.Context, string) (string, error)     { return "connected", nil }
 func (setupFake) SetupProjects(context.Context) ([]provider.SetupProject, error) {
 	return []provider.SetupProject{{Key: "APP", Name: "Example project"}, {Key: "WEB", Name: "Example web"}}, nil
 }
-func (setupFake) SetupRepos(context.Context) ([]provider.SetupRepo, error) {
+func (setupFake) SetupRepos(context.Context, string) ([]provider.SetupRepo, error) {
 	return []provider.SetupRepo{{Name: "api"}, {Name: "web"}, {Name: "worker"}}, nil
 }
 func (setupFake) SetupStatuses(context.Context, string) ([]string, error) {
@@ -185,6 +184,8 @@ func (d *driver) press(keys ...string) {
 			d.send(tea.KeyPressMsg{Code: tea.KeyEnter})
 		case "esc":
 			d.send(tea.KeyPressMsg{Code: tea.KeyEscape})
+		case "up":
+			d.send(tea.KeyPressMsg{Code: tea.KeyUp})
 		case "down":
 			d.send(tea.KeyPressMsg{Code: tea.KeyDown})
 		case "shift+down":
@@ -217,44 +218,70 @@ func (d *driver) want(s string) {
 	}
 }
 
-// toJira walks from the welcome screen to the Jira token screen.
-func (d *driver) toJiraToken() {
+func (d *driver) selectProviders(tracker, host string) {
 	d.t.Helper()
-	d.press("enter", "enter")
+	d.press("enter")
+	d.selectProvider(tracker)
+	d.selectProvider(host)
+}
+
+func (d *driver) selectProvider(kind string) {
+	d.t.Helper()
+	list := &d.m.providerPick.list
+	for i, item := range list.Items() {
+		if item.(pickItem).key != kind {
+			continue
+		}
+		for list.Index() > i {
+			d.press("up")
+		}
+		for list.Index() < i {
+			d.press("down")
+		}
+		d.press("enter")
+		return
+	}
+	d.t.Fatalf("missing provider %q", kind)
+}
+
+func (d *driver) toJiraToken(host string) {
+	d.t.Helper()
+	d.selectProviders("jira", host)
+	d.press("enter")
 	d.typeText("example-team.atlassian.net")
 	d.press("enter")
 	d.typeText("alice@example.com")
 	d.press("enter")
 }
 
-func (d *driver) toGitHubChoice() {
+func (d *driver) connectJira(host string) {
 	d.t.Helper()
-	d.toJiraToken()
+	d.toJiraToken(host)
 	d.typeText("example-token")
 	d.press("enter")
 }
 
-// finish goes from the review screen to the end.
-func (d *driver) finish() {
+func (d *driver) toHostToken() {
 	d.t.Helper()
-	d.want("Ready to save")
+	d.connectJira("github")
+	d.want("Your GitHub organisation")
+	d.typeText("example-team")
 	d.press("enter")
-	d.want("Your workfile is ready")
 }
 
-func (d *driver) skipGitHub() {
+func (d *driver) finish() {
 	d.t.Helper()
-	d.toGitHubChoice()
-	d.want("Connect GitHub too?")
-	d.press("n", "enter")
+	d.want("Review and apply policy")
+	d.press("enter")
+	d.want("Policy applied")
 }
 
 func (d *driver) toStatuses() {
 	d.t.Helper()
-	d.skipGitHub()
+	d.connectJira("")
 	d.want("Which projects does your team work in?")
 	d.press("space", "enter")
-	d.want("Which statuses should Workfile track?")
+	d.want("Put the workflow stages in order")
 }
 
 func TestSetupFlowCreatesWorkspaceAndPrivateCredentials(t *testing.T) {
@@ -290,7 +317,7 @@ func TestSetupFlowCreatesWorkspaceAndPrivateCredentials(t *testing.T) {
 func TestSetupTokenShowsStarsAndNeverTheToken(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d, _ := newDriver(t, width, setupFake{})
-		d.toJiraToken()
+		d.toJiraToken("")
 		d.want("Nothing pasted yet")
 		d.typeText("example-token")
 		d.want("*************")
@@ -303,7 +330,7 @@ func TestSetupTokenShowsStarsAndNeverTheToken(t *testing.T) {
 
 func TestSetupTokenRejectsQuotesAndSpaces(t *testing.T) {
 	d, _ := newDriver(t, 60, setupFake{})
-	d.toJiraToken()
+	d.toJiraToken("")
 	d.press("enter")
 	d.want("Paste your token to continue.")
 	for _, bad := range []string{`"example-token"`, "example token"} {
@@ -311,14 +338,15 @@ func TestSetupTokenRejectsQuotesAndSpaces(t *testing.T) {
 		d.press("enter")
 		d.want("Paste only the token")
 	}
-	if d.m.step != stepJiraToken {
+	if !d.m.isToken() {
 		t.Fatal("moved on with a bad token")
 	}
 }
 
 func TestSetupInvalidEntriesStayOnTheScreen(t *testing.T) {
 	d, _ := newDriver(t, 60, setupFake{})
-	d.press("enter", "enter")
+	d.selectProviders("jira", "")
+	d.press("enter")
 	d.typeText("https://example.com")
 	d.press("enter")
 	d.want("Enter a Jira Cloud hostname")
@@ -331,7 +359,8 @@ func TestSetupInvalidEntriesStayOnTheScreen(t *testing.T) {
 
 func TestSetupBackAndCancel(t *testing.T) {
 	d, _ := newDriver(t, 60, setupFake{})
-	d.press("enter", "enter")
+	d.selectProviders("jira", "")
+	d.press("enter")
 	d.typeText("example-team.atlassian.net")
 	d.press("enter")
 	d.want("Your Jira email")
@@ -351,7 +380,8 @@ func TestSetupExistingWorkspaceIsNotOverwritten(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, ".workfile"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	d.press("enter", "enter")
+	d.selectProviders("jira", "")
+	d.press("enter")
 	d.want("already exists")
 	if d.m.step != stepFolder {
 		t.Fatal("accepted a folder that already has a workfile")
@@ -365,8 +395,7 @@ func TestSetupExistingWorkspaceIsNotOverwritten(t *testing.T) {
 func TestSetupGitHubIsConnectedWhenChosen(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d, root := newDriver(t, width, setupFake{})
-		d.toGitHubChoice()
-		d.press("y", "enter")
+		d.connectJira("github")
 		d.want("Your GitHub organisation")
 		d.typeText("https://github.com/example-team")
 		d.press("enter")
@@ -377,9 +406,9 @@ func TestSetupGitHubIsConnectedWhenChosen(t *testing.T) {
 		d.want("repo and read:org")
 		d.typeText("example-github-token")
 		d.press("enter")
-		d.want("Which repositories does your team ship from?")
-		d.press("space", "enter")
 		d.want("Which projects does your team work in?")
+		d.press("space", "enter")
+		d.want("Choose repositories for pull requests")
 		d.press("space", "enter", "enter")
 		d.finish()
 		w, err := workfile.Load(root)
@@ -396,44 +425,100 @@ func TestSetupGitHubIsConnectedWhenChosen(t *testing.T) {
 
 func TestSetupGitHubTokenPageIsWrittenOutWhenPlain(t *testing.T) {
 	d, _ := newDriver(t, 40, setupFake{})
-	d.toGitHubChoice()
-	d.press("y", "enter")
-	d.typeText("example-team")
-	d.press("enter")
+	d.toHostToken()
 	flat := strings.Join(strings.Fields(d.view()), "")
-	if !strings.Contains(flat, githubTokenPage) {
+	form, _ := provider.SetupFormFor("github", false)
+	if !strings.Contains(flat, form.TokenPage) {
 		t.Fatalf("address not written out:\n%s", d.view())
+	}
+}
+
+type setupGitHubTrackerFake struct{ setupFake }
+
+func (setupGitHubTrackerFake) SetupProjects(context.Context) ([]provider.SetupProject, error) {
+	return []provider.SetupProject{{Key: "4", Name: "Example project"}}, nil
+}
+
+func (setupGitHubTrackerFake) SetupPeople(context.Context, string) ([]provider.SetupPerson, error) {
+	return nil, nil
+}
+
+func TestSetupGitHubTrackerAndCodeHostHaveSeparateScopes(t *testing.T) {
+	for _, width := range []int{40, 60} {
+		d, root := newDriver(t, width, setupGitHubTrackerFake{})
+		d.selectProviders("github", "github")
+		d.press("enter")
+		d.typeText("example-team")
+		d.press("enter")
+		d.want("read:project")
+		d.typeText("example-tracker-token")
+		d.press("enter")
+		d.typeText("example-code")
+		d.press("enter")
+		d.typeText("example-code-token")
+		d.press("enter")
+		d.want("#4  Example project")
+		d.press("enter")
+		d.want("Choose repositories for tickets")
+		d.press("down", "space", "enter")
+		d.want("Choose repositories for pull requests")
+		d.press("down", "down", "space", "enter")
+		d.press("enter", "p")
+		d.want("tracker: github")
+		d.want("gates: {}")
+		d.press("esc")
+		d.finish()
+
+		w, err := workfile.Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tracker, host := w.Providers["github"], w.Providers["github_code"]
+		if w.Policy.Tracker != "github" || tracker.Project != 4 ||
+			strings.Join(tracker.Repos, ",") != "api" || strings.Join(host.Repos, ",") != "web" {
+			t.Fatalf("unexpected tracker and code host: %+v", w.Providers)
+		}
+		c := workfile.Credentials{Path: d.m.deps.credentials}
+		for _, tc := range []struct{ ref, want string }{
+			{tracker.Auth["token"], "example-tracker-token"},
+			{host.Auth["token"], "example-code-token"},
+		} {
+			if got, err := c.Get(tc.ref); got != tc.want || err != nil {
+				t.Fatalf("wrong saved credential for %s: %v", tc.ref, err)
+			}
+		}
+		if data, err := os.ReadFile(filepath.Join(root, ".workfile", "policy.yml")); err != nil || string(data) != d.m.policyData {
+			t.Fatalf("saved policy differs from the preview: %v", err)
+		}
 	}
 }
 
 func TestSetupSkippingGitHubDropsItsProvider(t *testing.T) {
 	d, root := newDriver(t, 60, setupFake{})
-	d.toGitHubChoice()
-	d.press("y", "enter")
-	d.typeText("example-team")
-	d.press("enter")
+	d.toHostToken()
 	d.typeText("example-github-token")
 	d.press("enter")
-	d.want("Which repositories does your team ship from?")
-	d.press("esc", "esc", "esc")
-	d.want("Connect GitHub too?")
-	d.press("n", "enter")
+	d.want("Which projects does your team work in?")
+	d.press("esc", "esc", "esc", "esc", "esc", "esc", "esc")
+	d.want("Where does your team review code?")
+	d.selectProvider("")
+	d.press("enter", "enter", "enter", "enter")
 	d.want("Which projects does your team work in?")
 	d.press("space", "enter", "enter")
 	d.finish()
 	w, err := workfile.Load(root)
 	if err != nil || len(w.Providers) != 1 {
-		t.Fatalf("GitHub kept after choosing no: %+v %v", w, err)
+		t.Fatalf("GitHub kept after choosing skip: %+v %v", w, err)
 	}
 }
 
 func TestSetupStatusesCanBeUntickedAndReordered(t *testing.T) {
 	d, root := newDriver(t, 60, setupTwoPeopleFake{})
 	d.toStatuses()
-	d.want("[✓] To Do")
+	d.want("✓ To Do")
 	d.press("down", "space")
-	d.want("[ ] In Progress")
-	d.want("Pipeline  To Do → Done")
+	d.want("○ In Progress")
+	d.want("Workflow  To Do → Done")
 	d.press("enter")
 	d.finish()
 	w, err := workfile.Load(root)
@@ -464,7 +549,7 @@ func TestSetupStatusesCanBeUntickedAndReordered(t *testing.T) {
 	d, root = newDriver(t, 60, setupFake{})
 	d.toStatuses()
 	d.press("shift+down")
-	d.want("Pipeline  In Progress → To Do → Done")
+	d.want("Workflow  In Progress → To Do → Done")
 	d.press("enter")
 	d.finish()
 	w, err = workfile.Load(root)
@@ -498,17 +583,14 @@ func TestSetupPeopleFailureStillSaves(t *testing.T) {
 func TestSetupConnectionFailureReturnsToTheFieldWithAMessage(t *testing.T) {
 	fake := &setupRetryFake{}
 	d, root := newDriver(t, 60, fake)
-	d.toGitHubChoice()
+	d.connectJira("")
 	d.want("Could not connect to Jira")
 	d.want("HTTP 401")
-	if d.m.step != stepSite || d.m.input.Value() != "example-team.atlassian.net" {
-		t.Fatalf("not back on the site field: step %d", d.m.step)
+	if !d.m.isToken() {
+		t.Fatalf("not back on the token field: step %d", d.m.step)
 	}
-	d.press("enter", "enter")
 	d.typeText("example-token-2")
-	d.press("enter")
-	d.want("Connect GitHub too?")
-	d.press("n", "enter", "space", "enter", "enter")
+	d.press("enter", "space", "enter", "enter")
 	d.finish()
 	w, err := workfile.Load(root)
 	if err != nil {
@@ -528,9 +610,9 @@ func TestSetupCredentialFailureRemovesWorkspace(t *testing.T) {
 	}
 	d.toStatuses()
 	d.press("enter")
-	d.want("Ready to save")
+	d.want("Review and apply policy")
 	d.press("enter")
-	d.want("Could not save")
+	d.want("Could not apply policy")
 	if _, err := os.Stat(filepath.Join(root, ".workfile")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("failed save left a partial workspace")
 	}
@@ -543,18 +625,23 @@ func TestSetupLeavingBeforeTheEndWritesNothing(t *testing.T) {
 	d, root := newDriver(t, 60, setupFake{})
 	d.toStatuses()
 	d.press("enter")
-	d.want("Ready to save")
+	d.want("Review and apply policy")
 	d.press("ctrl+c")
 	if _, err := os.Stat(filepath.Join(root, ".workfile")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("wrote files before the final confirm")
 	}
 }
 
-func TestSetupNoProjectsIsAnError(t *testing.T) {
+func TestSetupNoProjectsCanBeRetried(t *testing.T) {
 	d, _ := newDriver(t, 60, setupNoProjects{})
-	d.skipGitHub()
-	if d.m.fatal == nil || !d.quit {
-		t.Fatal("expected a fatal error")
+	d.connectJira("")
+	d.want("no visible projects")
+	d.press("enter")
+	d.want("Try again")
+	d.press("esc")
+	d.want("Create a Jira API token")
+	if d.quit {
+		t.Fatal("discovery failure quit the wizard")
 	}
 }
 
@@ -566,35 +653,35 @@ func (setupNoProjects) SetupProjects(context.Context) ([]provider.SetupProject, 
 
 func TestSetupStaleAnswersAreIgnored(t *testing.T) {
 	d, _ := newDriver(t, 60, setupFake{})
-	d.toJiraToken()
+	d.toJiraToken("")
 	d.typeText("example-token")
 	d.m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	d.m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	d.m.Update(testedMsg{id: d.m.loadID - 1})
-	if d.m.step == stepAskGitHub {
+	if d.m.step != stepTrackerSettings {
 		t.Fatal("answer for a cancelled request moved the screen")
 	}
 }
 
 func TestSetupAnimationFramesFit(t *testing.T) {
 	th := newTheme(false, "")
-	var lines int
-	for f := 0; f <= animLast+3; f++ {
-		frame := th.animFrame(f)
-		n := strings.Count(frame, "\n")
-		if f > 0 && n != lines {
-			t.Fatalf("frame %d changes height", f)
-		}
-		lines = n
-		for _, line := range strings.Split(frame, "\n") {
-			if lipgloss.Width(line) > 24 {
-				t.Fatalf("frame %d is too wide: %q", f, line)
+	for _, width := range []int{40, 60} {
+		for f := 0; f <= animLast+3; f++ {
+			frame := th.animFrame(f, width)
+			rows := strings.Split(frame, "\n")
+			if len(rows) != 7 {
+				t.Fatalf("frame %d changes height", f)
+			}
+			for _, line := range rows {
+				if lipgloss.Width(line) > width {
+					t.Fatalf("frame %d is too wide: %q", f, line)
+				}
 			}
 		}
-	}
-	last := th.animFrame(animLast)
-	if !strings.Contains(last, "w o r k f i l e") || strings.Contains(th.animFrame(0), "w o r k") {
-		t.Fatal("wordmark should appear only at the end")
+		last := th.animFrame(animLast, width)
+		if !strings.Contains(last, "####") || strings.Contains(last, ".") || strings.TrimSpace(th.animFrame(0, width)) != "" {
+			t.Fatal("intro should start blank and finish on the complete pixel wordmark")
+		}
 	}
 }
 
@@ -606,7 +693,7 @@ func TestSetupPlainSkipsAnimation(t *testing.T) {
 	if cmd := d.m.Init(); cmd != nil {
 		t.Fatal("plain output should not tick")
 	}
-	d.want("w o r k f i l e")
+	d.want("####")
 }
 
 func TestSetupAnimationSkipsOnAnyKey(t *testing.T) {
@@ -617,7 +704,7 @@ func TestSetupAnimationSkipsOnAnyKey(t *testing.T) {
 		t.Fatal("a key should skip to the end without moving on")
 	}
 	d.press("enter")
-	if d.m.step != stepFolder {
+	if d.m.step != stepTrackerKind {
 		t.Fatal("enter should begin after the animation")
 	}
 }
@@ -641,20 +728,10 @@ func TestSetupColourPanelKeepsItsBackground(t *testing.T) {
 	}
 }
 
-func TestSetupTokenValidation(t *testing.T) {
-	for _, bad := range []string{"", " ", "a b", "a\nb", `"x"`, "x'y"} {
-		if _, err := setupToken(bad); err == nil {
-			t.Fatalf("accepted %q", bad)
-		}
-	}
-	if got, err := setupToken("  example-token  "); err != nil || got != "example-token" {
-		t.Fatal("rejected a good token")
-	}
-}
-
 func TestSetupTypingKeysFillsTheInput(t *testing.T) {
 	d, _ := newDriver(t, 60, setupFake{})
-	d.press("enter", "enter")
+	d.selectProviders("jira", "")
+	d.press("enter")
 	d.m.input.SetValue("")
 	d.press("a", "b", "c")
 	if d.m.input.Value() != "abc" {
@@ -671,7 +748,7 @@ func TestSetupColourUsesOnlyTheTerminalsOwnColours(t *testing.T) {
 	})
 	m.Init()
 	var screens []string
-	for _, step := range []setupStep{stepWelcome, stepFolder, stepAskGitHub, stepReview} {
+	for _, step := range []setupStep{stepWelcome, stepFolder, stepCodeHostKind, stepReview} {
 		m.step = step
 		m.statuses, m.items = []string{"To Do"}, []stageItem{{0, true}}
 		screens = append(screens, m.render())

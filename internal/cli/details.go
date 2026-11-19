@@ -95,7 +95,7 @@ func (v view) details(w *workfile.Workspace, a workfile.Assessment) {
 	header = append(header, textRows(assigned, "", muted, "", width)...)
 	header = append(header, row{})
 	if a.Ticket.Error == "" {
-		header = append(header, v.pipeline(w.Policy, a)...)
+		header = append(header, ticketDiagram(w.Policy, a).textRows(v, width)...)
 	} else {
 		header = append(header, textRows(a.Ticket.Error, "", red, "", width)...)
 	}
