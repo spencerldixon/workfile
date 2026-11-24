@@ -50,7 +50,7 @@ func (p workfilePane) numbered() []workfile.WorkAction {
 func (m *trackerModel) paneFor(r *ticketRead, panel int) workfilePane {
 	p := workfilePane{
 		v: m.v, t: m.t, panelTheme: m.panelTheme, policy: m.e.w.Policy,
-		actions: m.nextActions(m.current), width: max(10, panel-4),
+		actions: m.nextActions(m.current), width: trackerPaneWidth(panel),
 		workflow: m.e.tracker.Preview.Workflow, now: m.now(),
 		pending: r == nil || !r.policyDone(), ownersPending: m.whoLoading,
 	}
@@ -71,7 +71,7 @@ func (m *trackerModel) policyWidth() int {
 	if right > 0 {
 		left = right
 	}
-	return max(10, left-4)
+	return trackerPaneWidth(left)
 }
 
 // workflowSpec is the picture the current ticket needs, when the terminal can
@@ -165,7 +165,6 @@ func (p workfilePane) sections() [][]string {
 }
 
 func (p workfilePane) where() []string {
-	lines := []string{p.t.bold("Where it is")}
 	if p.assessment == nil {
 		text := "Checking the policy…"
 		if !p.pending {
@@ -174,14 +173,13 @@ func (p workfilePane) where() []string {
 				text = "! Cannot check the policy: " + clean(p.err.Error())
 			}
 		}
-		return append(lines, fit(p.t.dim(text), "", "", p.width)...)
+		return fit(p.t.dim(text), "", "", p.width)
 	}
 	current := p.assessment.Ticket.State
 	if p.workflow == "off" || len(p.policy.States) == 0 {
-		return append(lines, fit(p.t.bold("Current stage: "+boardStateTitle(current)), "", "", p.width)...)
+		return fit(p.t.bold("Current stage: "+boardStateTitle(current)), "", "", p.width)
 	}
-	lines = append(lines, "")
-	lines = append(lines, ticketWorkflowLines(p.policy, *p.assessment, p.v, p.width, p.flow)...)
+	lines := ticketWorkflowLines(p.policy, *p.assessment, p.v, p.width, p.flow)
 	if !slices.Contains(p.policy.States, current) {
 		return append(lines, fit(p.t.dim("! Current stage is not mapped to this workflow."), "", "", p.width)...)
 	}

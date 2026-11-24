@@ -105,7 +105,7 @@ preserved, but a team request never implies that a particular member was asked.
 
 ### Inbox activity
 
-`wf inbox` polls only open PRs on work in flight, in two steps. One small
+`wf tracker --view inbox` polls only open PRs on work in flight, in two steps. One small
 GraphQL query per 100 PRs asks only when each was last updated. Only PRs
 updated since the last poll have their timeline read: the newest 50 comments,
 reviews, review requests and commits since the last look. A poll where nothing changed is

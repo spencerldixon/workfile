@@ -23,7 +23,7 @@ func TestTrackerBoardSyncLabelsAndManualRefresh(t *testing.T) {
 	enableInbox(d)
 	now := syncClock(d)
 	d.wants("Synced 11:30:00", "next 11:32:00", "r refresh")
-	if strings.Contains(d.m.header(), "checked") || strings.Contains(d.m.header(), " of ") {
+	if strings.Contains(d.m.navigation(), "checked") || strings.Contains(d.m.navigation(), " of ") {
 		t.Fatal("check progress still occupies the sync bar")
 	}
 	old := d.m.ticketReads.byKey[d.m.current]

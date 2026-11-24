@@ -11,9 +11,10 @@ the next action. It never changes a ticket, label or pull request.
 ```sh
 wf setup                        # connect tools, choose scope, apply a starter policy
 wf tracker                      # browse tickets and their next actions
-wf inbox                        # activity and work that needs you
+wf tracker --view inbox         # live policy and PR alerts
 wf status --me                  # your work against the policy
-wf lint                         # check the policy itself
+wf policy                       # inspect the workflow
+wf policy --lint                # check the policy itself
 ```
 
 Setup stores tokens privately, outside your repo. Its starter policy has stages
@@ -46,10 +47,11 @@ extract it and put its `wf` binary on your PATH instead.
 | `wf setup` | Connect a tracker and optional code host; preview and apply a starter policy. |
 | `wf setup --test [NAME ...]` | Test all connections, or just the named ones. |
 | `wf tracker [--view VIEW]` | Browse tickets in a list or configured board, with descriptions, comments, PRs and next actions. |
-| `wf inbox` | Follow your ticket and PR activity; clear or snooze rows locally. |
+| `wf tracker --view inbox` | Follow policy and PR alerts, including PRs without a ticket. |
 | `wf status [TICKET ...]` | Check the board, or inspect named tickets against the policy. |
 | `wf check TICKET --to STAGE` | Ask whether a ticket may move now: exit `0` yes, `1` no, `2` cannot tell. |
-| `wf lint` | Validate policy and show gates, possible gaps and workflow moves. No provider reads. |
+| `wf policy` | Show workflow stages, moves, gates and provider mappings offline. |
+| `wf policy --lint` | Validate policy and report warnings and possible gaps. |
 
 ```sh
 wf status --me                  # assigned tickets and PRs you wrote or must review
@@ -57,15 +59,16 @@ wf status --since 1d            # compare with an earlier local snapshot
 wf status --gate code_review    # tickets failing this gate
 wf status APP-42                # one ticket's evidence and next moves
 wf check APP-42 --to done --json # machine-readable answer for a script or agent
+wf policy --json                # workflow and provider scope for an agent
 wf --help                       # all commands and options
 wf --version
 ```
 
-`status`, `check` and `lint` support `--json`. Run from your project or any
+`status`, `check` and `policy` support `--json`. Run from your project or any
 subfolder; `--dir DIR` starts the search for `.workfile/` elsewhere.
 
 Old names still work for one release, with a notice: `health` is `status`,
-`test` is `setup --test`, `prove` is `lint`, and `tickets` is `tracker`.
+`test` is `setup --test`, `prove` is `policy --lint`, and `tickets` is `tracker`.
 
 ## Browse your work
 
@@ -74,26 +77,27 @@ Use the ticket key in the PR title or link to the ticket in the description.
 When you look up a ticket directly, Workfile also searches branch names that
 start with its key. See [how Workfile links PRs](docs/providers/github.md#how-prs-are-found).
 
-Tracker opens a list with a ticket preview. Enter opens the reader; `w` switches
-to Workfile's checks and PR actions. Use `/` to search, `s` to choose a project,
+Tracker opens a list with a ticket preview. Enter opens the reader with the ticket key and title beneath the view tabs.
+Scroll over either pane, or press `w` and use the arrow keys to read through the linked PRs. Use `/` to search, `s` to choose a project,
 `p` to open linked PRs, and `r` to refresh. Configured board views group cards
 by workflow stage and sync every two minutes while selected.
+Ticket panes have a one-column inset on both sides. On wide screens, this gives
+the vertical divider one column of space on each side.
+A blank line separates the content from the divider above the command hints.
 
 The top of a 100-column screen with `columns: [key, title, status, assignee]`,
 without colour:
 
 ```text
-  workfile / tracker                                                   Jira · APP · repos app, api
-
-  [All 4]  Assigned to me   Todo 1   Doing 1   Review 1   Done 1                   Synced 11:30:00
+▸ All (4)   Assigned to me   Todo (1)   Doing (1)   Review (1)   Done (1)          Synced 11:30:00
+────────────────────────────────────────────────────────────────────────────────────────────────────
 
   Key    Title                                                       Status       Assignee
 ▸ APP-1  Fix redirect loop on expired login                        ‼ To Do        Alice
   APP-2  Add single sign-on login                                  → In Progress  Bob
   APP-3  Clear account settings page                               → In Review    Unassigned
   APP-4  Tidy the billing screen                                   · Done         Charlie
-
-  Ticket preview                                                                     enter to read
+────────────────────────────────────────────────────────────────────────────────────────────────────
 ```
 
 Action checks cover a sample of up to 12 active tickets, with at most two
@@ -101,9 +105,10 @@ background checks at once. Unchecked work stays unknown; press `n` to check
 more. Rich descriptions, comments and images load on selection, not for the
 whole board.
 
-Inbox follows unfinished tickets assigned to you and PRs you authored or were
-asked to review. Enter shows activity, `t` reads the linked ticket, `e` marks a
-row done, and `s` snoozes it. These changes stay on your computer.
+Tracker’s Inbox updates in the background. It follows your assigned tickets and
+authored PRs, including PRs without a ticket. Review requests and watched repos
+are opt-in. Enter shows activity, `t` reads a linked ticket, `e` resolves the
+alert locally, and `s` snoozes it.
 
 Piped output, `NO_COLOR` or `TERM=dumb` use noninteractive text. Images have text
 fallbacks. A Nerd Font is recommended for interactive icons.

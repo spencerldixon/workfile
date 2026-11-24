@@ -38,7 +38,7 @@ type fakeSource struct {
 	records      map[string]map[string][]workfile.Record
 	images       map[string][]byte
 	imageReads   []string
-	// wf inbox
+	// Tracker inbox
 	activity        []workfile.Activity
 	activityErr     error
 	activityQueries []workfile.ActivityQuery
@@ -66,7 +66,7 @@ func (f *fakeSource) Activity(_ context.Context, q workfile.ActivityQuery, since
 	f.activitySince = append(f.activitySince, since)
 	return workfile.ActivityResult{Events: f.activity, Updated: f.updated}, f.activityErr
 }
-func (f *fakeSource) MyPRs(context.Context) (map[string][]workfile.Record, error) {
+func (f *fakeSource) InboxPRs(context.Context, workfile.InboxSettings) (map[string][]workfile.Record, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.myPRsReads++
@@ -523,7 +523,7 @@ func TestEveryCommandIsInHelpAndTakesItsOwnFlags(t *testing.T) {
 }
 
 func TestParseRejectsAnotherCommandsFlag(t *testing.T) {
-	for _, args := range [][]string{{"check", "--gate", "code_review"}, {"setup", "--json"}, {"lint", "--me"}} {
+	for _, args := range [][]string{{"check", "--gate", "code_review"}, {"setup", "--json"}, {"policy", "--lint", "--me"}} {
 		_, err := parse(args)
 		if err == nil || !strings.Contains(err.Error(), "is not an option for wf "+args[0]) {
 			t.Errorf("%v: %v", args, err)

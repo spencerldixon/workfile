@@ -12,6 +12,8 @@ import (
 
 func previewTextWidth(width int) int { return max(10, width-4) }
 
+func trackerPaneWidth(width int) int { return max(10, width-2*len(trackerInset)) }
+
 // ticketPreview owns rich ticket presentation for both tracker layouts. It
 // draws from immutable input and cached pictures; it never fetches or transmits.
 type ticketPreview struct {
@@ -20,6 +22,7 @@ type ticketPreview struct {
 	panelTheme     theme
 	tagPalette     ticketTagPalette
 	width          int
+	tracker        bool
 	now            time.Time
 	showComments   bool
 	images, titles map[string]*ticketPicture
@@ -53,12 +56,17 @@ func (m *trackerModel) ticketContent() (heading ticketBlock, body, policy []tick
 func (m *trackerModel) previewRenderer() ticketPreview {
 	width, _ := m.columns()
 	return ticketPreview{
-		v: m.v, t: m.t, panelTheme: m.panelTheme, tagPalette: m.tagPalette, width: width, now: m.now(),
+		v: m.v, t: m.t, panelTheme: m.panelTheme, tagPalette: m.tagPalette, width: width, tracker: true, now: m.now(),
 		showComments: m.e.tracker.ShowComments(), images: m.images, titles: m.titles, headings: m.headings,
 	}
 }
 
-func (p ticketPreview) textWidth() int { return previewTextWidth(p.width) }
+func (p ticketPreview) textWidth() int {
+	if p.tracker {
+		return trackerPaneWidth(p.width)
+	}
+	return previewTextWidth(p.width)
+}
 
 type ticketBlock struct {
 	lines []string
@@ -73,10 +81,10 @@ func panelBlocks(all [][]string) []ticketBlock {
 }
 
 func (p ticketPreview) sections(all []ticketBlock, width int) string {
-	return strings.Join(ticketLines(all, width), "\n")
+	return strings.Join(ticketLines(all, width, ticketIndent), "\n")
 }
 
-func ticketLines(all []ticketBlock, width int) []string {
+func ticketLines(all []ticketBlock, width int, inset string) []string {
 	var lines []string
 	for _, b := range all {
 		if len(b.lines) == 0 {
@@ -84,7 +92,7 @@ func ticketLines(all []ticketBlock, width int) []string {
 		}
 		lines = append(lines, "")
 		for _, line := range b.lines {
-			line = ticketIndent + line
+			line = inset + line
 			lines = append(lines, line+strings.Repeat(" ", max(0, width-ansi.StringWidth(line))))
 		}
 	}

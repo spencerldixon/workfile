@@ -34,7 +34,7 @@ Tracker and inbox settings inherit, highest precedence first:
 Set only what you want to change. Each file must contain one YAML document.
 Unknown fields, wrong types and invalid settings are errors, not ignored values.
 Tracker and inbox validate their own preferences before reading tickets;
-`wf lint` checks policy files, not these presentation settings.
+`wf policy --lint` checks policy files, not these presentation settings.
 
 Setup creates policy, providers and people files, plus private credentials.
 It does not create `config.yml`. Add one yourself or copy the
@@ -68,11 +68,11 @@ private file, never the repo config.
 
 | Setting | Default | Allowed values / behaviour |
 | --- | --- | --- |
-| `default_view` | `all`, or the first configured view | An available tab ID. `--view` overrides it. |
+| `default_view` | `all`, or the first configured view | An available tab ID, including `inbox`. `--view` overrides it. |
 | `columns` | `[key, title, status, assignee, action]` | A unique ordered list from those names; must include `key` and `title`. |
 | `preview.comments` | `true` | `false` hides comments and skips their image downloads. |
 | `preview.workflow` | `auto` | `auto` uses graphics when available; `text` uses text; `off` hides the map but keeps the stage and action summary. |
-| `views` | All, Assigned to me, then each policy stage | A nonempty list of custom views replaces built-in tabs. Omit it to keep them. |
+| `views` | All, Assigned to me, then each policy stage | A nonempty list of custom views replaces the ticket tabs. Inbox is always available. |
 
 ### List and board views
 
@@ -144,12 +144,17 @@ tracker:
 
 ## Inbox
 
+These settings apply to the Inbox tab in `wf tracker`.
+
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `poll` | `2m` | Poll interval, at least `30s`. |
+| `poll` | `30s` | Poll interval, at least `30s`. |
+| `review_requests` | `false` | Include PRs awaiting your review. |
+| `repositories` | Unset | Map code-host connection names to repository names within provider scope. Watch CI even on PRs you did not author. |
+| `signals` | All | List the alert types to show. `[]` hides activity rows. |
 | `refresh_every` | `5` | Polls between rereads of known tickets. |
 | `full_every` | `15` | Polls between board reads that find newly assigned tickets. |
-| `snooze` | `1h` | How long `s` hides a row, unless something new happens. |
+| `snooze` | `1h` | How long `s` hides a row, unless a new blocker appears. |
 | `agent` | Unset | Your private command for `a`. Cannot be set in repo config. |
 | `prompts` | Built-in prompts below | Prompt text by row kind; keys merge individually across layers. |
 
@@ -157,7 +162,23 @@ Durations use Go notation, such as `30s`, `2m` or `1h30m`, not `1d`.
 Poll counts and snooze durations must be positive when set; zero inherits the
 previous value, so it does not disable polling or snooze.
 When full and known-ticket refresh are both due, the full board read covers both.
-Polling runs only while the interactive inbox is open; plain output reads once.
+Polling runs while interactive Tracker is open. Plain output reads once.
+
+The supported signals are `checks_failed`, `checks_passed`, `ready`,
+`out_of_policy`, `needs_work`, `changes_requested`, `review_requested`,
+`comments`, `cannot_check` and `info`. Connection read errors are shown
+even when the signal list is restricted.
+
+```yaml
+tracker:
+  default_view: inbox
+inbox:
+  review_requests: false
+  repositories:
+    example-code-host: [example-api]
+  signals: [checks_failed, checks_passed, ready, out_of_policy]
+  snooze: 1h
+```
 
 ### Agent launcher
 

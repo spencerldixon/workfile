@@ -86,6 +86,7 @@ type ticketKeys struct {
 // selected ticket. The list is read once. A ticket is read only after the
 // selection rests on it, and then kept for the session.
 type trackerModel struct {
+	inbox                                 *inboxModel
 	ticketReads                           trackerReads
 	refresh                               trackerRefresh
 	ctx                                   context.Context
@@ -150,6 +151,9 @@ func newTrackerModel(ctx context.Context, e env) *trackerModel {
 	e.tracker = e.tracker.WithDefaults()
 	t := newTheme(e.view.color, "")
 	m := &trackerModel{ctx: ctx, e: e, v: e.view, t: t, width: e.view.width, height: 24, ticketReads: trackerReads{byKey: map[string]*ticketRead{}, pause: 200 * time.Millisecond}, counts: map[ticketView]int{}, images: map[string]*ticketPicture{}, titles: map[string]*ticketPicture{}, tried: map[string]bool{}, nextID: firstImageID, now: time.Now, spin: spinner.New(spinner.WithSpinner(spinner.MiniDot)), pane: viewport.New(), side: viewport.New(), help: t.help()}
+	if e.inboxSettings.Poll.Duration > 0 {
+		m.inbox = newInboxModel(ctx, e, e.inboxSettings, workfile.ReadInboxState(e.w))
+	}
 	m.overview = attentionEnabled(e.tracker)
 	m.boardTheme, m.boardSelectedTheme = t, t
 	if slices.ContainsFunc(e.tracker.Views, func(v workfile.TrackerView) bool { return v.Layout == "board" }) {
@@ -199,7 +203,11 @@ func newTrackerModel(ctx context.Context, e env) *trackerModel {
 
 func (m *trackerModel) Init() tea.Cmd {
 	e, ctx, wantsMe := m.e, m.ctx, m.shownView().me
-	return tea.Batch(m.startSpinner(), func() tea.Msg {
+	var inbox tea.Cmd
+	if m.inbox != nil {
+		inbox = pollEvery(m.inbox.s.Poll.Duration)
+	}
+	return tea.Batch(inbox, m.startSpinner(), func() tea.Msg {
 		all, err := e.client.Listing(ctx, "")
 		if err != nil || !wantsMe {
 			return ticketListMsg{all: all, err: err}
@@ -236,6 +244,20 @@ func (m *trackerModel) busy() bool {
 }
 
 func (m *trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var inboxCmd tea.Cmd
+	if m.inbox != nil {
+		switch msg := msg.(type) {
+		case inboxLoadedMsg, inboxTickMsg, agentDoneMsg, inboxTicketPolicyMsg, inboxTicketOpenedMsg:
+			return m, m.inbox.Update(msg)
+		case tea.WindowSizeMsg, ticketDetailMsg, workflowPictureMsg:
+			inboxCmd = m.inbox.Update(msg)
+		}
+	}
+	model, cmd := m.update(msg)
+	return model, tea.Batch(inboxCmd, cmd)
+}
+
+func (m *trackerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(20, msg.Width), max(10, msg.Height)
@@ -336,6 +358,8 @@ func (m *trackerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.updateProjectPicker(msg.msg)
 		}
 		return m, nil
+	case tea.MouseWheelMsg:
+		return m, m.wheel(msg)
 	case tea.KeyPressMsg:
 		return m, m.key(msg)
 	}
@@ -355,11 +379,19 @@ func (m *trackerModel) listed(msg ticketListMsg) tea.Cmd {
 	if msg.me != "" {
 		m.who[m.e.w.Policy.Tracker] = msg.me
 	}
-	return tea.Batch(m.showTickets(), m.actionIdentity(), m.refresh.markSynced(m.now()))
+	var inbox tea.Cmd
+	if m.inbox != nil && m.inbox.data == nil {
+		inbox = m.inbox.loadWithListing(pollFull, append([]workfile.Listing{}, msg.all...))
+	}
+	return tea.Batch(m.showTickets(), m.actionIdentity(), m.refresh.markSynced(m.now()), inbox)
 }
 
 func (m *trackerModel) views() []ticketView {
-	return ticketViews(m.e.w.Policy, m.e.tracker)
+	views := ticketViews(m.e.w.Policy, m.e.tracker)
+	if m.inbox != nil {
+		views = append(views, ticketView{inbox: true})
+	}
+	return views
 }
 
 func (m *trackerModel) shownView() ticketView { return m.views()[m.view] }
@@ -386,6 +418,9 @@ func (m *trackerModel) findMe() tea.Cmd {
 
 // showTickets fills the list, staying on the current ticket if it is still there.
 func (m *trackerModel) showTickets() tea.Cmd {
+	if m.shownView().inbox {
+		return nil
+	}
 	shown := m.shownTickets(m.shownView())
 	m.total = len(shown)
 	for _, view := range m.views() {
@@ -455,6 +490,16 @@ func (m *trackerModel) read(ticket string) tea.Cmd {
 func (m *trackerModel) key(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "ctrl+c" {
 		return m.quit()
+	}
+	if m.shownView().inbox {
+		switch msg.String() {
+		case "left", "[", "right", "]":
+			return m.switchView(msg.String() == "left" || msg.String() == "[")
+		case "q":
+			return m.quit()
+		default:
+			return m.inbox.Update(msg)
+		}
 	}
 	if m.pickingProject || m.pickingPR {
 		return m.projectKey(msg)
@@ -581,18 +626,15 @@ func (m *trackerModel) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.setReading(false)
 		return nil
 	}
-	var cmd tea.Cmd
-	if m.readerWorkfile {
-		m.side, cmd = m.side.Update(msg)
-		return cmd
-	}
-	m.pane, cmd = m.pane.Update(msg)
-	return cmd
+	return m.readerKey(msg)
 }
 
 // quit frees the terminal's copies of the images on the way out.
 func (m *trackerModel) quit() tea.Cmd {
 	m.ticketReads.cancelAll()
+	if m.inbox != nil && m.inbox.ticket != nil {
+		m.inbox.closeTicket()
+	}
 	if held := m.forgetAll(); held != "" {
 		return tea.Sequence(tea.Raw(held), tea.Quit)
 	}
@@ -758,7 +800,7 @@ func (m *trackerModel) resizeImages() tea.Cmd {
 }
 
 // layout gives the list the top half and the ticket the rest, edge to edge. The
-// masthead, tabs, column headings, preview heading and help stay outside it.
+// view tabs, column headings, dividers and help stay outside it.
 func (m *trackerModel) layout() {
 	if m.pickingProject || m.pickingPR {
 		m.resizeProjectPicker()
@@ -779,7 +821,7 @@ func (m *trackerModel) columns() (left, right int) {
 	return left, m.width - left - 1
 }
 
-// topRows counts the masthead and tabs, plus space for headings in list views.
+// topRows counts the view navigation, plus space for headings in list views.
 func (m *trackerModel) topRows() int {
 	if m.shownView().board() {
 		return trackerHeaderRows
@@ -794,7 +836,7 @@ func (m *trackerModel) listRows() int {
 	if m.shownView().board() {
 		return 0
 	}
-	half := max(1, (m.height-3-m.topRows())/2)
+	half := max(1, (m.height-trackerFooterRows-1-m.topRows())/2)
 	if len(m.all) > 0 {
 		return min(half, max(3, len(m.all)))
 	}
@@ -811,6 +853,13 @@ func (m *trackerModel) switchView(back bool) tea.Cmd {
 	wasBoard := m.shownView().board()
 	m.view = (m.view + step) % count
 	m.tabFocus = m.tabFocus && m.shownView().board()
+	if m.shownView().inbox {
+		m.onTicket, m.readerWorkfile = false, false
+		return nil
+	}
+	if m.inbox != nil && m.inbox.ticket != nil {
+		m.inbox.closeTicket()
+	}
 	if wasBoard || m.shownView().board() {
 		m.onTicket = false
 		m.readerWorkfile = false
@@ -831,6 +880,9 @@ func (m *trackerModel) atBoardTop() bool {
 func (m *trackerModel) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	if !m.shownView().inbox && (!m.showingBoard() || m.pickingPR || m.pickingProject) {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 
@@ -851,7 +903,11 @@ func (m *trackerModel) helpKeys() []key.Binding {
 	if m.onTicket {
 		scroll := m.keys.Move
 		scroll.SetHelp("↑↓", "scroll")
-		keys := []key.Binding{scroll, m.keys.Workfile, m.keys.Focus}
+		switchPane := m.keys.Workfile
+		if m.readerWorkfile {
+			switchPane.SetHelp("w", "ticket")
+		}
+		keys := []key.Binding{scroll, switchPane, m.keys.Focus}
 		keys = append(keys, m.fixHelp()...)
 		keys = append(keys, m.keys.View, m.keys.Refresh, m.keys.Open)
 		return append(append(keys, m.attentionKeys()...), m.keys.Quit)

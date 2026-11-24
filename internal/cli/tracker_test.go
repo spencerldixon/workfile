@@ -410,7 +410,7 @@ func TestTrackerFillTheWholeTerminal(t *testing.T) {
 		if len(lines) != size[1] {
 			t.Fatalf("%v: %d lines", size, len(lines))
 		}
-		if w := ansi.StringWidth(d.m.header()); w != size[0] {
+		if w := ansi.StringWidth(d.m.navigation()); w != size[0] {
 			t.Fatalf("%v: the header is %d wide", size, w)
 		}
 		if w := ansi.StringWidth(lines[d.m.topRows()]); w != size[0] {
@@ -433,7 +433,7 @@ func TestTrackerHighlightTheCurrentRow(t *testing.T) {
 		t.Fatalf("%q\n%q", rows[first], rows[first+1])
 	}
 	d.press("tab")
-	d.wants("Ticket · reading", "APP-2")
+	d.wants("APP-2")
 	d.refuses("Ticket preview", "APP-1")
 	d.press("tab")
 	rows = strings.Split(d.screen(), "\n")
@@ -458,7 +458,7 @@ func TestTrackerUseBothColumnsOnWideTerminals(t *testing.T) {
 	f := trackerSource()
 	f.details["APP-1"] = workfile.Detail{Key: "APP-1", Body: para(strings.Repeat("A long description goes on. ", 200))}
 	d := driveTracker(t, f, 160, 30)
-	d.wants("A long description", "Next action", "Where it is")
+	d.wants("A long description", "Next action", trackerInset+"│"+trackerInset)
 	narrow := driveTracker(t, f, 90, 30)
 	narrow.refuses("A long description")
 }
@@ -626,8 +626,8 @@ func TestViewsRunAllThenMeThenEachState(t *testing.T) {
 	if listKeys(d) != "APP-1 APP-2 APP-3 APP-4" {
 		t.Fatalf("the default should show everything: %s", listKeys(d))
 	}
-	d.wants("All 4", "Assigned to me", "Todo 1", "Doing 1", "Review 1", "Done 1")
-	head := d.m.header()
+	d.wants("All (4)", "Assigned to me", "Todo (1)", "Doing (1)", "Review (1)", "Done (1)")
+	head := d.m.navigation()
 	at := -1
 	for _, label := range []string{"All", "Assigned to me", "Todo", "Doing", "Review", "Done"} {
 		i := strings.Index(head, label)
@@ -653,10 +653,10 @@ func TestViewsRunAllThenMeThenEachState(t *testing.T) {
 
 func TestViewsMarkTheCurrentTabWithoutColour(t *testing.T) {
 	d := driveTracker(t, trackerSource(), 100, 30)
-	d.wants("[All 4]")
+	d.wants("▸ All (4)")
 	d.press("right")
-	d.wants("[Assigned to me 1]")
-	d.refuses("[All 4]")
+	d.wants("▸ Assigned to me (1)")
+	d.refuses("▸ All (4)")
 }
 
 func TestViewsWorkFromTheTicketAndKeepItsFocus(t *testing.T) {
@@ -683,7 +683,7 @@ func TestSearchWorksInsideAView(t *testing.T) {
 	if listKeys(d) != "APP-3" {
 		t.Fatal(listKeys(d))
 	}
-	d.wants("[Review 2]", "/ clear")
+	d.wants("▸ Review (2)", "/ clear")
 }
 
 func TestViewsKeepTheCurrentTicketWhenItIsStillThere(t *testing.T) {
@@ -720,7 +720,7 @@ func TestUnmappedTicketsShowOnlyInAll(t *testing.T) {
 	f := trackerSource()
 	f.listing[0].State = ""
 	d := driveTracker(t, f, 100, 30)
-	d.wants("All 4", "Todo 0")
+	d.wants("All (4)", "Todo (0)")
 }
 
 func TestTrackerSayWhenTheyCannotTellWhoYouAre(t *testing.T) {
@@ -744,7 +744,7 @@ func TestAssignedToMeIsATabEvenWithOnlyMine(t *testing.T) {
 	d := driveTracker(t, trackerSource(), 100, 30)
 	d.m.e.w.Settings.OnlyMine = true
 	d.press("right")
-	d.wants("[Assigned to me 1]")
+	d.wants("▸ Assigned to me (1)")
 	if listKeys(d) != "APP-2" {
 		t.Fatal(listKeys(d))
 	}
@@ -755,7 +755,7 @@ func TestAssignedToMeCanBeWhereYouStart(t *testing.T) {
 	if listKeys(d) != "APP-2" {
 		t.Fatal(listKeys(d))
 	}
-	d.wants("[Assigned to me 1]")
+	d.wants("▸ Assigned to me (1)")
 	_, out, _ := invoke(t, trackerSource(), "tracker", "--view", "me")
 	if !strings.Contains(out, "APP-2") || strings.Contains(out, "APP-1") {
 		t.Fatal(out)
@@ -919,5 +919,56 @@ func TestAgoIsFriendly(t *testing.T) {
 		if got := ago(c.created, now); got != c.want {
 			t.Errorf("%v: got %q, want %q", c.created, got, c.want)
 		}
+	}
+}
+
+func TestTrackerInboxUpdatesInAnotherView(t *testing.T) {
+	for _, width := range []int{40, 60, 140} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			d := driveWithSettings(t, trackerSource(), width, 30, graphics{}, options{}, boardSettings())
+			d.m.inbox = newInboxModel(d.m.ctx, d.m.e, workfile.InboxSettings{}, workfile.NewInboxState())
+			d.m.inbox.save = func(workfile.InboxState) error { return nil }
+			d.send(tea.WindowSizeMsg{Width: width, Height: 30})
+			view := d.m.shownView()
+			now := time.Now()
+			pr := workfile.Record{ID: "example-api#7", Title: "Fix CI", Facts: workfile.Facts{
+				"state": "open", "author": "example-alice", "checks": "failure",
+			}}
+			d.send(inboxLoadedMsg{
+				at: now, who: map[string]string{"github": "example-alice"},
+				loose: map[string][]workfile.Record{"github": {pr}},
+			})
+			if d.m.shownView() != view || len(d.m.inbox.rows) != 1 {
+				t.Fatal("background Inbox update must preserve the current Tracker view")
+			}
+			d.press("[")
+			d.wants("Inbox (1)", "Checks failing on #7")
+			d.refuses("need you", "Needs you", "Updates")
+			d.checkInboxFrame()
+			if strings.Contains(d.screen(), "\x1b") {
+				t.Fatal("plain Inbox rendered terminal escapes")
+			}
+			d.press("enter")
+			d.checkInboxFrame()
+			d.press("esc")
+			d.wants("Checks failing on #7")
+			d.press("e")
+			d.refuses("Checks failing on #7")
+			d.press("]")
+			if d.m.shownView() != view {
+				t.Fatal("switching back must restore the previous Tracker view")
+			}
+		})
+	}
+}
+
+func (d *trackerDriver) checkInboxFrame() {
+	d.t.Helper()
+	lines := strings.Split(d.screen(), "\n")
+	rule := strings.Repeat("─", d.width)
+	footer := len(d.m.inbox.footer(d.m.t, d.width))
+	if len(lines) != d.height || lines[1] != rule || lines[len(lines)-footer-1] != rule ||
+		!strings.Contains(lines[len(lines)-1], "q quit") {
+		d.t.Fatalf("inbox must share Tracker's full-height frame:\n%s", d.screen())
 	}
 }

@@ -209,9 +209,7 @@ func trimText(s string) string {
 // mineLimit caps each search: the inbox is for work in flight, not history.
 const mineLimit = 50
 
-// Mine finds open PRs the person wrote, or was asked to review, in the
-// connection's listed repos. Two searches, each one page.
-func (c githubCodeHost) Mine(ctx context.Context) ([]workfile.Record, error) {
+func (c githubCodeHost) InboxPRs(ctx context.Context, reviews bool, repos []string) ([]workfile.Record, error) {
 	p := c.Workspace.Providers[c.name]
 	token, err := c.Credentials.Get(p.Auth["token"])
 	if err != nil {
@@ -220,8 +218,17 @@ func (c githubCodeHost) Mine(ctx context.Context) ([]workfile.Record, error) {
 	search := strings.Replace(searchQuery, discoveryFields, prFields, 1)
 	var records []workfile.Record
 	seen := map[string]bool{}
-	for _, who := range []string{"author:@me", "review-requested:@me"} {
-		query := fmt.Sprintf("is:pr is:open %s org:%s", who, p.Org)
+	scopes := []string{fmt.Sprintf("author:@me org:%s", p.Org)}
+	if reviews {
+		scopes = append(scopes, fmt.Sprintf("review-requested:@me org:%s", p.Org))
+	}
+	for _, repo := range repos {
+		if listedRepo(p, repo) {
+			scopes = append(scopes, fmt.Sprintf("repo:%s/%s", p.Org, repo))
+		}
+	}
+	for _, scope := range scopes {
+		query := "is:pr is:open " + scope
 		var response struct {
 			Search *struct{ Nodes []*pullRequest }
 		}
@@ -235,14 +242,17 @@ func (c githubCodeHost) Mine(ctx context.Context) ([]workfile.Record, error) {
 			if pr == nil || pr.State != "OPEN" || !listedRepo(p, pr.Repository.Name) {
 				continue
 			}
+			id := fmt.Sprintf("%s#%d", pr.Repository.Name, pr.Number)
+			if seen[id] {
+				continue
+			}
 			if err := c.completePR(ctx, token, pr); err != nil {
 				return nil, err
 			}
 			r := pr.record()
-			if !seen[r.ID] {
-				seen[r.ID] = true
-				records = append(records, r)
-			}
+			r.Repository = p.Org + "/" + pr.Repository.Name
+			seen[id] = true
+			records = append(records, r)
 		}
 	}
 	return records, nil

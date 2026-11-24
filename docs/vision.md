@@ -111,7 +111,7 @@ The policy is the team's contract, for people and for agents alike.
   is theirs and someone else must approve it.
 - **Agent work can have its own gates.** For example, a PR labelled
   `agent-authored` needs two approvals.
-- **The rules are checked.** `wf lint` runs in CI, so no change to the policy
+- **The rules are checked.** `wf policy --lint` runs in CI, so no change to the policy
   can open a path to done that skips code review.
 - **Changes go through review.** The policy sits in the repository, so a rule
   change is a pull request.
@@ -134,7 +134,7 @@ self-hosted: one Go binary, one database, no cloud-only parts.
 - **Workfile reads. It never writes** to Jira, GitHub or any other provider.
 - **One source of truth.** The workfile points to things, such as a PR
   template or a team's `AGENTS.md`. It does not copy them.
-- **Same commands everywhere.** `wf status`, `wf check` and `wf lint` work the
+- **Same commands everywhere.** `wf status`, `wf check` and `wf policy` work the
   same way in every project. Only the workfile changes.
 - **Tools work without it.** A tool that reads a workfile should still work,
   more simply, in a project that does not have one.
@@ -144,15 +144,13 @@ self-hosted: one Go binary, one database, no cloud-only parts.
 Built today:
 
 - Providers, stages, moves, gates and people in `.workfile/`.
-- Five commands: `wf setup`, `wf status`, `wf check`, `wf lint` and `wf tracker`.
+- Five commands: `wf setup`, `wf status`, `wf check`, `wf policy` and `wf tracker`.
 - `--json` for agents, and `wf status --since` for what changed.
 - Explicit scope in `providers.yml`: the projects and repos that are the team's work.
+- `wf policy --json` exposes workflow rules and provider mappings to scripts and agents.
 
 Next:
 
-- **Tools read the workfile.** `wf workspace --json`, so skills and scripts ask
-  Workfile about the project instead of carrying its details. See [Tools read
-  the workfile](proposals/tools-read-the-workfile.md).
 - **Provider statuses in every move.** `wf status --json` names each move's
   destination stage. It should also give the provider status for that stage,
   from `statuses` in `providers.yml`, so an agent can make the move without

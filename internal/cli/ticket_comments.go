@@ -41,10 +41,16 @@ func countComments(comments []workfile.Comment) int {
 	return n
 }
 
+func (p ticketPreview) commentPanelWidth() int {
+	if p.tracker {
+		return p.textWidth()
+	}
+	return p.textWidth() + 2
+}
+
 func (p ticketPreview) commentSize(depth int) (indent, width int) {
-	// The panel spans the preview minus its left gutter, with two cells of
-	// padding on either side of its content.
-	width = p.textWidth() - 2
+	// The panel uses two cells of padding on either side of its content.
+	width = p.commentPanelWidth() - 4
 	if depth == 0 {
 		return 0, width
 	}
@@ -80,7 +86,7 @@ func (p ticketPreview) appendComment(blocks []ticketBlock, c workfile.Comment, d
 		}
 		lines[i] = prefix + line
 	}
-	panelWidth := p.textWidth() + 2 - indent
+	panelWidth := p.commentPanelWidth() - indent
 	panel := strings.Split(p.panelTheme.panel(strings.Join(lines, "\n"), panelWidth), "\n")
 	lead := strings.Repeat(" ", indent)
 	for i := range panel {

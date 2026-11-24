@@ -503,8 +503,8 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 		noLeak(t, "Test", err, tokens)
 		_, err = h.Activity(ctx, []workfile.PRCursor{{ID: "app#1"}})
 		noLeak(t, "Activity", err, tokens)
-		_, err = h.Mine(ctx)
-		noLeak(t, "Mine", err, tokens)
+		_, err = h.InboxPRs(ctx, true, nil)
+		noLeak(t, "InboxPRs", err, tokens)
 	})
 
 	t.Run("FactsKnownOrExplained", func(t *testing.T) {

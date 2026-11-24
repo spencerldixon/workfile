@@ -36,7 +36,17 @@ func tracker(ctx context.Context, e env) (int, error) {
 	if err != nil {
 		return 2, err
 	}
-	if v.color && isTerminal(os.Stdin) && isTerminal(v.out) {
+	interactive := v.color && isTerminal(os.Stdin) && isTerminal(v.out)
+	if interactive || view.inbox {
+		e.inboxSettings, err = workfile.ReadInboxSettings(e.w)
+		if err != nil {
+			return 2, err
+		}
+	}
+	if !interactive && view.inbox {
+		return trackerInboxReport(ctx, e)
+	}
+	if interactive {
 		m := newTrackerModel(ctx, e)
 		m.gfx = detectGraphics()
 		m.tagPalette = queryTicketPalette()
@@ -105,6 +115,7 @@ func tracker(ctx context.Context, e env) (int, error) {
 // ticketView is one tab: everything when empty, the person's work with me, or
 // one state of the pipeline.
 type ticketView struct {
+	inbox  bool
 	me     bool
 	state  string
 	custom *workfile.TrackerView
@@ -137,7 +148,10 @@ func pickView(o options, p workfile.Policy, settings workfile.TrackerSettings) (
 	if name == "" {
 		name = "all"
 	}
-	var choices []string
+	if name == "inbox" {
+		return ticketView{inbox: true}, nil
+	}
+	choices := []string{"inbox"}
 	for _, v := range ticketViews(p, settings) {
 		id := "all"
 		switch {
@@ -157,6 +171,9 @@ func pickView(o options, p workfile.Policy, settings workfile.TrackerSettings) (
 }
 
 func (v ticketView) label() string {
+	if v.inbox {
+		return "Inbox"
+	}
 	if v.custom != nil {
 		return clean(v.custom.Title)
 	}

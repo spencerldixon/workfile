@@ -49,7 +49,7 @@ const anyDone = "  any:\n    to: [done]\n    requires: [code_review]\n"
 func TestLintPassesAndDrawsThePolicy(t *testing.T) {
 	root := exampleWorkspace(t, "jira-only", "")
 	f := &fakeSource{}
-	code, out, _ := invoke(t, f, "lint", "--dir", root)
+	code, out, _ := invoke(t, f, "policy", "--lint", "--dir", root)
 	if code != 0 {
 		t.Fatalf("%d %s", code, out)
 	}
@@ -70,7 +70,7 @@ func TestLintPassesAndDrawsThePolicy(t *testing.T) {
 
 func TestLintListsPossibleGapsWithoutFailing(t *testing.T) {
 	root := branchingWorkspace(t, "")
-	code, out, _ := invoke(t, &fakeSource{}, "lint", "--dir", root)
+	code, out, _ := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root)
 	if code != 0 {
 		t.Fatalf("gaps are advice, not a failure: %d\n%s", code, out)
 	}
@@ -81,11 +81,11 @@ func TestLintListsPossibleGapsWithoutFailing(t *testing.T) {
 	}
 	// An any entry closes the gap, and the list shrinks.
 	root = branchingWorkspace(t, "  any:\n    to: [release]\n    requires: [code_review]\n")
-	_, out, _ = invoke(t, &fakeSource{}, "lint", "--dir", root)
+	_, out, _ = invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root)
 	if strings.Contains(out, "code review is skipped") || !strings.Contains(out, "3 gates can be skipped") {
 		t.Fatalf("%s", out)
 	}
-	_, out, _ = invoke(t, &fakeSource{}, "lint", "--dir", root, "--json")
+	_, out, _ = invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root, "--json")
 	var report lintReport
 	if err := json.Unmarshal([]byte(out), &report); err != nil || len(report.Gaps) != 3 || len(report.Gaps[0].Open) == 0 {
 		t.Fatalf("%v %+v", err, report.Gaps)
@@ -94,12 +94,12 @@ func TestLintListsPossibleGapsWithoutFailing(t *testing.T) {
 
 func TestLintJSONForAgents(t *testing.T) {
 	root := branchingWorkspace(t, "")
-	code, out, _ := invoke(t, &fakeSource{}, "lint", "--dir", root, "--json")
+	code, out, _ := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root, "--json")
 	var report lintReport
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatal(err, out)
 	}
-	if code != 0 || report.ExitCode != 0 || report.Command != "lint" || report.Problems == nil || report.Warnings == nil {
+	if code != 0 || report.ExitCode != 0 || report.Command != "policy" || report.Problems == nil || report.Warnings == nil {
 		t.Fatalf("%d %+v", code, report)
 	}
 	if report.Guarantees[0].Stage != "intake" || report.Guarantees[0].Gates == nil {
@@ -117,7 +117,7 @@ func TestLintFitsNarrowTerminals(t *testing.T) {
 	root := branchingWorkspace(t, "")
 	for _, width := range []int{40, 60} {
 		t.Setenv("COLUMNS", strconv.Itoa(width))
-		_, out, _ := invoke(t, &fakeSource{}, "lint", "--dir", root)
+		_, out, _ := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root)
 		assertWidth(t, out, width)
 		assertPlain(t, out)
 	}
@@ -144,33 +144,33 @@ func TestLintModelFollowsTheWindow(t *testing.T) {
 		}
 	}
 	t.Setenv("COLUMNS", "100")
-	_, wide, _ := invoke(t, &fakeSource{}, "lint", "--dir", branchingWorkspace(t, ""))
+	_, wide, _ := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", branchingWorkspace(t, ""))
 	if !strings.Contains(wide, "Flow") {
 		t.Fatalf("wide screens draw the flow:\n%s", wide)
 	}
 }
 
 func TestLintTakesNoTickets(t *testing.T) {
-	for _, args := range [][]string{{"lint", "APP-1"}, {"lint", "--to", "done"}, {"lint", "--me"}} {
+	for _, args := range [][]string{{"policy", "APP-1"}, {"policy", "--to", "done"}, {"policy", "--me"}} {
 		if code, _, errOut := invoke(t, &fakeSource{}, args...); code != 2 || errOut == "" {
 			t.Fatalf("%v: %d %s", args, code, errOut)
 		}
 	}
-	if code, _, errOut := invoke(t, &fakeSource{}, "lint", "--dir", t.TempDir()); code != 2 || !strings.Contains(errOut, "no .workfile/ found") {
+	if code, _, errOut := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", t.TempDir()); code != 2 || !strings.Contains(errOut, "no .workfile/ found") {
 		t.Fatalf("%d %s", code, errOut)
 	}
-	if !slices.Contains(strings.Fields(helpText(".")), "lint") {
+	if !slices.Contains(strings.Fields(helpText(".")), "policy") {
 		t.Fatal("help must list lint")
 	}
 }
 
 func TestLintReportsPolicyProblemsAsFindings(t *testing.T) {
 	root := branchingWorkspace(t, "  any:\n    to: [done]\n    requires: [nope]\n")
-	code, out, errOut := invoke(t, &fakeSource{}, "lint", "--dir", root)
+	code, out, errOut := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root)
 	if code != 1 || errOut != "" {
 		t.Fatalf("%d %s %s", code, out, errOut)
 	}
-	for _, want := range []string{"wf lint", "Problems", "unknown gate nope", "1 problem in .workfile/", "✗ Fail"} {
+	for _, want := range []string{"wf policy --lint", "Problems", "unknown gate nope", "1 problem in .workfile/", "✗ Fail"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
@@ -181,16 +181,16 @@ func TestLintReportsPolicyProblemsAsFindings(t *testing.T) {
 	assertPlain(t, out)
 	for _, width := range []int{40, 60} {
 		t.Setenv("COLUMNS", strconv.Itoa(width))
-		_, out, _ := invoke(t, &fakeSource{}, "lint", "--dir", root)
+		_, out, _ := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root)
 		assertWidth(t, out, width)
 	}
 
-	code, out, _ = invoke(t, &fakeSource{}, "lint", "--dir", root, "--json")
+	code, out, _ = invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root, "--json")
 	var report lintReport
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatal(err, out)
 	}
-	if code != 1 || report.ExitCode != 1 || report.Command != "lint" || report.SchemaVersion != 1 || len(report.Problems) != 1 ||
+	if code != 1 || report.ExitCode != 1 || report.Command != "policy" || report.SchemaVersion != 1 || len(report.Problems) != 1 ||
 		report.Problems[0].Severity != "error" || !strings.Contains(report.Problems[0].Message, "unknown gate nope") ||
 		report.Warnings == nil || report.Gaps == nil || report.Guarantees == nil {
 		t.Fatalf("%d %+v\n%s", code, report, out)
@@ -199,7 +199,7 @@ func TestLintReportsPolicyProblemsAsFindings(t *testing.T) {
 
 func TestLintWarningsAloneExitZero(t *testing.T) {
 	root := branchingWorkspace(t, "")
-	_, out, _ := invoke(t, &fakeSource{}, "lint", "--dir", root, "--json")
+	_, out, _ := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root, "--json")
 	var report lintReport
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatal(err, out)
@@ -209,17 +209,17 @@ func TestLintWarningsAloneExitZero(t *testing.T) {
 	}
 }
 
-func TestProveIsALintAlias(t *testing.T) {
+func TestProveIsAPolicyLintAlias(t *testing.T) {
 	root := branchingWorkspace(t, "")
-	codeLint, outLint, errLint := invoke(t, &fakeSource{}, "lint", "--dir", root)
+	codeLint, outLint, errLint := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root)
 	code, out, errOut := invoke(t, &fakeSource{}, "prove", "--dir", root)
 	if code != codeLint || out != outLint || errLint != "" {
 		t.Fatalf("prove must print what lint prints:\n%s\n%s", out, outLint)
 	}
-	if errOut != "wf: prove is now lint. The old name will stop working in a later release.\n" {
+	if errOut != "wf: prove is now policy --lint. The old name will stop working in a later release.\n" {
 		t.Fatalf("%q", errOut)
 	}
-	if strings.Contains(out, "prove is now lint") {
+	if strings.Contains(out, "prove is now policy --lint") {
 		t.Fatal("the notice goes to stderr only")
 	}
 }

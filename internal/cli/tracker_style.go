@@ -42,12 +42,29 @@ func attentionIcon(state workfile.AttentionState) string {
 	}
 }
 
+func trackerAttentionIcon(state workfile.AttentionState, colour bool) string {
+	switch state {
+	case workfile.NeedsMe:
+		return setupIcon(colour, attentionIcon(state), "󰅖")
+	case workfile.ReadyToMove:
+		return setupIcon(colour, attentionIcon(state), "󰄬")
+	case workfile.Waiting:
+		return setupIcon(colour, attentionIcon(state), "󰔛")
+	case workfile.AttentionUnknown:
+		return setupIcon(colour, attentionIcon(state), "󰋼")
+	default:
+		return attentionIcon(state)
+	}
+}
+
 func attentionStyle(state workfile.AttentionState, neutral lipgloss.Style) lipgloss.Style {
 	switch state {
 	case workfile.NeedsMe:
 		return lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(1))
 	case workfile.ReadyToMove:
 		return lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(2))
+	case workfile.Waiting, workfile.AttentionUnknown:
+		return lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(3))
 	default:
 		return neutral
 	}

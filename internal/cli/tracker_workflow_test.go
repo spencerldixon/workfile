@@ -88,7 +88,7 @@ func TestTrackerWorkflowModesAndNarrowWidths(t *testing.T) {
 				t.Fatalf("map lost current stage:\n%s", text)
 			}
 			for _, line := range strings.Split(text, "\n") {
-				if ansi.StringWidth(line) > width-4 {
+				if ansi.StringWidth(line) > trackerPaneWidth(width) {
 					t.Fatalf("workflow overflows %d: %s", width, line)
 				}
 			}
@@ -171,10 +171,10 @@ func TestTrackerWorkflowPictureWithTextFallback(t *testing.T) {
 		t.Fatalf("picture did not replace the text diagram:\n%s", where)
 	}
 	for _, line := range sections[0] {
-		if strings.ContainsRune(line, kitty.Placeholder) && !strings.HasPrefix(line, " ") && ansi.StringWidth(line) < 56 {
+		if strings.ContainsRune(line, kitty.Placeholder) && !strings.HasPrefix(line, " ") && ansi.StringWidth(line) < d.m.policyWidth() {
 			t.Fatal("narrow picture is not centred")
 		}
-		if ansi.StringWidth(line) > 56 {
+		if ansi.StringWidth(line) > d.m.policyWidth() {
 			t.Fatalf("picture overflows: %d", ansi.StringWidth(line))
 		}
 	}

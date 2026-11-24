@@ -5,20 +5,24 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
 )
 
-// InboxSettings are the person's choices for wf inbox. Zero values inherit
+// InboxSettings are the person's choices for the Tracker inbox. Zero values inherit
 // defaults. They never change policy.
 type InboxSettings struct {
-	RefreshEvery int               `yaml:"refresh_every"`
-	FullEvery    int               `yaml:"full_every"`
-	Poll         Duration          `yaml:"poll"`
-	Snooze       Duration          `yaml:"snooze"`
-	Agent        string            `yaml:"agent"`
-	Prompts      map[string]string `yaml:"prompts"`
+	Repositories   map[string][]string `yaml:"repositories"`
+	ReviewRequests *bool               `yaml:"review_requests"`
+	Signals        []RowKind           `yaml:"signals"`
+	RefreshEvery   int                 `yaml:"refresh_every"`
+	FullEvery      int                 `yaml:"full_every"`
+	Poll           Duration            `yaml:"poll"`
+	Snooze         Duration            `yaml:"snooze"`
+	Agent          string              `yaml:"agent"`
+	Prompts        map[string]string   `yaml:"prompts"`
 }
 
 // Duration reads "2m" or "1h" from YAML.
@@ -48,11 +52,13 @@ const minimumPoll = 30 * time.Second
 var placeholderPattern = regexp.MustCompile(`\{([a-z_]+)\}`)
 
 func defaultInboxSettings() InboxSettings {
+	reviewRequests := false
 	return InboxSettings{
-		Poll:         Duration{2 * time.Minute},
-		RefreshEvery: 5,
-		FullEvery:    15,
-		Snooze:       Duration{time.Hour},
+		ReviewRequests: &reviewRequests,
+		Poll:           Duration{30 * time.Second},
+		RefreshEvery:   5,
+		FullEvery:      15,
+		Snooze:         Duration{time.Hour},
 		Prompts: map[string]string{
 			"default":           "Get {pr} past {stage} for {key}",
 			"changes_requested": "Address {who}'s review on {pr} for {key}",
@@ -100,6 +106,15 @@ func ReadInboxSettings(w *Workspace) (InboxSettings, error) {
 }
 
 func mergeInboxSettings(base, override InboxSettings) InboxSettings {
+	if override.ReviewRequests != nil {
+		base.ReviewRequests = override.ReviewRequests
+	}
+	if override.Repositories != nil {
+		base.Repositories = override.Repositories
+	}
+	if override.Signals != nil {
+		base.Signals = override.Signals
+	}
 	if override.Poll.Duration != 0 {
 		base.Poll = override.Poll
 	}
@@ -126,7 +141,30 @@ func mergeInboxSettings(base, override InboxSettings) InboxSettings {
 	return base
 }
 
+func (s InboxSettings) WatchesRepository(connection, repository string) bool {
+	if _, name, qualified := strings.Cut(repository, "/"); qualified {
+		repository = name
+	}
+	return repository != "" && slices.ContainsFunc(s.Repositories[connection], func(name string) bool {
+		return strings.EqualFold(name, repository)
+	})
+}
+
+var inboxRepositoryPattern = regexp.MustCompile("^[a-zA-Z0-9_.-]+$")
+
 func validateInboxLayer(s InboxSettings) error {
+	for _, repos := range s.Repositories {
+		for _, repo := range repos {
+			if !inboxRepositoryPattern.MatchString(repo) {
+				return fmt.Errorf("repositories: %q must be a repository name without its owner", repo)
+			}
+		}
+	}
+	for _, signal := range s.Signals {
+		if !slices.Contains(rowRank, signal) {
+			return fmt.Errorf("signals: unknown signal %q", signal)
+		}
+	}
 	if s.Poll.Duration != 0 && s.Poll.Duration < minimumPoll {
 		return fmt.Errorf("poll: %s is too often; use at least 30s", s.Poll.Duration)
 	}

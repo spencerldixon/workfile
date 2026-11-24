@@ -13,13 +13,13 @@ for help.
 | --- | --- |
 | [`wf setup`](#setup-connect-your-tools) | Connect tools and apply a starter policy. `--test` checks connections. |
 | [`wf tracker`](#tracker-browse-the-teams-tickets) | Browse and read team tickets, PRs and next actions. |
-| [`wf inbox`](#inbox-what-wants-you-now) | Follow your activity and work that needs you. |
+| [`wf tracker --view inbox`](#inbox-what-wants-you-now) | Follow your activity and work that needs you. |
 | [`wf status`](#status-where-is-the-work) | Check where work is and what it needs. |
 | [`wf check`](#check-may-this-ticket-move-now) | Ask whether one ticket may move now. |
-| [`wf lint`](#lint-is-the-policy-sound) | Validate the policy without provider reads. |
+| [`wf policy`](#policy-how-does-this-project-ship) | Inspect the workflow offline, or validate it with `--lint`. |
 
 Old names work for one release and print a notice on stderr:
-`health` → `status`, `test` → `setup --test`, `prove` → `lint`,
+`health` → `status`, `test` → `setup --test`, `prove` → `policy --lint`,
 `tickets` → `tracker`.
 
 ## How the output looks
@@ -172,7 +172,7 @@ the initial search through scope.
 `wf status APP-57` shows:
 
 - **Where it is:** the configured workflow, with the current stage highlighted
-  or in brackets in plain text. Branches and returns match `wf lint`.
+  or in brackets in plain text. Branches and returns match `wf policy`.
 - **Needs attention:** unmet requirements, open review threads, and failing
   checks, grouped by ticket and PR and numbered across the report. Policy fixes
   name the destinations they unblock.
@@ -230,14 +230,21 @@ For scripts and agents, `--json` includes `allowed`, `exit_code`, `from`, `to`,
 `possible_moves`, `unmet_requirements` and linked `records`. Each PR's `head`
 identifies the commit checked. See [JSON reports](json.md#asking-before-a-move).
 
-## Lint: is the policy sound?
+## Policy: how does this project ship?
 
 ```sh
-wf lint
-wf lint --json
+wf policy
+wf policy --json
+wf policy --lint
+wf policy --lint --json
 ```
 
-Lint reads local workspace files, not providers. It needs no credentials.
+`wf policy` shows the workflow diagram, gate rules, provider scope and status
+mappings. It also lists `AGENTS.md` and a conventional GitHub PR template when
+they exist in the project. Both modes read local files and need no credentials.
+See [JSON reports](json.md#policy).
+
+Use `--lint` to validate the policy and see possible gaps:
 
 | Section | Meaning |
 | --- | --- |
@@ -261,7 +268,7 @@ can share compatible moves. `WORKFILE_GRAPHICS=off` always uses text.
 ```
 
 JSON includes `problems`, `warnings`, `gaps` and `guarantees`. See
-[JSON lint reports](json.md#lint).
+[JSON lint reports](json.md#policy-lint).
 
 ## Tracker: browse the team's tickets
 
@@ -275,6 +282,9 @@ Tracker uses the ticket scope from `providers.yml`; it cannot expand that scope.
 By default it opens a list with a ticket preview. Tabs are All, Assigned to me,
 and each stage in workflow order. Configured `views` replace these tabs.
 `--view` selects a built-in tab or configured view ID.
+Ticket panes have a one-column inset on both sides. On wide screens, this gives
+the vertical divider one column of space on each side.
+A blank line separates the content from the divider above the command hints.
 
 Default columns are key, title, status, assignee and next action. Narrow screens
 hide assignee, then status, then action to keep key and title readable.
@@ -282,17 +292,15 @@ The top of a 100-column screen with `columns: [key, title, status, assignee]`,
 without colour:
 
 ```text
-  workfile / tracker                                                   Jira · APP · repos app, api
-
-  [All 4]  Assigned to me   Todo 1   Doing 1   Review 1   Done 1                   Synced 11:30:00
+▸ All (4)   Assigned to me   Todo (1)   Doing (1)   Review (1)   Done (1)          Synced 11:30:00
+────────────────────────────────────────────────────────────────────────────────────────────────────
 
   Key    Title                                                       Status       Assignee
 ▸ APP-1  Fix redirect loop on expired login                        ‼ To Do        Alice
   APP-2  Add single sign-on login                                  → In Progress  Bob
   APP-3  Clear account settings page                               → In Review    Unassigned
   APP-4  Tidy the billing screen                                   · Done         Charlie
-
-  Ticket preview                                                                     enter to read
+────────────────────────────────────────────────────────────────────────────────────────────────────
 ```
 
 ### Navigation
@@ -323,9 +331,13 @@ combines with view filters and search. It does not fetch another listing.
 
 ### Ticket details and next actions
 
-The reader keeps the ticket heading in view above its description and comments.
+The reader shows the ticket heading directly below the view tabs. It stays in
+view as you scroll the description and comments.
 Comments show newest first unless threaded; replies stay under their parent.
-On wide terminals, the Workfile pane sits beside the ticket. It shows the
+On wide terminals, a thin divider separates the ticket and Workfile panes.
+Scroll over either pane with the mouse or trackpad. In the reader, Down and
+Page Down continue into Workfile when you reach the end of the ticket. Press
+`w` to switch panes directly at any width. The Workfile pane shows the
 workflow, ticket fixes and one panel per linked PR. Passing requirements are
 omitted. Press a fix's number to open its ticket, PR or failing checks.
 Refresh with `r` to recheck; fixes disappear only when fresh evidence clears them.
@@ -394,14 +406,18 @@ board views, filters, preview settings and merge rules. No config file is requir
 ## Inbox: what wants you now?
 
 ```sh
-wf inbox
+wf tracker --view inbox
 ```
 
-Inbox follows unfinished tickets assigned to you and PRs you authored or were
-asked to review in the configured repositories. Each row groups a ticket and
-its PRs; a PR without a ticket gets its own row. **Needs you** runs oldest
-waiting first; **Updates** runs newest first. Your own comments and pushes are
-excluded, and repeated events fold together.
+Inbox follows unfinished tickets assigned to you and PRs you authored in the
+configured code hosts. Opt in to review requests or watch named repositories
+in `config.yml`. Each row groups a ticket and its PRs. A PR without a ticket
+gets its own row. Alerts appear newest first. Repeated events fold together. CI recovery updates the same
+row, and a ticket that clears its policy gates shows where it can move.
+
+Tracker uses red Nerd Font symbols for failures and blockers, amber for
+requests, pending work and unavailable evidence, and green for passing checks
+or a ready move. Plain output uses standard symbols and words.
 
 | Key | Action |
 | --- | --- |
@@ -410,34 +426,35 @@ excluded, and repeated events fold together.
 | Page Up / Page Down | Scroll activity details. |
 | `t` | Read the linked ticket, workflow and numbered fixes. |
 | Esc | Return to the queue. |
-| `e` | Mark done locally, hiding the row until something new happens. |
-| `s` | Snooze locally, for one hour by default or until something new happens. |
+| `e` | Resolve the alert locally, hiding it until new activity or evidence changes it. |
+| `s` | Snooze locally, for one hour by default or until a new blocker appears. |
 | `a` | Launch your configured agent command; hidden when none is set. |
 | `o` | Open the PR or ticket in your browser. |
-| `r` | Refresh the board and activity now. |
+| `r` | Refresh the Inbox now. |
+| `[` / `]` | Switch Tracker views. |
 | `q` | Quit. |
 
 Opening details, following a link or launching an agent does not clear a row.
-Press `e` when done. In the ticket reader, arrows scroll and a fix's number opens
-its link; Esc returns to the same inbox row. Clearing the last action plays a
-brief checkmark animation; any key skips it.
+Press `e` to resolve the alert. In the ticket reader, arrows scroll and a fix's number opens
+its link. Esc returns to the same inbox row.
 
-Provider reads remain read-only. Done, snooze and activity cursors are local.
+Resolve, snooze and activity cursors are local.
 An agent launched with `a` is your own command and may make changes with its own
 access. See [agent configuration](configuration.md#agent-launcher).
 
 ### Inbox settings
 
-Defaults are `poll: 2m`, `refresh_every: 5`, `full_every: 15` and `snooze: 1h`.
+Defaults are `poll: 30s`, `refresh_every: 5`, `full_every: 15` and `snooze: 1h`.
 See [Configuration: inbox](configuration.md#inbox) for all settings and prompts.
 
 ### How often it reads
 
-Polling runs only while the interactive inbox is open:
+Inbox polls in the background while interactive Tracker is open, including
+while List or Board is selected:
 
 - Each poll checks which tracked PRs changed, in batches of up to 100. Only
-  changed PRs need activity reads. Two searches discover open PRs you authored
-  or were asked to review.
+  changed PRs need activity reads. Searches discover open authored PRs and,
+  when configured, requested reviews and PRs in watched repositories.
 - Tickets are reread when their PRs change or new comments arrive.
 - Every `refresh_every` polls, known tickets are reread for changes such as moves.
 - Every `full_every` polls, a board read discovers newly assigned tickets. If
@@ -445,9 +462,10 @@ Polling runs only while the interactive inbox is open:
 - The first run reads the last 24 hours. Failed reads keep previous data and
   show a `!` row for the connection; the next poll retries.
 
-Noninteractive inbox reads once and prints actions first, with symbols and web
+Noninteractive inbox reads once and prints newest alerts first, with symbols and web
 addresses. It does not write inbox state, so scripts cannot clear new activity.
-The number after `Inbox` counts rows needing you, not all updates:
+The number after `Inbox` counts all alerts. This example enables review
+requests:
 
 ```text
 Inbox 2
@@ -503,8 +521,8 @@ variables and local state. Preferences do not change policy or provider scope.
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Status found only ready or done tickets; check allowed the move; lint found no problems; connection tests passed. |
-| `1` | Status found out-of-policy or blocked tickets; check blocked the move; lint found policy problems. |
+| `0` | Status found only ready or done tickets; check allowed the move; policy loaded successfully; connection tests passed. |
+| `1` | Status found out-of-policy or blocked tickets; check blocked the move; policy validation found problems. |
 | `2` | Bad options or settings, unavailable required evidence, failed provider reads, an unmapped status, or a named ticket outside scope. |
 
 No matching tickets exits `0`. Reports cover only checked tickets. Tracker and

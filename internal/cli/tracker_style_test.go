@@ -25,14 +25,14 @@ func TestTrackerSelectiveHighlightsKeepChromeUnfilled(t *testing.T) {
 		t.Fatal("tracker retained the panel background")
 	}
 	highlighted := regexp.MustCompile(`\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m`)
-	if tab := d.m.tab(d.m.shownView(), true); !highlighted.MatchString(tab) {
-		t.Fatalf("active tab is not highlighted: %q", tab)
+	if tab := d.m.tab(d.m.shownView(), true); tab != ticketIndent+d.m.t.accent("All (4)") {
+		t.Fatalf("active tab should use bold accent text: %q", tab)
 	}
 	background := regexp.MustCompile(`\x1b\[(?:[0-9;]*;)?(?:4[0-8]|10[0-7])(?:;[0-9;]*)?m`)
 	metadataTag := regexp.MustCompile(`[^\n]*`)
 	for _, key := range []string{"down", "tab", "down", "tab", "right"} {
 		d.press(key)
-		if background.MatchString(d.m.header()) || background.MatchString(d.m.masthead()) {
+		if background.MatchString(d.m.navigation()) || highlighted.MatchString(d.m.navigation()) {
 			t.Fatal("panel background reached tracker chrome")
 		}
 		body := metadataTag.ReplaceAllString(d.m.pane.View(), "")
@@ -42,19 +42,27 @@ func TestTrackerSelectiveHighlightsKeepChromeUnfilled(t *testing.T) {
 	}
 }
 
-func TestTrackerTabPaddingAndBothSectionTitleHighlights(t *testing.T) {
-	d := colourTickets(t, trackerSource(), 160, 40)
-	lines := strings.Split(d.screen(), "\n")
-	if lines[1] != "" || lines[3] != "" || !strings.Contains(ansi.Strip(lines[2]), "All") {
-		t.Fatal("tabs need a blank line above and below")
+func TestTrackerDividersAcrossViews(t *testing.T) {
+	for _, width := range []int{40, 60, 140} {
+		d := driveWithSettings(t, boardSource(), width, 30, graphics{}, options{}, boardSettings())
+		for _, key := range []string{"", "enter", "esc", "]", "enter", "esc"} {
+			if key != "" {
+				d.press(key)
+			}
+			lines := strings.Split(d.screen(), "\n")
+			divider := strings.Repeat("─", width)
+			if lines[len(lines)-3] != "" || lines[len(lines)-2] != divider {
+				t.Fatalf("%d columns: expected a blank row above the footer divider", width)
+			}
+			if lines[1] != divider {
+				t.Fatalf("%d columns: missing full-width navigation divider", width)
+			}
+			if !d.m.onTicket && !d.m.showingBoard() && lines[d.m.topRows()+d.m.listRows()] != divider {
+				t.Fatalf("%d columns: missing divider beneath list", width)
+			}
+			d.refuses("Ticket preview", "enter to read", "Ticket · reading")
+		}
 	}
-	heading := d.m.previewHeading()
-	highlighted := regexp.MustCompile(`\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m`)
-	if len(highlighted.FindAllString(heading, -1)) != 2 || !strings.Contains(heading, "Ticket preview") || !strings.Contains(heading, "Workfile") {
-		t.Fatalf("both section titles must be highlighted: %q", heading)
-	}
-	d.press("tab", "down")
-	d.wants("Ticket · reading")
 }
 
 func TestTrackerStatusSignalsOnlyUseKnownAssessments(t *testing.T) {
@@ -68,11 +76,11 @@ func TestTrackerStatusSignalsOnlyUseKnownAssessments(t *testing.T) {
 	}{
 		{"unread", "→ In Review", nil},
 		{"pending", "→ In Review", &ticketRead{}},
-		{"ready", "✓ In Review", &ticketRead{policy: &workfile.Assessment{Routes: []workfile.RouteAssessment{{To: "done"}}}}},
-		{"blocked", "✗ In Review", &ticketRead{policy: &workfile.Assessment{Routes: []workfile.RouteAssessment{{To: "done", Checks: failed}}}}},
-		{"out of policy", "‼ In Review", &ticketRead{policy: &workfile.Assessment{Earlier: failed}}},
-		{"cannot check", "! In Review", &ticketRead{policyErr: errors.New("unavailable")}},
-		{"unknown state", "! In Review", &ticketRead{policy: &workfile.Assessment{Ticket: workfile.Ticket{Error: "unknown state"}}}},
+		{"ready", "󰄬 In Review", &ticketRead{policy: &workfile.Assessment{Routes: []workfile.RouteAssessment{{To: "done"}}}}},
+		{"blocked", "󰅖 In Review", &ticketRead{policy: &workfile.Assessment{Routes: []workfile.RouteAssessment{{To: "done", Checks: failed}}}}},
+		{"out of policy", "󰀦 In Review", &ticketRead{policy: &workfile.Assessment{Earlier: failed}}},
+		{"cannot check", "󰋼 In Review", &ticketRead{policyErr: errors.New("unavailable")}},
+		{"unknown state", "󰋼 In Review", &ticketRead{policy: &workfile.Assessment{Ticket: workfile.Ticket{Error: "unknown state"}}}},
 		{"done", "· In Review", &ticketRead{policy: &workfile.Assessment{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -105,7 +113,7 @@ func TestTrackerSectionsUseOneGapAndSentenceHeadings(t *testing.T) {
 	if strings.Contains(strings.Join(lines, "\n"), "\n\n\n") {
 		t.Fatal("section padding adds more than one empty line")
 	}
-	for _, want := range []string{"Where it is", "Next action", "Ticket actions"} {
+	for _, want := range []string{"Next action", "Ticket actions"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing sentence-case heading %q", want)
 		}
@@ -125,13 +133,22 @@ func TestTrackerTabsKeepTheirWidthAcrossViewsAndReads(t *testing.T) {
 	}
 }
 
-func TestTrackerFocusedTabHasContinuousHighlight(t *testing.T) {
+func TestTrackerBoardAndListShareNavigation(t *testing.T) {
 	d := driveWithSettings(t, boardSource(), 100, 30, graphics{}, options{}, boardSettings())
 	d.m.t = newTheme(true, "")
-	d.press("up")
-	tab := d.m.tab(d.m.shownView(), true)
-	highlight := regexp.MustCompile(`^\x1b\[1;4;7m Board [0-9]+ \x1b\[m$`)
-	if !highlight.MatchString(tab) {
-		t.Fatalf("focused tab needs a single highlight across the label and count: %q", tab)
+	syncClock(d)
+	for _, view := range []string{"Board", "List"} {
+		if view == "Board" {
+			d.press("up")
+		} else {
+			d.press("]")
+		}
+		first, _, _ := strings.Cut(d.screen(), "\n")
+		if !strings.Contains(first, d.m.t.accent(view+" (5)")) ||
+			!strings.HasPrefix(ansi.Strip(first), ticketIndent+"Board (5)   List (5)") ||
+			!strings.Contains(first, "\uf021 Synced 11:30:00") ||
+			strings.Contains(first, "\uf017 next 11:32:00") != (view == "Board") {
+			t.Fatalf("unexpected %s navigation: %q", view, first)
+		}
 	}
 }

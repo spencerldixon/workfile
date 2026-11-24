@@ -231,8 +231,8 @@ func TestTrackerBoardDesignHasAlignedCountsAndQuietChrome(t *testing.T) {
 	enableInbox(d)
 	screen := d.screen()
 	lines := strings.Split(screen, "\n")
-	if !strings.Contains(lines[0], "workfile") || !strings.Contains(lines[2], "Board") {
-		t.Fatal("app and views should share one header")
+	if !strings.Contains(lines[0], "Board") || strings.Contains(screen, "/ tracker") {
+		t.Fatal("view navigation should be the first row")
 	}
 	if strings.Contains(screen, "Stages ") || strings.Contains(screen, "selected ·") || strings.Contains(screen, "Needs you\n") {
 		t.Fatal("old instructional chrome remains")
@@ -244,15 +244,15 @@ func TestTrackerBoardDesignHasAlignedCountsAndQuietChrome(t *testing.T) {
 	// Wider 30-column lanes, three-column gutters and two-column margins.
 	for i, want := range []string{"Doing", "Review", "Qa", "Release"} {
 		start := 2 + i*33
-		lane := lines[4][start : start+30]
+		lane := lines[trackerHeaderRows+1][start : start+30]
 		if !strings.HasPrefix(lane, want) || lane[29] < '0' || lane[29] > '9' {
 			t.Fatalf("misaligned lane header: %q", lane)
 		}
 	}
-	if strings.TrimSpace(lines[5]) != "" {
+	if strings.TrimSpace(lines[trackerHeaderRows+2]) != "" {
 		t.Fatal("state headings need a blank row before the ticket cards")
 	}
-	for _, line := range lines[5 : len(lines)-1] {
+	for _, line := range lines[trackerHeaderRows+2 : len(lines)-trackerFooterRows] {
 		if strings.TrimSpace(ansi.Cut(line, 101, 131)) != "" {
 			t.Fatal("the empty Release column must have no body content")
 		}
@@ -305,7 +305,7 @@ func TestTrackerBoardShowsSearchInHeader(t *testing.T) {
 	enableInbox(d)
 	d.refuses("All projects", "s change")
 	d.press("/", "z")
-	if !strings.Contains(d.m.header(), "/ z") {
+	if !strings.Contains(d.m.navigation(), "/ z") {
 		t.Fatal("empty search hid the filter")
 	}
 }

@@ -3,7 +3,7 @@
 New to Workfile? Start with [Getting started](getting-started.md).
 
 JSON is a structured text format that scripts and AI agents can read without
-parsing terminal output. Use it with `status`, `check` and `lint`:
+parsing terminal output. Use it with `status`, `check` and `policy`:
 
 ```sh
 wf status APP-42 --json
@@ -144,14 +144,27 @@ wf check APP-42 --to done --json || exit 1   # stop unless the move is allowed
 Compare each PR's `head` with the one you saw when you started. If it changed,
 check again before you move anything.
 
-## Lint
+## Policy
 
-`wf lint --json` checks the policy, not tickets, so it has no `observed_at`.
+`wf policy --json` returns `schema_version: 1`, `command: "policy"`,
+`exit_code`, `policy_hash`, and a `workspace` object on success. The workspace
+includes the project root, tracker connection, stages in workflow order, moves with their
+required gates, gate rules, and provider scope and status mappings. The
+optional `files` map gives project-relative paths for instructions and the PR
+template. Provider authentication settings are omitted.
+
+A workspace that fails validation returns `problems` and exits `1`. A missing
+or unreadable workspace returns an error object and exits `2`.
+
+## Policy lint
+
+`wf policy --lint --json` validates local files. Its output has no
+`observed_at`.
 
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Currently `1`. |
-| `command` | `lint`. |
+| `command` | `policy`. The legacy `wf prove --json` form returns `lint`. |
 | `policy_hash`, `exit_code` | As in reports. `exit_code` is `1` when there is a problem. Gaps do not change it. `policy_hash` is empty when the policy did not load. |
 | `problems` | Mistakes that stop the policy loading. Always present, maybe empty. Each has `rule`, `severity` (`error`) and `message`. |
 | `warnings` | Plain mistakes in a valid policy, such as `unused-gate`. Always present, maybe empty. Each has `rule`, `severity` (`warning`) and `message`. |
@@ -159,5 +172,5 @@ check again before you move anything.
 | `guarantees` | One entry per stage in pipeline order: `stage`, and `gates` every forward path to it passes. |
 
 ```sh
-wf lint --json || exit 1   # fail CI when the policy has a problem
+wf policy --lint --json || exit 1   # fail CI when the policy has a problem
 ```

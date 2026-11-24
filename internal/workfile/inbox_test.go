@@ -238,7 +238,7 @@ func TestInboxChecksPassedOnce(t *testing.T) {
 	in.Now = inboxNow.Add(time.Minute)
 	st.Observe(in, build(t, in, st))
 	rows := build(t, in, st)
-	if len(rows) != 1 || rows[0].Kind != RowInfo || rows[0].Text != "Checks passed on #93" {
+	if len(rows) != 1 || rows[0].Kind != RowChecksPassed || rows[0].Text != "Checks passed on #93" {
 		t.Fatalf("want one checks-passed information row: %+v", rows)
 	}
 	for _, e := range rows[0].Events {
@@ -281,13 +281,13 @@ func TestInboxOrder(t *testing.T) {
 	for _, r := range rows {
 		got = append(got, r.ID)
 	}
-	want := []string{"ABC-2", "ABC-1", "ABC-4", "ABC-3"}
+	want := []string{"ABC-4", "ABC-1", "ABC-3", "ABC-2"}
 	if len(got) != len(want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
-			t.Fatalf("actions oldest first, then information newest first: got %v want %v", got, want)
+			t.Fatalf("newest first across all alerts: got %v want %v", got, want)
 		}
 	}
 }
@@ -353,5 +353,39 @@ func TestInboxEventNotHiddenByStaleFacts(t *testing.T) {
 	rows := build(t, InboxInput{Work: []InboxWork{mineWork("ABC-12", inboxPR("web#84", "example-alice"))}, Activity: []Activity{ev}}, NewInboxState())
 	if len(rows) != 1 || rows[0].Text != "Bob requested changes on #84" {
 		t.Fatalf("an event the facts do not show yet still appears: %+v", rows)
+	}
+}
+
+func TestInboxWatchedLoosePRRecoversAndFailsAgain(t *testing.T) {
+	pr := inboxPR("example-api#7", "example-bob", withChecks("failure"))
+	pr.Head, pr.Repository = "example-head", "example-org/example-api"
+	in := InboxInput{
+		Now: inboxNow, Who: map[string]string{"github": "example-alice"},
+		Loose:        map[string][]Record{"github": {pr}},
+		Repositories: map[string][]string{"github": {"example-api"}},
+	}
+	st := NewInboxState()
+	observe := func(state string, at time.Time) []InboxRow {
+		pr.Facts["checks"] = state
+		in.Now = at
+		st.Observe(in, nil)
+		return BuildInbox(in, st)
+	}
+	rows := observe("failure", inboxNow)
+	if len(rows) != 1 || rows[0].Ticket != "" || rows[0].Kind != RowChecksFailed {
+		t.Fatalf("wanted a failure on the watched PR without a ticket: %+v", rows)
+	}
+	id := rows[0].ID
+	st.Done[id] = rows[0].Fingerprint
+	if rows := observe("failure", inboxNow.Add(time.Minute)); len(rows) != 0 {
+		t.Fatalf("an acknowledged failure should stay resolved: %+v", rows)
+	}
+	rows = observe("success", inboxNow.Add(2*time.Minute))
+	if len(rows) != 1 || rows[0].Kind != RowChecksPassed || rows[0].ID != id {
+		t.Fatalf("expected the same PR to recover: %+v", rows)
+	}
+	rows = observe("failure", inboxNow.Add(3*time.Minute))
+	if len(rows) != 1 || rows[0].Kind != RowChecksFailed || rows[0].ID != id {
+		t.Fatalf("a fresh failure on the same commit should reopen the alert: %+v", rows)
 	}
 }

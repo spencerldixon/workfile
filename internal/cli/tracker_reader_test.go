@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"workfile/internal/workfile"
 )
 
@@ -30,7 +31,8 @@ func TestTrackerReaderFitsPlainAndScrollsToComments(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d := driveTracker(t, readerFixture(trackerSource()), width, 26)
 		d.press("enter")
-		d.wants("Ticket · reading", "Story", "To Do", "Alice", "w workfile")
+		d.refuses("Ticket · reading", "tab to list")
+		d.wants("Story", "To Do", "Alice", "w workfile")
 		d.press("down", "down")
 		d.refuses("Ticket preview", "APP-2", "\x1b", "0%", "On this ticket")
 		offset := d.m.pane.YOffset()
@@ -38,7 +40,8 @@ func TestTrackerReaderFitsPlainAndScrollsToComments(t *testing.T) {
 			t.Fatal("the ticket did not scroll")
 		}
 		d.press("w")
-		d.wants("Workfile · reading", "Where it is")
+		d.refuses("Workfile · reading")
+		d.wants("Next action")
 		d.press("w")
 		if d.m.pane.YOffset() != offset {
 			t.Fatal("returning from Workfile lost the ticket position")
@@ -54,7 +57,7 @@ func TestTrackerReaderFitsPlainAndScrollsToComments(t *testing.T) {
 		d.refuses("\x1b")
 		d.check()
 		d.press("esc")
-		d.wants("Ticket preview", "APP-2")
+		d.wants("APP-2", "↑↓ move")
 	}
 }
 
@@ -63,17 +66,22 @@ func TestTrackerBoardReaderPinsMetadataAndKeepsWorkfileInView(t *testing.T) {
 	d.m.t = newTheme(true, "")
 	d.m.v.color, d.m.v.links = true, true
 	d.press("enter")
-	d.wants("\uf02d Story", "To Do", "\uf007 Alice", "Where it is")
+	d.wants("\uf02d Story", "To Do", "\uf007 Alice", "Next action")
 	header := strings.Join(d.m.readerHeader, "\n")
+	first, _, _ := strings.Cut(d.screen(), "\n")
+	if !strings.HasPrefix(ansi.Strip(first), ticketIndent+"Board") ||
+		!strings.Contains(ansi.Strip(header), "\n"+ticketIndent+d.m.current) {
+		t.Fatal("first view and ticket key should share the same inset")
+	}
 	d.press("down", "down", "down")
 	if header != strings.Join(d.m.readerHeader, "\n") || d.m.side.YOffset() != 0 {
 		t.Fatal("scrolling the ticket moved the identity or Workfile")
 	}
-	d.wants("Where it is")
+	d.wants("Next action")
 	d.refuses("On this ticket", "g jump")
 	d.check()
 	d.press("esc")
-	d.refuses("Ticket · reading")
+	d.wants("Board", "▌")
 }
 
 func TestTrackerReaderStatusUsesListColoursInRoundedTags(t *testing.T) {
@@ -87,8 +95,8 @@ func TestTrackerReaderStatusUsesListColoursInRoundedTags(t *testing.T) {
 		ink    lipgloss.ANSIColor
 		checks []workfile.Check
 	}{
-		{"✓", 2, 0, nil},
-		{"✗", 1, 15, []workfile.Check{{Outcome: "fail"}}},
+		{"󰄬", 2, 0, nil},
+		{"󰅖", 1, 15, []workfile.Check{{Outcome: "fail"}}},
 	} {
 		read := d.m.ticketReads.byKey[d.m.current]
 		read.policy = &workfile.Assessment{Routes: []workfile.RouteAssessment{{To: "doing", Checks: tc.checks}}}
@@ -103,7 +111,7 @@ func TestTrackerReaderStatusUsesListColoursInRoundedTags(t *testing.T) {
 
 func TestTrackerListPreviewAndReaderShareTheTicketHeading(t *testing.T) {
 	d := colourTickets(t, trackerSource(), 140, 30)
-	d.wants("Ticket preview", "\uf02d Story", "\uf007 Alice")
+	d.wants("\uf02d Story", "\uf007 Alice")
 	preview, _, _ := d.m.ticketContent()
 	d.press("enter")
 	reader, _, _ := d.m.ticketContent()

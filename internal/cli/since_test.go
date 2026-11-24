@@ -89,9 +89,9 @@ func TestSinceIsCheckedWhenOptionsAreRead(t *testing.T) {
 			t.Errorf("%s: %d %q", bad, code, errOut)
 		}
 	}
-	code, _, errOut := invoke(t, &fakeSource{}, "lint", "--since", "last")
+	code, _, errOut := invoke(t, &fakeSource{}, "policy", "--lint", "--since", "last")
 	if code != 2 || errOut == "" {
-		t.Fatalf("lint takes no --since: %d %q", code, errOut)
+		t.Fatalf("policy takes no --since: %d %q", code, errOut)
 	}
 }
 

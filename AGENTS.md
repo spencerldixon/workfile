@@ -136,8 +136,9 @@ a section below says it is for old output only.
 ### Terminal colours
 
 - The terminal's theme decides the colours. In Lip Gloss use only the 16 ANSI
-  colours (`lipgloss.ANSIColor`): `1` red for failing or blocked, `2` green for
-  passing or ready, faint for secondary text, bold for keys and titles. Never
+  colours (`lipgloss.ANSIColor`): `1` red for failures and blockers, `3` amber
+  for attention, waiting and unavailable evidence, `2` green for passing or
+  ready. Use faint for secondary text and bold for keys and titles. Never
   hard-code a 256-colour, RGB or hex value for red, green or text, and do not
   use adaptive or custom palettes.
 - The only computed colour is the panel background, derived from the terminal's
@@ -145,10 +146,10 @@ a section below says it is for old output only.
   256 colour. `WORKFILE_BACKGROUND=off` turns it off.
 - One more computed colour: large title images use the terminal's text colour
   (OSC 10), asked once per run. If it does not answer, titles are bold text.
-- Icons stay: `✓` ready, `✗` needs work, `‼` out of policy, `!` cannot check,
-  `·` done.
-- Never rely on colour alone. Pair it with an icon or word: `✓` ready, `✗` needs
-  work, `‼` out of policy, `!` cannot check, `·` done.
+- Use the shared Tracker attention styles and Nerd Font icons in Inbox, List
+  and Board. Keep the meaning clear in words and use standard symbols in plain
+  output: `✓` ready, `✗` needs work, `‼` out of policy, `!` cannot check,
+  `…` waiting, `·` done.
 - Output piped to a file, `NO_COLOR`, or `TERM=dumb` must be plain text with the
   same information: no escapes, no background, and web addresses written out
   where a hyperlink would have been.

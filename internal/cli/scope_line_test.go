@@ -79,11 +79,11 @@ func TestScopeLineFitsNarrowTerminals(t *testing.T) {
 	}
 }
 
-func TestTrackerScreenShowsTheScopeAtNarrowWidths(t *testing.T) {
+func TestTrackerOpensWithNavigationAtNarrowWidths(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d := driveTracker(t, trackerSource(), width, 30)
 		first := strings.Split(d.screen(), "\n")[0]
-		if !strings.Contains(ansi.Strip(first), "Jira") {
+		if !strings.Contains(ansi.Strip(first), "▸ All") || strings.Contains(first, "Jira") {
 			t.Errorf("%d columns: first line %q", width, first)
 		}
 		d.check()

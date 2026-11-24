@@ -103,14 +103,14 @@ func (m *trackerModel) boardTile(item ticketItem, selected bool, width int) []st
 	}
 	lines := []string{"", "  " + ansi.Truncate(head, inner, "…"), "  " + ansi.Truncate(clean(item.Title), inner, "…")}
 	add := func(text string) { lines = append(lines, "  "+ansi.Truncate(text, inner, "…")) }
-	footer, icon := result.Summary, attentionIcon(result.State)
+	footer, icon := result.Summary, trackerAttentionIcon(result.State, m.t.color)
 	var tags string
 	var overflow []string
 	r := m.ticketReads.byKey[item.Key]
 	if r == nil || !r.policyDone() {
 		footer = "PRs not checked"
 		if r != nil && r.policyStarted {
-			footer, icon = "Checking PRs…", "…"
+			footer, icon = "Checking PRs…", trackerAttentionIcon(workfile.Waiting, m.t.color)
 		}
 	} else if r.policyErr != nil || r.policy == nil {
 		footer = "Cannot check PRs"

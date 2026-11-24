@@ -15,6 +15,7 @@ type RowKind string
 const (
 	RowOutOfPolicy      RowKind = "out_of_policy"
 	RowChangesRequested RowKind = "changes_requested"
+	RowChecksPassed     RowKind = "checks_passed"
 	RowChecksFailed     RowKind = "checks_failed"
 	RowNeedsWork        RowKind = "needs_work"
 	RowReviewRequested  RowKind = "review_requested"
@@ -25,7 +26,7 @@ const (
 )
 
 // rowRank orders kinds by importance when one ticket has several.
-var rowRank = []RowKind{RowOutOfPolicy, RowChangesRequested, RowChecksFailed, RowNeedsWork, RowReviewRequested, RowComments, RowReady, RowCannotCheck, RowInfo}
+var rowRank = []RowKind{RowOutOfPolicy, RowChangesRequested, RowChecksFailed, RowNeedsWork, RowReviewRequested, RowComments, RowReady, RowChecksPassed, RowCannotCheck, RowInfo}
 
 // activityChecksPassed is made by the inbox itself, not read from a provider.
 const activityChecksPassed ActivityKind = "checks_passed"
@@ -54,12 +55,15 @@ type InboxWork struct {
 // by connection. Who is the person's identity per connection, and Names turns
 // an identity into a name to show.
 type InboxInput struct {
-	Work     []InboxWork
-	Loose    map[string][]Record
-	Activity []Activity
-	Who      map[string]string
-	Names    map[string]string
-	Now      time.Time
+	Repositories   map[string][]string
+	Signals        []RowKind
+	ReviewRequests *bool
+	Work           []InboxWork
+	Loose          map[string][]Record
+	Activity       []Activity
+	Who            map[string]string
+	Names          map[string]string
+	Now            time.Time
 }
 
 // InboxRow is one line in the inbox. ID is the ticket key, or the PR ID for a
@@ -83,7 +87,25 @@ type InboxRow struct {
 }
 
 // Action reports whether the row needs the person.
-func (r InboxRow) Action() bool { return r.Kind != RowInfo }
+func (r InboxRow) Action() bool { return r.Kind != RowInfo && r.Kind != RowChecksPassed }
+
+func (r InboxRow) Snooze(until time.Time) Snooze {
+	return Snooze{Until: until, Fingerprint: r.Fingerprint, Blocker: r.blocker()}
+}
+
+func (r InboxRow) blocker() string {
+	switch r.Kind {
+	case RowOutOfPolicy, RowChangesRequested, RowChecksFailed, RowNeedsWork:
+		return r.waitKey
+	default:
+		return ""
+	}
+}
+
+func (s Snooze) Hides(row InboxRow, now time.Time) bool {
+	blocker := row.blocker()
+	return s.Until.After(now) && (s.Fingerprint == row.Fingerprint || blocker == "" || blocker == s.Blocker)
+}
 
 type inboxItem struct {
 	id, ticket, title, stage, url string
@@ -96,9 +118,7 @@ type candidate struct {
 	core string // what the fingerprint is built from
 }
 
-// BuildInbox turns current state and recent activity into rows: action rows
-// first, oldest waiting first, then information rows, newest first. It is
-// pure: no network, no clock, no files.
+// BuildInbox turns current state and recent activity into newest-first rows.
 func BuildInbox(in InboxInput, st InboxState) []InboxRow {
 	var items []inboxItem
 	for i := range in.Work {
@@ -116,19 +136,21 @@ func BuildInbox(in InboxInput, st InboxState) []InboxRow {
 			rows = append(rows, row)
 		}
 	}
-	slices.SortStableFunc(rows, func(a, b InboxRow) int {
-		switch {
-		case a.Action() && !b.Action():
-			return -1
-		case !a.Action() && b.Action():
-			return 1
-		case a.Action():
-			return a.Since.Compare(b.Since)
-		default:
-			return b.Since.Compare(a.Since)
-		}
-	})
+	SortInboxRows(rows)
 	return rows
+}
+
+func (r InboxRow) Latest() time.Time {
+	if n := len(r.Events); n > 0 && r.Events[n-1].At.After(r.Since) {
+		return r.Events[n-1].At
+	}
+	return r.Since
+}
+
+func SortInboxRows(rows []InboxRow) {
+	slices.SortStableFunc(rows, func(a, b InboxRow) int {
+		return b.Latest().Compare(a.Latest())
+	})
 }
 
 func buildRow(in InboxInput, st InboxState, item inboxItem) (InboxRow, bool) {
@@ -145,6 +167,9 @@ func buildRow(in InboxInput, st InboxState, item inboxItem) (InboxRow, bool) {
 			continue
 		}
 		if me := in.Who[e.Connection]; me != "" && strings.EqualFold(me, e.WhoID) {
+			continue
+		}
+		if e.Kind == ActivityReviewRequested && in.ReviewRequests != nil && !*in.ReviewRequests {
 			continue
 		}
 		if _, seen := st.Seen[e.Key()]; seen {
@@ -189,10 +214,20 @@ func buildRow(in InboxInput, st InboxState, item inboxItem) (InboxRow, bool) {
 				cands[len(cands)-1].row.Who = who
 				cands[len(cands)-1].row.Since = newest(events, r.ID, ActivityChangesRequested)
 			}
-			if mine && factText(r, "checks") == "failure" {
-				add(RowChecksFailed, "Checks failing on "+label, r.Head, r)
+			watched := (InboxSettings{Repositories: in.Repositories}).WatchesRepository(conn, r.Repository)
+			seen := st.Checks[r.ID]
+			checks := factText(r, "checks")
+			if checks == "" && seen.Head == r.Head {
+				checks = seen.State
 			}
-			if me != "" && slices.ContainsFunc(requests, func(id string) bool { return strings.EqualFold(id, me) }) {
+			if (mine || watched) && checks == "failure" {
+				core := r.Head
+				if !seen.Failed.IsZero() {
+					core += "|" + seen.Failed.Format(time.RFC3339Nano)
+				}
+				add(RowChecksFailed, "Checks failing on "+label, core, r)
+			}
+			if (in.ReviewRequests == nil || *in.ReviewRequests) && me != "" && slices.ContainsFunc(requests, func(id string) bool { return strings.EqualFold(id, me) }) {
 				who := in.name(factText(r, "author"))
 				if e := latest(events, r.ID, ActivityReviewRequested); e != nil {
 					who = in.who(*e)
@@ -267,7 +302,11 @@ func buildRow(in InboxInput, st InboxState, item inboxItem) (InboxRow, bool) {
 	}
 	if len(cands) == 0 && len(unexplained) > 0 {
 		newestEvent := unexplained[len(unexplained)-1]
-		row := InboxRow{Kind: RowInfo, Text: infoText(in, unexplained, newestEvent, item), Since: newestEvent.At}
+		kind := RowInfo
+		if newestEvent.Kind == activityChecksPassed {
+			kind = RowChecksPassed
+		}
+		row := InboxRow{Kind: kind, Text: infoText(in, unexplained, newestEvent, item), Since: newestEvent.At}
 		if newestEvent.PR != "" {
 			row.PR = prLabel(newestEvent.PR)
 			for _, r := range item.prs[newestEvent.Connection] {
@@ -278,6 +317,9 @@ func buildRow(in InboxInput, st InboxState, item inboxItem) (InboxRow, bool) {
 			}
 		}
 		cands = append(cands, candidate{row, newestEvent.Key()})
+	}
+	if in.Signals != nil {
+		cands = slices.DeleteFunc(cands, func(c candidate) bool { return !slices.Contains(in.Signals, c.row.Kind) })
 	}
 	if len(cands) == 0 {
 		return InboxRow{}, false
@@ -305,7 +347,7 @@ func buildRow(in InboxInput, st InboxState, item inboxItem) (InboxRow, bool) {
 	if st.Done[row.ID] == row.Fingerprint {
 		return InboxRow{}, false
 	}
-	if s, ok := st.Snoozed[row.ID]; ok && s.Fingerprint == row.Fingerprint && s.Until.After(in.Now) {
+	if st.Snoozed[row.ID].Hides(row, in.Now) {
 		return InboxRow{}, false
 	}
 	return row, true
@@ -331,7 +373,10 @@ func (s *InboxState) Observe(in InboxInput, rows []InboxRow) {
 					continue
 				}
 				prev, had := s.Checks[r.ID]
-				next := ChecksSeen{State: state, Passed: prev.Passed}
+				next := ChecksSeen{State: state, Head: r.Head, Passed: prev.Passed, Failed: prev.Failed}
+				if state == "failure" && had && prev.State != "failure" {
+					next.Failed = in.Now
+				}
 				if state != "success" {
 					next.Passed = time.Time{}
 				} else if had && prev.State != "success" {

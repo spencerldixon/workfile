@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -11,55 +8,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"workfile/internal/workfile"
 )
-
-var lintCommand = command{
-	flags: []string{"dir", "json"},
-	args: func(o options) error {
-		if len(o.keys) > 0 {
-			return errors.New("lint takes no positional arguments; it checks the policy, not tickets")
-		}
-		return nil
-	},
-	noWorkspace: true,
-	run:         lint,
-}
-
-// lint checks the policy itself, not tickets. It reports problems that stop
-// the policy loading, plain mistakes, and then answers: which gates is a
-// ticket in each stage sure to have passed? It reads no provider, so it needs
-// no credentials and runs in CI on a policy change. Exit 0 sound (warnings
-// allowed, gaps included), 1 a problem. A missing or unreadable .workfile/ is an error, exit 2.
-func lint(_ context.Context, e env) (int, error) {
-	v, o := e.view, e.o
-	v.width = max(v.width, fullWidth(v.out))
-	w, err := workfile.Load(o.dir)
-	var pe *workfile.PolicyError
-	var problems, warnings []workfile.Finding
-	var gaps []workfile.Gap
-	switch {
-	case errors.As(err, &pe):
-		for _, problem := range pe.Problems {
-			problems = append(problems, workfile.Finding{Rule: "invalid-policy", Severity: "error", Message: problem})
-		}
-		w = nil
-	case err != nil:
-		return 0, err
-	default:
-		warnings = w.Policy.Lint()
-		gaps = w.Policy.Gaps()
-	}
-	code := 0
-	if len(problems) > 0 {
-		code = 1
-	}
-	if o.json {
-		return code, writeLint(v.out, w, problems, warnings, gaps, code)
-	}
-	m := newLintModel(v, w, problems, warnings, gaps)
-	m.gfx = v.outputGraphics()
-	fmt.Fprint(v.out, m.render())
-	return code, nil
-}
 
 type stageGuarantee struct {
 	Stage string   `json:"stage"`
@@ -79,10 +27,10 @@ type lintReport struct {
 
 // writeLint lists guarantees in pipeline order, so array order is meaningful
 // here as in the other reports. w is nil when the policy did not load; the
-// policy hash is then empty and the invariants and guarantees are empty.
-func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfile.Finding, gaps []workfile.Gap, code int) error {
+// policy hash and guarantees are then empty.
+func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfile.Finding, gaps []workfile.Gap, code int, command string) error {
 	report := lintReport{
-		SchemaVersion: 1, Command: "lint", ExitCode: code,
+		SchemaVersion: 1, Command: command, ExitCode: code,
 		Problems:   append([]workfile.Finding{}, problems...),
 		Warnings:   append([]workfile.Finding{}, warnings...),
 		Gaps:       append([]workfile.Gap{}, gaps...),
@@ -98,9 +46,8 @@ func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfi
 	return encodeCleanJSON(out, report)
 }
 
-// lintModel draws the answer to `wf lint`: one verdict, what is wrong, then a
-// grid of which gates guard which stages. It is drawn once and printed, laid out
-// for the width of the terminal. w is nil when the policy did not load.
+// lintModel draws the workflow diagram and the sections for the selected policy
+// mode. w is nil when the policy did not load.
 type lintModel struct {
 	v                  view
 	t                  theme
@@ -108,10 +55,12 @@ type lintModel struct {
 	problems, warnings []workfile.Finding
 	gaps               []workfile.Gap
 	gfx                graphics
+	invocation         string
+	policy             *policyWorkspace
 }
 
 func newLintModel(v view, w *workfile.Workspace, problems, warnings []workfile.Finding, gaps []workfile.Gap) *lintModel {
-	return &lintModel{v: v, t: newTheme(v.color, ""), w: w, problems: problems, warnings: warnings, gaps: gaps}
+	return &lintModel{v: v, t: newTheme(v.color, ""), w: w, problems: problems, warnings: warnings, gaps: gaps, invocation: "wf policy --lint"}
 }
 
 func (m *lintModel) Init() tea.Cmd { return nil }
@@ -128,13 +77,19 @@ func (m *lintModel) width() int { return max(14, m.v.width-2*len(ticketIndent)) 
 // render joins the sections with a blank line between, on the terminal's own
 // background.
 func (m *lintModel) render() string {
-	sections := [][]string{
+	if m.policy != nil {
+		return m.renderSections(m.policySections(m.policy)...)
+	}
+	return m.renderSections(
 		m.summary(),
 		m.findings("Problems", m.problems, m.t.bad("✗ ")),
 		m.gapList(),
 		m.findings("Warnings", m.warnings, m.t.warn("! ")),
 		m.flow(),
-	}
+	)
+}
+
+func (m *lintModel) renderSections(sections ...[]string) string {
 	lines := []string{""}
 	for _, section := range sections {
 		if len(section) == 0 {
@@ -150,7 +105,7 @@ func (m *lintModel) render() string {
 
 // wrap breaks text to the screen, indenting every line, then styles each line.
 func (m *lintModel) wrap(text, indent string, style func(string) string) []string {
-	lines := wrapped(text, max(4, m.width()-len(indent)))
+	lines := wrapped(clean(text), max(4, m.width()-len(indent)))
 	for i, line := range lines {
 		lines[i] = indent + style(line)
 	}
@@ -177,11 +132,11 @@ func (m *lintModel) findings(title string, list []workfile.Finding, icon string)
 
 // summary is the verdict: pass or fail, and why, in the first lines you read.
 func (m *lintModel) summary() []string {
-	lines := []string{m.t.accent("wf lint"), ""}
+	lines := []string{m.t.accent(m.invocation), ""}
 	switch {
 	case len(m.problems) > 0:
 		lines = append(lines, m.t.bad("✗ ")+m.t.bold("Fail")+m.t.dim("  "+quantity(len(m.problems), "problem", "problems")+" in .workfile/"))
-		return append(lines, m.wrap("The policy can't be used until these are fixed. Then run wf lint again.", "  ", m.t.dim)...)
+		return append(lines, m.wrap("The policy can't be used until these are fixed. Then run "+m.invocation+" again.", "  ", m.t.dim)...)
 	case len(m.gaps) > 0:
 		lines = append(lines, m.t.warn("! ")+m.t.bold("Pass")+m.t.dim("  "+quantity(len(m.gaps), "gate", "gates")+" can be skipped"))
 		return append(lines, m.wrap("The policy is valid, but a ticket can reach some stages without passing every gate asked for on the way in.", "  ", m.t.dim)...)

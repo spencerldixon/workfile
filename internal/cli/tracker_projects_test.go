@@ -116,10 +116,10 @@ func TestTrackerBoardProjectPickerFiltersAndReturnsToAll(t *testing.T) {
 	if d.m.pickingProject || listKeys(d) != "APP-5" {
 		t.Fatalf("project filter ignored: %s", listKeys(d))
 	}
-	if !strings.Contains(d.m.masthead(), "example-web") {
-		t.Fatal("active project is not shown")
-	}
 	d.press("s")
+	if selected := d.m.projectPicker.SelectedItem().(trackerProject); selected.origin != "example-web" {
+		t.Fatalf("picker lost the active project: %v", selected)
+	}
 	if projects := d.m.projects(); len(projects) != 3 || projects[0].count != 5 {
 		t.Fatalf("picker lost unselected projects: %+v", projects)
 	}
@@ -143,7 +143,7 @@ func TestTrackerListProjectPickerUsesTheSameScopeControls(t *testing.T) {
 	if listKeys(d) != "APP-5" || f.listingReads != 1 {
 		t.Fatalf("list scope should use the cached listing, got %q after %d reads", listKeys(d), f.listingReads)
 	}
-	d.wants("example-web", "Ticket preview")
+	d.wants("List (1)", "APP-5")
 	d.press("[")
 	if listKeys(d) == "APP-5" {
 		t.Fatal("the list project selection affected the board tab")

@@ -13,7 +13,7 @@ import (
 	"workfile/internal/workfile"
 )
 
-// inboxModel is the wf inbox screen. Clearing is local: it changes only
+// inboxModel is the Tracker inbox screen. Clearing is local: it changes only
 // inbox.json, never a ticket or PR.
 type inboxModel struct {
 	ctx context.Context
@@ -35,24 +35,11 @@ type inboxModel struct {
 	toast         string
 	toastBad      bool
 	saveWarned    bool
-	zeroFrame     int
-	zeroRun       int
 
 	now   func() time.Time
 	start func(context.Context, []string) error
 	open  func(string) error
 	save  func(workfile.InboxState) error
-}
-
-// zeroTickMsg moves the inbox-zero moment on by one frame.
-type zeroTickMsg struct{ run int }
-
-const zeroLast = 12
-
-var zeroSpring = springFrames(zeroLast)
-
-func zeroTick(run int) tea.Cmd {
-	return tea.Tick(animationFrameTime, func(time.Time) tea.Msg { return zeroTickMsg{run} })
 }
 
 type agentDoneMsg struct {
@@ -64,16 +51,12 @@ type agentDoneMsg struct {
 
 func newInboxModel(ctx context.Context, e env, s workfile.InboxSettings, st workfile.InboxState) *inboxModel {
 	return &inboxModel{
-		ctx: ctx, e: e, s: s, st: st, zeroFrame: -1,
+		ctx: ctx, e: e, s: s, st: st,
 		now:   time.Now,
 		start: runner.Start,
 		open:  func(target string) error { return openBrowser(ctx, target) },
 		save:  func(s workfile.InboxState) error { return workfile.WriteInboxState(e.w, s) },
 	}
-}
-
-func (m *inboxModel) Init() tea.Cmd {
-	return tea.Batch(m.load(pollFull), pollEvery(m.s.Poll.Duration))
 }
 
 func (m *inboxModel) busy() bool {
@@ -93,6 +76,10 @@ func (m *inboxModel) pollMode() pollMode {
 // load reads a poll off the Update loop. It hands the loader its own copy of
 // the cursors, so nothing is shared while it runs.
 func (m *inboxModel) load(mode pollMode) tea.Cmd {
+	return m.loadWithListing(mode, nil)
+}
+
+func (m *inboxModel) loadWithListing(mode pollMode, listing []workfile.Listing) tea.Cmd {
 	if m.loading {
 		return nil
 	}
@@ -102,40 +89,18 @@ func (m *inboxModel) load(mode pollMode) tea.Cmd {
 		copied := *m.data
 		prev = &copied
 	}
-	st := workfile.InboxState{Cursors: maps.Clone(m.st.Cursors)}
+	st := workfile.InboxState{Cursors: maps.Clone(m.st.Cursors), Checks: maps.Clone(m.st.Checks)}
 	ctx, e, now := m.ctx, m.e, m.now()
-	return func() tea.Msg { return inboxLoadedMsg(loadInbox(ctx, e, st, prev, now, mode)) }
+	return func() tea.Msg { return inboxLoadedMsg(loadInboxWithListing(ctx, e, st, prev, now, mode, listing)) }
 }
 
-func (m *inboxModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	before := m.data != nil && m.actions() > 0
-	model, cmd := m.update(msg)
-	// Reaching zero plays the moment once, in colour only. Any key ends it.
-	if before && m.actions() == 0 && m.e.view.color {
-		m.zeroFrame = 0
-		m.zeroRun++
-		cmd = tea.Batch(cmd, zeroTick(m.zeroRun))
-	}
-	return model, cmd
-}
-
-func (m *inboxModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *inboxModel) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
-	case zeroTickMsg:
-		if msg.run != m.zeroRun || m.zeroFrame < 0 {
-			return m, nil
-		}
-		m.zeroFrame++
-		if m.zeroFrame == zeroLast {
-			m.zeroFrame = -1
-			return m, nil
-		}
-		return m, zeroTick(m.zeroRun)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		cmd := m.loadTicketWorkflow()
 		m.fillTicket()
-		return m, cmd
+		return cmd
 	case ticketDetailMsg:
 		if t := m.ticket; t != nil && t.read == msg.read {
 			t.read.detail, t.read.detailErr = &msg.detail, msg.err
@@ -149,12 +114,12 @@ func (m *inboxModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmd := m.loadTicketWorkflow()
 			m.fillTicket()
-			return m, cmd
+			return cmd
 		}
 	case workflowPictureMsg:
 		cmd := m.workflow.receive(msg)
 		m.fillTicket()
-		return m, cmd
+		return cmd
 	case inboxTicketOpenedMsg:
 		if t := m.ticket; t != nil && t == msg.ticket && msg.err != nil {
 			t.notice = "Couldn't open the browser"
@@ -165,32 +130,32 @@ func (m *inboxModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d := inboxData(msg)
 		m.data = &d
 		applyPoll(&m.st, d)
+		m.st.Observe(inboxInput(d, m.st), nil)
 		m.rebuild()
 		m.st.Observe(inboxInput(d, m.st), m.rows)
 		m.st.Prune(d.at, d.tracksActivity)
 		m.persist()
 	case inboxTickMsg:
 		m.polls++
-		return m, tea.Batch(m.load(m.pollMode()), pollEvery(m.s.Poll.Duration))
+		return tea.Batch(m.load(m.pollMode()), pollEvery(m.s.Poll.Duration))
 	case agentDoneMsg:
 		if msg.err != nil {
 			m.say("Couldn't start agent: "+agentReason(msg.err), true)
-			return m, nil
+			return nil
 		}
 		m.st.Agents = append(m.st.Agents, workfile.AgentNote{Row: msg.row.ID, Ticket: msg.row.Ticket, PR: msg.row.PR, Kind: string(msg.row.Kind), Prompt: msg.prompt, At: m.now()})
 		m.persist()
 		m.say("⚙ started: "+strings.Join(msg.argv, " "), false)
 	case tea.KeyPressMsg:
 		if m.ticket != nil {
-			return m, m.ticketKey(msg)
+			return m.ticketKey(msg)
 		}
-		return m, m.key(msg)
+		return m.key(msg)
 	}
-	return m, nil
+	return nil
 }
 
 func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
-	m.zeroFrame = -1 // any key stops the inbox-zero moment
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return tea.Quit
@@ -207,7 +172,11 @@ func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "pgup", "pgdown":
 		if m.detail && len(m.rows) > 0 {
 			t, width := m.theme(), m.renderWidth()
-			pane := m.activityViewport(t, width, m.bodyHeight(len(m.footer(t, width))))
+			room := m.bodyHeight(len(m.footer(t, width)))
+			if m.toast != "" {
+				room = max(1, room-1)
+			}
+			pane := m.activityViewport(t, width, room)
 			if msg.String() == "pgup" {
 				pane.PageUp()
 			} else {
@@ -216,7 +185,6 @@ func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
 			m.detailOffset = pane.YOffset()
 		}
 	case "r":
-		m.say("Refreshing…", false)
 		return m.load(pollFull)
 	}
 	row, ok := m.current()
@@ -231,7 +199,7 @@ func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "e":
 		m.done(row.ID)
 	case "s":
-		m.st.Snoozed[row.ID] = workfile.Snooze{Until: m.now().Add(m.s.Snooze.Duration), Fingerprint: row.Fingerprint}
+		m.st.Snoozed[row.ID] = row.Snooze(m.now().Add(m.s.Snooze.Duration))
 		m.rebuild()
 		m.persist()
 	case "o":
@@ -401,10 +369,7 @@ func (m *inboxModel) footerKeys() [][2]string {
 		if row.Ticket != "" {
 			keys = append(keys, [2]string{"t", "ticket"})
 		}
-		keys = append(keys, [2]string{"e", "done"})
-		if row.Action() {
-			keys = append(keys, [2]string{"s", "snooze"})
-		}
+		keys = append(keys, [2]string{"e", "resolve"}, [2]string{"s", "snooze"})
 		if m.canAgent(row) {
 			keys = append(keys, [2]string{"a", "agent"})
 		}
@@ -412,6 +377,7 @@ func (m *inboxModel) footerKeys() [][2]string {
 			keys = append(keys, [2]string{"o", "open " + target})
 		}
 	}
+	keys = append(keys, [2]string{"[/]", "view"})
 	return append(keys, [2]string{"r", "refresh"}, [2]string{"q", "quit"})
 }
 
