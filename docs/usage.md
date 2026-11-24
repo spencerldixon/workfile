@@ -19,8 +19,7 @@ for help.
 | [`wf policy`](#policy-how-does-this-project-ship) | Inspect the workflow offline, or validate it with `--lint`. |
 
 Old names work for one release and print a notice on stderr:
-`health` → `status`, `test` → `setup --test`, `prove` → `policy --lint`,
-`tickets` → `tracker`.
+`health` → `status`, `test` → `setup --test`, `tickets` → `tracker`.
 
 ## How the output looks
 

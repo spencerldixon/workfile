@@ -55,11 +55,7 @@ func showPolicy(_ context.Context, e env) (int, error) {
 		})
 	}
 	if o.json {
-		command := "policy"
-		if o.legacyProve {
-			command = "lint"
-		}
-		return code, writeLint(v.out, w, problems, warnings, gaps, code, command)
+		return code, writeLint(v.out, w, problems, warnings, gaps, code)
 	}
 	m := newLintModel(v, w, problems, warnings, gaps)
 	if !o.lint {

@@ -85,7 +85,7 @@ type options struct {
 	// setup
 	test bool
 	// policy
-	lint, legacyProve bool
+	lint bool
 	// note is printed to errOut when an old command name was used.
 	note string
 }
@@ -153,7 +153,6 @@ type alias struct {
 var aliases = map[string]alias{
 	"health":  {to: "status", note: "health is now status"},
 	"test":    {to: "setup", set: func(o *options) { o.test = true }, note: "test is now setup --test"},
-	"prove":   {to: "policy", set: func(o *options) { o.lint, o.legacyProve = true, true }, note: "prove is now policy --lint"},
 	"tickets": {to: "tracker", note: "tickets is now tracker"},
 }
 

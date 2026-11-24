@@ -85,13 +85,3 @@ func TestPolicyInspectionReportsInvalidPolicy(t *testing.T) {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 }
-
-func TestProvePreservesJSONContract(t *testing.T) {
-	root := branchingWorkspace(t, "")
-	oldCode, oldOut, notice := invoke(t, &fakeSource{}, "prove", "--json", "--dir", root)
-	newCode, newOut, stderr := invoke(t, &fakeSource{}, "policy", "--lint", "--json", "--dir", root)
-	if oldCode != 0 || newCode != oldCode || newOut != strings.Replace(oldOut, `"command": "lint"`, `"command": "policy"`, 1) ||
-		stderr != "" || !strings.Contains(notice, "prove is now policy --lint") {
-		t.Fatalf("old: %d %s %s\nnew: %d %s %s", oldCode, oldOut, notice, newCode, newOut, stderr)
-	}
-}

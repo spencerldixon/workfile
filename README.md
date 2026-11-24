@@ -68,7 +68,7 @@ wf --version
 subfolder; `--dir DIR` starts the search for `.workfile/` elsewhere.
 
 Old names still work for one release, with a notice: `health` is `status`,
-`test` is `setup --test`, `prove` is `policy --lint`, and `tickets` is `tracker`.
+`test` is `setup --test`, and `tickets` is `tracker`.
 
 ## Browse your work
 
