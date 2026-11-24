@@ -28,9 +28,9 @@ type lintReport struct {
 // writeLint lists guarantees in pipeline order, so array order is meaningful
 // here as in the other reports. w is nil when the policy did not load; the
 // policy hash and guarantees are then empty.
-func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfile.Finding, gaps []workfile.Gap, code int, command string) error {
+func writeLint(out io.Writer, w *workfile.Workspace, problems, warnings []workfile.Finding, gaps []workfile.Gap, code int) error {
 	report := lintReport{
-		SchemaVersion: 1, Command: command, ExitCode: code,
+		SchemaVersion: 1, Command: "policy", ExitCode: code,
 		Problems:   append([]workfile.Finding{}, problems...),
 		Warnings:   append([]workfile.Finding{}, warnings...),
 		Gaps:       append([]workfile.Gap{}, gaps...),

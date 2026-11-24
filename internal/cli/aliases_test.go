@@ -41,7 +41,6 @@ func TestAliasesRunTheirTargetAndNoteOnStderrOnly(t *testing.T) {
 		{[]string{"health", "--json"}, "wf: health is now status. The old name will stop working in a later release.\n"},
 		{[]string{"tickets", "--view", "todo"}, "wf: tickets is now tracker. The old name will stop working in a later release.\n"},
 		{[]string{"test", "jira"}, "wf: test is now setup --test. The old name will stop working in a later release.\n"},
-		{[]string{"prove", "--json"}, "wf: prove is now policy --lint. The old name will stop working in a later release.\n"},
 	} {
 		f := &fakeSource{tickets: []workfile.Ticket{tk}}
 		code, out, errOut := invoke(t, f, c.args...)
@@ -71,7 +70,7 @@ func slicesContains(list []string, s string) bool {
 }
 
 func TestRemovedCommandsAreUnknown(t *testing.T) {
-	for _, name := range []string{"lint", "inbox"} {
+	for _, name := range []string{"lint", "inbox", "prove"} {
 		_, err := parse([]string{name})
 		if err == nil || err.Error() != "unknown command "+name {
 			t.Errorf("parse %s: %v", name, err)

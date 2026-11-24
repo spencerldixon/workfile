@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -35,7 +36,8 @@ func TestInboxStateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows does not keep Unix file permissions.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("state file mode %v, want 0600", info.Mode().Perm())
 	}
 	if filepath.Dir(InboxStatePath(w)) != filepath.Dir(StateDir(w)) {

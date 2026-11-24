@@ -209,21 +209,6 @@ func TestLintWarningsAloneExitZero(t *testing.T) {
 	}
 }
 
-func TestProveIsAPolicyLintAlias(t *testing.T) {
-	root := branchingWorkspace(t, "")
-	codeLint, outLint, errLint := invoke(t, &fakeSource{}, "policy", "--lint", "--dir", root)
-	code, out, errOut := invoke(t, &fakeSource{}, "prove", "--dir", root)
-	if code != codeLint || out != outLint || errLint != "" {
-		t.Fatalf("prove must print what lint prints:\n%s\n%s", out, outLint)
-	}
-	if errOut != "wf: prove is now policy --lint. The old name will stop working in a later release.\n" {
-		t.Fatalf("%q", errOut)
-	}
-	if strings.Contains(out, "prove is now policy --lint") {
-		t.Fatal("the notice goes to stderr only")
-	}
-}
-
 func TestLintDrawsThePolicyAsAnImageWhenTheTerminalCanShowOne(t *testing.T) {
 	w, err := workfile.Load(exampleWorkspace(t, "jira-only", ""))
 	if err != nil {

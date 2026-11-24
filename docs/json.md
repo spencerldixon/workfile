@@ -164,7 +164,7 @@ or unreadable workspace returns an error object and exits `2`.
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | Currently `1`. |
-| `command` | `policy`. The legacy `wf prove --json` form returns `lint`. |
+| `command` | Always `policy`. |
 | `policy_hash`, `exit_code` | As in reports. `exit_code` is `1` when there is a problem. Gaps do not change it. `policy_hash` is empty when the policy did not load. |
 | `problems` | Mistakes that stop the policy loading. Always present, maybe empty. Each has `rule`, `severity` (`error`) and `message`. |
 | `warnings` | Plain mistakes in a valid policy, such as `unused-gate`. Always present, maybe empty. Each has `rule`, `severity` (`warning`) and `message`. |
