@@ -170,9 +170,9 @@ does not create moves, and it does not change returns. `any` is not a stage, so
 you cannot name a stage `any`, and it only takes `to` and `requires`. Each stage
 and gate must exist.
 
-`wf lint` lists gates that some routes into a stage skip as possible gaps, and
+`wf policy --lint` lists gates that some routes into a stage skip as possible gaps, and
 `any` is the way to close them. See
-[Lint](usage.md#lint-is-the-policy-sound).
+[Lint](usage.md#policy-how-does-this-project-ship).
 
 ## Rules
 

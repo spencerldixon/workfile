@@ -29,6 +29,7 @@ type inboxData struct {
 	// trackerRead is false when the tracker's activity could not be read, so
 	// its cursor stays put and the next poll asks again.
 	trackerRead bool
+	settings    workfile.InboxSettings
 }
 
 type inboxLoadedMsg inboxData
@@ -55,7 +56,11 @@ const (
 // everything. It never fails: what could not be read becomes a warning, and
 // the last known rows stay.
 func loadInbox(ctx context.Context, e env, st workfile.InboxState, prev *inboxData, now time.Time, mode pollMode) inboxData {
-	d := inboxData{at: now, updated: map[string]time.Time{}}
+	return loadInboxWithListing(ctx, e, st, prev, now, mode, nil)
+}
+
+func loadInboxWithListing(ctx context.Context, e env, st workfile.InboxState, prev *inboxData, now time.Time, mode pollMode, listing []workfile.Listing) inboxData {
+	d := inboxData{at: now, updated: map[string]time.Time{}, settings: e.inboxSettings}
 	warn := func(err error) { d.warnings = append(d.warnings, err.Error()) }
 	if prev == nil {
 		mode = pollFull
@@ -70,7 +75,11 @@ func loadInbox(ctx context.Context, e env, st workfile.InboxState, prev *inboxDa
 		}
 	}
 	if mode == pollFull {
-		if listing, err := e.client.Listing(ctx, ""); err != nil {
+		var err error
+		if listing == nil {
+			listing, err = e.client.Listing(ctx, "")
+		}
+		if err != nil {
 			warn(err)
 		} else {
 			d.listing = listing
@@ -93,7 +102,7 @@ func loadInbox(ctx context.Context, e env, st workfile.InboxState, prev *inboxDa
 	if mode >= pollRefresh {
 		readWork(ctx, e, d.who, d.work, mineKeys(d.work), warn)
 	}
-	if mine, err := e.client.MyPRs(ctx); err != nil {
+	if mine, err := e.client.InboxPRs(ctx, e.inboxSettings); err != nil {
 		warn(err)
 		if prev != nil {
 			for _, w := range prev.work {
@@ -133,6 +142,9 @@ func loadInbox(ctx context.Context, e env, st workfile.InboxState, prev *inboxDa
 	if mode == pollQuick && prev != nil {
 		changed := func(w workfile.InboxWork) bool {
 			for _, r := range flatten(w.PRs) {
+				if previous, ok := st.Checks[r.ID]; ok && r.Unavailable["checks"] == "" && r.Facts["checks"] != previous.State {
+					return true
+				}
 				if at, ok := d.updated[r.ID]; ok && at.After(since(r.ID)) {
 					return true
 				}
@@ -193,12 +205,23 @@ func readWork(ctx context.Context, e env, who map[string]string, work []workfile
 		w.PRs = map[string][]workfile.Record{}
 		for conn, records := range tickets[at].Records {
 			for _, r := range records {
-				if workfile.InboxPRRelated(r, who[conn]) {
+				if inboxPRRelated(e.inboxSettings, conn, r, who[conn]) {
 					w.PRs[conn] = append(w.PRs[conn], r)
 				}
 			}
 		}
 	}
+}
+
+func inboxPRRelated(settings workfile.InboxSettings, connection string, r workfile.Record, me string) bool {
+	if settings.WatchesRepository(connection, r.Repository) {
+		return true
+	}
+	if settings.ReviewRequests == nil || *settings.ReviewRequests {
+		return workfile.InboxPRRelated(r, me)
+	}
+	author, _ := r.Facts["author"].(string)
+	return me != "" && r.Unavailable["author"] == "" && strings.EqualFold(author, me)
 }
 
 // placePRs puts each of my PRs under its ticket. A PR on someone else's
@@ -209,32 +232,38 @@ func placePRs(e env, who map[string]string, listing []workfile.Listing, work []w
 	keys := e.w.TrackerKeys()
 	for _, conn := range workfile.SortedKeys(mine) {
 		for _, r := range mine[conn] {
-			if !workfile.InboxPRRelated(r, who[conn]) || slices.ContainsFunc(work, func(w workfile.InboxWork) bool {
-				return hasPR(w, conn, r.ID)
-			}) {
+			if !inboxPRRelated(e.inboxSettings, conn, r, who[conn]) {
 				continue
 			}
-			var key string
-			if keys != nil {
-				if found := keys.Mentions(r.Title); len(found) > 0 {
-					key = found[0]
+			if at := slices.IndexFunc(work, func(w workfile.InboxWork) bool { return hasPR(w, conn, r.ID) }); at >= 0 {
+				records := slices.Clone(work[at].PRs[conn])
+				for i := range records {
+					if records[i].ID == r.ID {
+						records[i] = r
+						break
+					}
 				}
+				work[at].PRs[conn] = records
+				continue
 			}
-			at := slices.IndexFunc(work, func(w workfile.InboxWork) bool { return key != "" && w.Listing.Key == key })
+			var mentions []string
+			if keys != nil {
+				mentions = keys.Mentions(r.Title)
+			}
+			at := slices.IndexFunc(work, func(w workfile.InboxWork) bool { return slices.Contains(mentions, w.Listing.Key) })
 			switch {
 			case at >= 0:
 				if work[at].PRs == nil {
 					work[at].PRs = map[string][]workfile.Record{}
 				}
 				work[at].PRs[conn] = append(slices.Clone(work[at].PRs[conn]), r)
-			case key != "":
-				l := workfile.Listing{Key: key}
-				if i := slices.IndexFunc(listing, func(t workfile.Listing) bool { return t.Key == key }); i >= 0 {
-					l = listing[i]
-				}
-				work = append(work, workfile.InboxWork{Listing: l, PRs: map[string][]workfile.Record{conn: {r}}})
 			default:
-				loose[conn] = append(loose[conn], r)
+				i := slices.IndexFunc(listing, func(t workfile.Listing) bool { return slices.Contains(mentions, t.Key) })
+				if i < 0 {
+					loose[conn] = append(loose[conn], r)
+				} else {
+					work = append(work, workfile.InboxWork{Listing: listing[i], PRs: map[string][]workfile.Record{conn: {r}}})
+				}
 			}
 		}
 	}
@@ -269,7 +298,7 @@ func inboxInput(d inboxData, st workfile.InboxState) workfile.InboxInput {
 			events = append(events, e)
 		}
 	}
-	return workfile.InboxInput{Work: d.work, Loose: d.loose, Activity: events, Who: d.who, Names: d.names, Now: d.at}
+	return workfile.InboxInput{Work: d.work, Loose: d.loose, Activity: events, Who: d.who, Names: d.names, Now: d.at, Signals: d.settings.Signals, ReviewRequests: d.settings.ReviewRequests, Repositories: d.settings.Repositories}
 }
 
 // inboxRows builds the rows, plus one ! row for each connection that could
@@ -279,11 +308,14 @@ func inboxRows(d inboxData, st workfile.InboxState) []workfile.InboxRow {
 	for _, w := range d.warnings {
 		for _, line := range strings.Split(w, "\n") {
 			id := "!" + line
-			if st.Done[id] == line {
-				continue
+			row := workfile.InboxRow{ID: id, Fingerprint: line, Kind: workfile.RowCannotCheck, Text: "Couldn't read " + line, Since: d.at}
+			if st.Done[id] != line && !st.Snoozed[id].Hides(row, d.at) {
+				rows = append(rows, row)
 			}
-			rows = append(rows, workfile.InboxRow{ID: id, Fingerprint: line, Kind: workfile.RowCannotCheck, Text: "Couldn't read " + line, Since: d.at})
 		}
+	}
+	if len(d.warnings) > 0 {
+		workfile.SortInboxRows(rows)
 	}
 	return rows
 }

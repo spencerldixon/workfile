@@ -65,6 +65,19 @@ func Find(start string) (string, error) {
 }
 
 func Load(start string) (*Workspace, error) {
+	w, err := LoadPolicy(start)
+	if err != nil {
+		return nil, err
+	}
+	// Read after validation, so the name is safe to use as a folder.
+	if w.Settings, err = ReadWorkspaceSettings(w.Policy.Name); err != nil {
+		return nil, err
+	}
+	return w, nil
+}
+
+// LoadPolicy loads and validates the shared workflow files.
+func LoadPolicy(start string) (*Workspace, error) {
 	dir, err := Find(start)
 	if err != nil {
 		return nil, err
@@ -80,10 +93,6 @@ func Load(start string) (*Workspace, error) {
 		return nil, err
 	}
 	if err = w.validate(); err != nil {
-		return nil, err
-	}
-	// Read after validation, so the name is safe to use as a folder.
-	if w.Settings, err = ReadWorkspaceSettings(w.Policy.Name); err != nil {
 		return nil, err
 	}
 	return w, nil

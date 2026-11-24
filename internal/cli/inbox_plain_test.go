@@ -30,7 +30,7 @@ func TestInboxPlainNoWrite(t *testing.T) {
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errOut := invoke(t, inboxSourceFixture(), "inbox")
+	code, _, errOut := invoke(t, inboxSourceFixture(), "tracker", "--view", "inbox")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
@@ -47,7 +47,18 @@ func TestInboxPlainOutput(t *testing.T) {
 	f := inboxSourceFixture()
 	f.activity = []workfile.Activity{{Connection: "github", PR: "app#84", Kind: workfile.ActivityApproved, WhoID: "example-charlie", At: time.Now().Add(-5 * time.Minute)}}
 	f.myPRs = map[string][]workfile.Record{"github": {inboxPRRecord("api#7", "example-alice", workfile.Facts{"review_requests": []string{"example-bob"}})}}
-	code, out, errOut := invoke(t, f, "inbox")
+	code, out, errOut := invoke(t, f, "tracker", "--view", "inbox")
+	if code != 0 || strings.Contains(out, "asked you to review") {
+		t.Fatalf("review requests must be off by default: %s %s", out, errOut)
+	}
+	path := workfile.PersonalPath("config.yml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("inbox:\n  review_requests: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut = invoke(t, f, "tracker", "--view", "inbox")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, errOut)
 	}
@@ -56,7 +67,7 @@ func TestInboxPlainOutput(t *testing.T) {
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if lines[0] != "Inbox 2" {
-		t.Fatalf("first line is the count of rows that need you:\n%s", out)
+		t.Fatalf("first line is the total alert count:\n%s", out)
 	}
 	want := []string{
 		"‼ APP-1  Out of policy: ",

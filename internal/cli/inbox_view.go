@@ -6,14 +6,10 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/viewport"
-	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"workfile/internal/workfile"
 )
-
-// zeroMarks is the inbox-zero moment: a dot that grows into a tick.
-var zeroMarks = []string{"·", "∙", "•", "●", "✓"}
 
 func inboxSymbol(k workfile.RowKind) string {
 	switch k {
@@ -23,7 +19,7 @@ func inboxSymbol(k workfile.RowKind) string {
 		return "‼"
 	case workfile.RowReviewRequested, workfile.RowComments:
 		return "●"
-	case workfile.RowReady:
+	case workfile.RowReady, workfile.RowChecksPassed:
 		return "✓"
 	case workfile.RowCannotCheck:
 		return "!"
@@ -47,19 +43,13 @@ func paintSymbol(t theme, k workfile.RowKind) string {
 		return t.warn(setupIcon(t.color, symbol, ""))
 	case workfile.RowComments:
 		return t.warn(setupIcon(t.color, symbol, "󰆉"))
-	case workfile.RowReady:
+	case workfile.RowReady, workfile.RowChecksPassed:
 		return t.good(setupIcon(t.color, symbol, "󰄬"))
 	case workfile.RowCannotCheck:
 		return t.warn(setupIcon(t.color, symbol, "󰋼"))
 	default:
 		return t.dim(setupIcon(t.color, symbol, "󰋽"))
 	}
-}
-
-func (m *inboxModel) View() tea.View {
-	v := tea.NewView(m.render())
-	v.AltScreen = true
-	return v
 }
 
 func (m *inboxModel) theme() theme { return newTheme(m.e.view.color, "") }
@@ -72,66 +62,33 @@ func (m *inboxModel) renderWidth() int {
 }
 
 func (m *inboxModel) bodyHeight(footerLines int) int {
-	if m.height <= 0 {
-		return 1 << 30
-	}
-	chrome := 3 + footerLines // header and two blank lines
-	if m.data != nil {
-		chrome++ // summary
-	}
-	if m.toast != "" {
-		chrome++
-	}
-	return max(1, m.height-chrome)
+	return max(1, m.height-trackerHeaderRows-(trackerFooterRows-1)-footerLines)
 }
 
-func (m *inboxModel) render() string {
+func (m *inboxModel) content(t theme, width, footerLines int) []string {
 	if m.ticket != nil {
-		return m.renderTicket()
+		return append(append([]string{}, m.ticket.heading...), strings.Split(m.ticket.body.View(), "\n")...)
 	}
-	width := m.renderWidth()
-	t := m.theme()
-	footer := m.footer(t, width)
-	lines := []string{m.top(t, width)}
-	if m.data != nil {
-		count := m.actions()
-		if count == 0 {
-			mark := zeroMarks[len(zeroMarks)-1]
-			if t.color && m.zeroFrame >= 0 {
-				mark = zeroMarks[int(zeroSpring[m.zeroFrame]*float64(len(zeroMarks)-1))]
-			}
-			lines = append(lines, ticketIndent+t.good(mark)+" "+t.bold("Nothing needs you."))
-		} else {
-			lines = append(lines, ticketIndent+fmt.Sprintf("%d need you", count))
-		}
-		updates := len(m.rows) - count
-		if updates > 0 {
-			lines[1] += t.dim(fmt.Sprintf(" · %d %s", updates, plural(updates, "update", "updates")))
-		}
+	room := m.bodyHeight(footerLines)
+	toast := ansi.Truncate(m.toastLine(t, width), width, "…")
+	if toast != "" {
+		room = max(0, room-1)
 	}
-	lines = append(lines, "")
-	toast := m.toastLine(t, width)
-	room := m.bodyHeight(len(footer))
 	var body []string
 	switch {
 	case m.data == nil:
 		body = []string{ticketIndent + t.dim("Reading your work…")}
-	case m.detail && len(m.rows) > 0:
-		pane := m.activityViewport(t, width, room)
-		body = strings.Split(pane.View(), "\n")
+	case len(m.rows) == 0:
+		body = []string{ticketIndent + t.dim("No alerts.")}
+	case m.detail:
+		body = strings.Split(m.activityViewport(t, width, room).View(), "\n")
 	default:
 		body = m.list(t, width, room)
 	}
-	lines = append(lines, body...)
-	lines = append(lines, "")
 	if toast != "" {
-		lines = append(lines, toast)
+		body = append(fitTrackerRows(body, room), toast)
 	}
-	lines = append(lines, footer...)
-	for i, line := range lines {
-		lines[i] = ansi.Truncate(line, width, "")
-	}
-	return strings.Join(lines, "\n")
+	return body
 }
 
 func (m *inboxModel) activityViewport(t theme, width, room int) viewport.Model {
@@ -142,37 +99,6 @@ func (m *inboxModel) activityViewport(t theme, width, room int) viewport.Model {
 	return pane
 }
 
-func (m *inboxModel) actions() int {
-	n := 0
-	for _, r := range m.rows {
-		if r.Action() {
-			n++
-		}
-	}
-	return n
-}
-
-func (m *inboxModel) top(t theme, width int) string {
-	left := t.bold("workfile") + t.dim(" / ") + t.bold("Inbox")
-	right := ""
-	switch {
-	case m.loading:
-		right = "syncing…"
-	case m.data != nil:
-		right = "synced just now"
-		if age := shortAge(m.data.at, m.now()); age != "now" {
-			right = "synced " + age + " ago"
-		}
-	}
-	right = t.dim(right)
-	gap := width - 2*len(ticketIndent) - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 2 {
-		return ticketIndent + left
-	}
-	return ticketIndent + left + strings.Repeat(" ", gap) + right
-}
-
-// list keeps the selected row in view and labels the start of each group.
 func (m *inboxModel) list(t theme, width, height int) []string {
 	var lines []string
 	selected := 0
@@ -183,16 +109,6 @@ func (m *inboxModel) list(t theme, width, height int) []string {
 	}
 	keyWidth = min(keyWidth, width/3)
 	for i, r := range m.rows {
-		if i == 0 || r.Action() != m.rows[i-1].Action() {
-			if i > 0 {
-				lines = append(lines, "")
-			}
-			title := "Updates"
-			if r.Action() {
-				title = "Needs you"
-			}
-			lines = append(lines, ticketIndent+t.bold(title))
-		}
 		row := m.row(t, r, i == m.sel, width, keyWidth)
 		if i == m.sel {
 			selected, selectedHeight = len(lines), len(row)
@@ -214,12 +130,12 @@ func (m *inboxModel) row(t theme, r workfile.InboxRow, selected bool, width, key
 	id := ansi.Truncate(inboxKey(r), keyWidth, "…")
 	lead := "  "
 	if selected {
-		lead = t.bold("›") + " "
+		lead = t.bold("▸") + " "
 	}
 	mark := paintSymbol(t, r.Kind)
 	key := t.bold(m.e.view.link(id, firstOf(r.URL, r.PRURL)))
 	left := lead + mark + " " + key
-	age := shortAge(r.Since, m.now())
+	age := shortAge(r.Latest(), m.now())
 	text := clean(r.Text)
 	paint := t.dim
 	if r.Action() {
@@ -397,6 +313,9 @@ func (m *inboxModel) toastLine(t theme, width int) string {
 }
 
 func (m *inboxModel) footer(t theme, width int) []string {
+	if m.ticket != nil {
+		return m.ticket.footer
+	}
 	keys := m.footerKeys()
 	if _, ok := m.current(); ok {
 		if m.detail {
@@ -408,7 +327,7 @@ func (m *inboxModel) footer(t theme, width int) []string {
 	var lines []string
 	line := ticketIndent
 	for _, k := range keys {
-		part := t.bold(k[0]) + " " + t.dim(k[1])
+		part := ansi.Truncate(t.bold(k[0])+" "+t.dim(k[1]), max(0, width-len(ticketIndent)), "…")
 		if line == ticketIndent {
 			line += part
 		} else if lipgloss.Width(line)+3+lipgloss.Width(part) <= width {

@@ -41,7 +41,7 @@ func TestAliasesRunTheirTargetAndNoteOnStderrOnly(t *testing.T) {
 		{[]string{"health", "--json"}, "wf: health is now status. The old name will stop working in a later release.\n"},
 		{[]string{"tickets", "--view", "todo"}, "wf: tickets is now tracker. The old name will stop working in a later release.\n"},
 		{[]string{"test", "jira"}, "wf: test is now setup --test. The old name will stop working in a later release.\n"},
-		{[]string{"prove", "--json"}, "wf: prove is now lint. The old name will stop working in a later release.\n"},
+		{[]string{"prove", "--json"}, "wf: prove is now policy --lint. The old name will stop working in a later release.\n"},
 	} {
 		f := &fakeSource{tickets: []workfile.Ticket{tk}}
 		code, out, errOut := invoke(t, f, c.args...)
@@ -70,6 +70,15 @@ func slicesContains(list []string, s string) bool {
 	return false
 }
 
+func TestRemovedCommandsAreUnknown(t *testing.T) {
+	for _, name := range []string{"lint", "inbox"} {
+		_, err := parse([]string{name})
+		if err == nil || err.Error() != "unknown command "+name {
+			t.Errorf("parse %s: %v", name, err)
+		}
+	}
+}
+
 func TestSetupTestAllPassIsExitZero(t *testing.T) {
 	f := &fakeSource{}
 	code, out, _ := invoke(t, f, "setup", "--test")
@@ -84,7 +93,7 @@ func TestSetupTestAllPassIsExitZero(t *testing.T) {
 	}
 }
 
-func TestHelpEndsWithTheNextStepAndNamesSixCommands(t *testing.T) {
+func TestHelpEndsWithTheNextStepAndNamesFiveCommands(t *testing.T) {
 	run := func(dir string) string {
 		var out bytes.Buffer
 		if code := run(context.Background(), []string{"--dir", dir}, &out, &bytes.Buffer{}, "t", nil); code != 0 {
@@ -105,7 +114,7 @@ func TestHelpEndsWithTheNextStepAndNamesSixCommands(t *testing.T) {
 			commands++
 		}
 	}
-	if commands != 6 {
+	if commands != 5 {
 		t.Fatalf("help names %d commands", commands)
 	}
 	if strings.Contains(text, "—") {

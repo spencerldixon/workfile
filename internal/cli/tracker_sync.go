@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"workfile/internal/workfile"
 )
 
@@ -112,15 +113,19 @@ func (m *trackerModel) synced(msg trackerSyncedMsg) tea.Cmd {
 	return tea.Batch(listed, preview)
 }
 
-func (r trackerRefresh) caption(loaded, compact, showNext bool, now time.Time) string {
+func (r trackerRefresh) caption(loaded, compact, showNext, icons bool, now time.Time) string {
+	syncIcon, clockIcon := "", ""
+	if icons {
+		syncIcon, clockIcon = "\uf021 ", "\uf017 "
+	}
 	if !loaded {
-		return "Loading…"
+		return syncIcon + "Loading…"
 	}
 	if r.syncing {
-		return "Syncing…"
+		return syncIcon + "Syncing…"
 	}
 	if r.lastSync.IsZero() {
-		return "Not synced"
+		return syncIcon + "Not synced"
 	}
 	layout, label := "15:04:05", "Synced "
 	if compact {
@@ -130,23 +135,22 @@ func (r trackerRefresh) caption(loaded, compact, showNext bool, now time.Time) s
 	if r.lastSync.Format("2006-01-02") != now.Format("2006-01-02") {
 		last = r.lastSync.Format("2 Jan 15:04")
 	}
-	caption := label + last
+	caption := syncIcon + label + last
 	if showNext && !r.nextSync.IsZero() {
-		caption += " · next " + r.nextSync.Format(layout)
+		caption += " · " + clockIcon + "next " + r.nextSync.Format(layout)
 	}
 	return caption
 }
 
-func (m *trackerModel) syncCaption(room int) string {
-	showNext := m.shownView().board()
+func (m *trackerModel) syncCaption(room int, showNext bool) string {
 	now := m.now()
-	caption := m.refresh.caption(m.loaded, false, showNext, now)
-	if len(caption) <= room {
+	caption := m.refresh.caption(m.loaded, false, showNext, m.t.color, now)
+	if ansi.StringWidth(caption) <= room {
 		return caption
 	}
-	caption = m.refresh.caption(m.loaded, true, showNext, now)
-	if len(caption) > room && showNext {
-		caption = m.refresh.caption(m.loaded, true, false, now)
+	caption = m.refresh.caption(m.loaded, true, showNext, m.t.color, now)
+	if ansi.StringWidth(caption) > room && showNext {
+		caption = m.refresh.caption(m.loaded, true, false, m.t.color, now)
 	}
 	return caption
 }

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// InboxState is what wf inbox remembers on this computer. Done and Snoozed
+// InboxState is what the Tracker inbox remembers on this computer. Done and Snoozed
 // are keyed by row ID, FirstSeen by row ID, kind and state; Seen by Activity.Key(); Cursors and Checks by
 // PR ID, plus "tracker" in Cursors. It is local only: clearing a row never
 // changes a ticket or PR.
@@ -25,8 +25,9 @@ type InboxState struct {
 	Events []Activity `json:"events"`
 }
 
-// Snooze hides a row until a time, or until its fingerprint changes.
+// Snooze hides a row until a time or until it has a new blocker.
 type Snooze struct {
+	Blocker     string    `json:"blocker,omitempty"`
 	Until       time.Time `json:"until"`
 	Fingerprint string    `json:"fingerprint"`
 }
@@ -34,7 +35,9 @@ type Snooze struct {
 // ChecksSeen is the last checks state seen on a PR, and when they turned
 // green after not being green, so "checks passed" shows once and can be seen.
 type ChecksSeen struct {
+	Head   string    `json:"head,omitempty"`
 	State  string    `json:"state"`
+	Failed time.Time `json:"failed,omitzero"`
 	Passed time.Time `json:"passed"`
 }
 

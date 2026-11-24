@@ -90,7 +90,7 @@ func driveInbox(t *testing.T, s workfile.InboxSettings) *inboxDriver {
 // results back, as the Bubble Tea loop would.
 func (d *inboxDriver) send(msg tea.Msg) {
 	d.t.Helper()
-	_, cmd := d.m.Update(msg)
+	cmd := d.m.Update(msg)
 	if cmd == nil {
 		return
 	}
@@ -117,7 +117,7 @@ func (d *inboxDriver) press(keys ...string) {
 		default:
 			msg = tea.KeyPressMsg{Code: rune(k[0]), Text: k}
 		}
-		_, cmd := d.m.Update(msg)
+		cmd := d.m.Update(msg)
 		if cmd == nil {
 			continue
 		}
@@ -151,13 +151,14 @@ func (d *inboxDriver) selectID(id string) {
 
 func TestInboxFixtureRows(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
-	if got := d.ids(); !slices.Equal(got, []string{"APP-1", "APP-4", "APP-5"}) {
+	if got := d.ids(); !slices.Equal(got, []string{"APP-5", "APP-4", "APP-1"}) {
 		t.Fatalf("fixture rows: %v", got)
 	}
 }
 
 func TestInboxDoneHidesRow(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
+	d.selectID("APP-1")
 	d.press("e")
 	if slices.Contains(d.ids(), "APP-1") {
 		t.Fatalf("done row still shown: %v", d.ids())
@@ -173,6 +174,7 @@ func TestInboxDoneHidesRow(t *testing.T) {
 
 func TestInboxSnoozeWritesUntil(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
+	d.selectID("APP-1")
 	d.press("s")
 	if s := d.m.st.Snoozed["APP-1"]; !s.Until.Equal(loadNow.Add(time.Hour)) || s.Fingerprint == "" {
 		t.Fatalf("snooze for the configured hour: %+v", s)
@@ -184,6 +186,7 @@ func TestInboxSnoozeWritesUntil(t *testing.T) {
 
 func TestInboxAgentRunsOneArgPrompt(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "rex tab -- claude {prompt}"})
+	d.selectID("APP-1")
 	d.press("a")
 	if len(d.argv) != 1 {
 		t.Fatalf("agent not started: %v", d.argv)
@@ -202,6 +205,7 @@ func TestInboxAgentRunsOneArgPrompt(t *testing.T) {
 
 func TestInboxAgentMissingPlaceholder(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "claude {prompt}", Prompts: map[string]string{"changes_requested": "Fix {fix}"}})
+	d.selectID("APP-1")
 	d.press("a")
 	if len(d.argv) != 0 {
 		t.Fatalf("nothing may run with a missing value: %v", d.argv)
@@ -214,6 +218,7 @@ func TestInboxAgentMissingPlaceholder(t *testing.T) {
 func TestInboxAgentNotFound(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "example-missing {prompt}"})
 	d.startFn = func([]string) error { return errors.New(`exec: "example-missing": executable file not found in $PATH`) }
+	d.selectID("APP-1")
 	d.press("a")
 	if !strings.Contains(d.m.toast, "Couldn't start agent") || !slices.Contains(d.ids(), "APP-1") || len(d.m.st.Agents) != 0 {
 		t.Fatalf("a failed start keeps the row: %q %v", d.m.toast, d.ids())
@@ -222,6 +227,7 @@ func TestInboxAgentNotFound(t *testing.T) {
 
 func TestInboxNoAgentHidesKey(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
+	d.selectID("APP-1")
 	d.press("a")
 	if len(d.argv) != 0 {
 		t.Fatal("no agent configured, nothing runs")
@@ -322,10 +328,10 @@ func TestInboxScrollsToSelection(t *testing.T) {
 	if len(lines) > 12 {
 		t.Fatalf("screen is %d lines tall in a 12-line terminal", len(lines))
 	}
-	if !strings.Contains(screen, "› ") {
+	if !strings.Contains(screen, "▸ ") {
 		t.Fatalf("the selected row stays in view:\n%s", screen)
 	}
-	if !strings.Contains(lines[len(lines)-1], "q quit") && !strings.Contains(lines[len(lines)-1], "e done") {
+	if !strings.Contains(lines[len(lines)-1], "q quit") && !strings.Contains(lines[len(lines)-1], "e resolve") {
 		t.Fatalf("the footer stays on screen:\n%s", screen)
 	}
 }

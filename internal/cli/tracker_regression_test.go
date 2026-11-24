@@ -14,7 +14,7 @@ func TestTrackerConfiguredViewsDefineVisibleTabs(t *testing.T) {
 	if got := len(d.m.views()); got != len(s.Views) {
 		t.Fatalf("configured %d views but got %d tabs", len(s.Views), got)
 	}
-	header := d.m.header()
+	header := d.m.navigation()
 	for _, unwanted := range []string{"All", "Assigned to me", "Todo", "Doing", "Review", "Done"} {
 		if strings.Contains(header, unwanted) {
 			t.Fatalf("unconfigured tab %q is still visible: %s", unwanted, header)

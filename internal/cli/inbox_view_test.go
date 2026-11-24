@@ -6,12 +6,16 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/ansi/kitty"
 	"workfile/internal/workfile"
 )
 
-func inboxScreen(d *inboxDriver) string { return d.m.View().Content }
+func inboxScreen(d *inboxDriver) string {
+	m := d.m
+	tracker := trackerModel{e: m.e, t: m.theme(), inbox: m, width: m.width, height: m.height, now: m.now}
+	tracker.view = len(tracker.views()) - 1
+	return tracker.render()
+}
 
 func TestInboxViewWidths(t *testing.T) {
 	for _, color := range []bool{false, true} {
@@ -39,7 +43,7 @@ func TestInboxViewPlain(t *testing.T) {
 	if strings.Contains(screen, "\x1b") {
 		t.Fatalf("plain screen has escapes:\n%q", screen)
 	}
-	for _, want := range []string{"✗", "●", "○", "2 need you · 1 update", "Needs you", "Updates", "Alice requested changes on #84", "Alice commented on #90", "Charlie approved #95"} {
+	for _, want := range []string{"✗", "●", "○", "Alice requested changes on #84", "Alice commented on #90", "Charlie approved #95"} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("plain screen lacks %q:\n%s", want, screen)
 		}
@@ -78,6 +82,7 @@ func TestInboxViewCleansProviderText(t *testing.T) {
 	data.work[0].Listing.Title = "Fix\x1b[31m\nlogin"
 	data.events[0].Text = "line one\x1b]8;;evil\x07\nline two"
 	d.send(inboxLoadedMsg(data))
+	d.selectID("APP-1")
 	d.press("enter")
 	screen := inboxScreen(d)
 	if strings.Contains(screen, "\x1b[31m") || strings.Contains(screen, "\x1b]8;;evil") || strings.Contains(screen, "\x07") {
@@ -85,27 +90,22 @@ func TestInboxViewCleansProviderText(t *testing.T) {
 	}
 }
 
-func TestInboxZeroStaticFrame(t *testing.T) {
+func TestInboxEmptyState(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
-	d.press("e")
-	if _, cmd := d.m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"}); cmd != nil {
-		t.Fatal("plain output should not schedule an animation")
-	}
-	screen := inboxScreen(d)
-	for _, want := range []string{"✓", "Nothing needs you.", "Charlie approved #95"} {
-		if !strings.Contains(screen, want) {
-			t.Fatalf("inbox zero lacks %q:\n%s", want, screen)
-		}
+	d.press("e", "e", "e")
+	if screen := inboxScreen(d); !strings.Contains(screen, "No alerts.") {
+		t.Fatalf("missing empty state:\n%s", screen)
 	}
 }
 
 func TestInboxFooterPerRow(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "claude {prompt}"})
+	d.selectID("APP-1")
 	if screen := inboxScreen(d); !strings.Contains(screen, "a agent") || !strings.Contains(screen, "o open #84") {
 		t.Fatalf("action row footer:\n%s", screen)
 	}
 	d.selectID("APP-4")
-	if screen := inboxScreen(d); !strings.Contains(screen, "e done") {
+	if screen := inboxScreen(d); !strings.Contains(screen, "e resolve") {
 		t.Fatalf("comments footer:\n%s", screen)
 	}
 	d.selectID("APP-5")
@@ -116,6 +116,7 @@ func TestInboxFooterPerRow(t *testing.T) {
 
 func TestInboxShowsQueueThenDetail(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
+	d.selectID("APP-1")
 	for _, width := range []int{40, 60, 120} {
 		d.send(tea.WindowSizeMsg{Width: width, Height: 30})
 		if screen := inboxScreen(d); strings.Contains(screen, "Next step") || !strings.Contains(screen, "enter details") {
@@ -132,52 +133,14 @@ func TestInboxShowsQueueThenDetail(t *testing.T) {
 	}
 }
 
-func TestInboxZeroAnimatesThenStops(t *testing.T) {
-	d := driveInbox(t, workfile.InboxSettings{})
-	d.m.e.view.color = true
-	d.m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
-	_, cmd := d.m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
-	if cmd == nil {
-		t.Fatal("reaching zero starts the moment")
-	}
-	if !strings.Contains(ansi.Strip(inboxScreen(d)), "· Nothing needs you.") {
-		t.Fatalf("first frame:\n%s", inboxScreen(d))
-	}
-	_, cmd = d.m.Update(zeroTickMsg{d.m.zeroRun - 1})
-	if cmd != nil || d.m.zeroFrame != 0 {
-		t.Fatal("a tick from an earlier run advanced the animation")
-	}
-	var middle bool
-	for range zeroLast {
-		_, cmd = d.m.Update(zeroTickMsg{d.m.zeroRun})
-		middle = middle || strings.Contains(ansi.Strip(inboxScreen(d)), "● Nothing needs you.")
-	}
-	if !middle || cmd != nil || !strings.Contains(ansi.Strip(inboxScreen(d)), "✓ Nothing needs you.") {
-		t.Fatal("the moment ends on the tick")
-	}
-	d2 := driveInbox(t, workfile.InboxSettings{})
-	d2.m.e.view.color = true
-	d2.press("e", "e", "j")
-	_, cmd = d2.m.Update(zeroTickMsg{d2.m.zeroRun})
-	if cmd != nil || !strings.Contains(ansi.Strip(inboxScreen(d2)), "✓ Nothing needs you.") {
-		t.Fatal("any key skips to the last frame")
-	}
-}
-
-func TestInboxSyncedJustNow(t *testing.T) {
-	d := driveInbox(t, workfile.InboxSettings{})
-	if screen := inboxScreen(d); !strings.Contains(screen, "synced just now") || strings.Contains(screen, "now ago") {
-		t.Fatalf("header wording:\n%s", screen)
-	}
-}
-
 func TestInboxNarrowFooterKeepsActions(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "claude {prompt}"})
+	d.selectID("APP-1")
 	d.send(tea.WindowSizeMsg{Width: 50, Height: 30})
 	lines := strings.Split(inboxScreen(d), "\n")
 	footerLines := len(d.m.footer(d.m.theme(), 50))
 	footer := strings.Join(lines[len(lines)-footerLines:], "\n")
-	for _, want := range []string{"enter details", "t ticket", "e done", "a agent"} {
+	for _, want := range []string{"enter details", "t ticket", "e resolve", "a agent"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("narrow footer lacks %q: %q", want, footer)
 		}
@@ -196,7 +159,7 @@ func TestInboxOpensTicketAndReturnsToAlert(t *testing.T) {
 	f := m.e.client.(*fakeSource)
 	f.details = map[string]workfile.Detail{row.Ticket: {Key: row.Ticket}}
 	saves := d.saves
-	_, load := m.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
+	load := m.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
 	if m.ticket == nil || load == nil {
 		t.Fatal("the ticket shortcut did not open the selected ticket")
 	}
@@ -207,7 +170,7 @@ func TestInboxOpensTicketAndReturnsToAlert(t *testing.T) {
 	for _, width := range []int{40, 60} {
 		d.send(tea.WindowSizeMsg{Width: width, Height: 30})
 		screen := inboxScreen(d)
-		for _, want := range []string{row.Ticket, row.PR, "Where it is", "esc inbox"} {
+		for _, want := range []string{row.Ticket, row.PR, "Review", "esc inbox"} {
 			if !strings.Contains(screen, want) {
 				t.Fatalf("missing %q at %d columns:\n%s", want, width, screen)
 			}
@@ -245,9 +208,9 @@ func TestInboxTicketUsesTheSharedKittyDiagram(t *testing.T) {
 	datum := &m.data.work[1]
 	assessment := m.e.w.Assess(fixtureTicket(r.Ticket, "doing", "short"))
 	datum.Assessment = &assessment
-	_, load := m.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
+	load := m.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
 	for _, cmd := range load().(tea.BatchMsg) {
-		_, send := m.Update(cmd())
+		send := m.Update(cmd())
 		if send != nil {
 			if raw, ok := send().(tea.RawMsg); !ok || !strings.Contains(raw.Msg.(string), "\x1b_G") {
 				t.Fatal("inbox did not transmit a workflow image")
@@ -261,6 +224,7 @@ func TestInboxTicketUsesTheSharedKittyDiagram(t *testing.T) {
 
 func TestInboxNextWordsAnAction(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
+	d.selectID("APP-1")
 	d.press("enter")
 	screen := inboxScreen(d)
 	action := strings.Index(screen, "1. Address Alice's review on #84")
@@ -272,6 +236,7 @@ func TestInboxNextWordsAnAction(t *testing.T) {
 
 func TestInboxDetailScrollsToLatestActivity(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
+	d.selectID("APP-1")
 	d.send(tea.WindowSizeMsg{Width: 40, Height: 11})
 	d.press("enter")
 	if screen := inboxScreen(d); !strings.Contains(screen, "Fix login") || strings.Contains(screen, "Latest activity") {

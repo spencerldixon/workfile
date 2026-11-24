@@ -47,11 +47,11 @@ type Role struct {
 	Check    func(name string, p Provider, add func(string, ...any)) // may be nil
 	Facts    []string // TrackerFacts or CodeHostFacts, plus any of its own
 	ByFacts  []string // facts that say who supplied them, for `by` rules
-	Activity []string // the activity kinds it supplies to `wf inbox`
+	Activity []string // the activity kinds it supplies to `wf tracker --view inbox`
 }
 ```
 
-`Activity` lists what the adapter's `Activity` method can return for `wf inbox`:
+`Activity` lists what the adapter's `Activity` method can return for `wf tracker --view inbox`:
 `comment`, `review`, `approved`, `changes_requested`, `review_requested` or
 `pushed`. Leave it empty if the adapter supplies none yet; the inbox still shows
 policy rows for its tickets.
@@ -86,7 +86,7 @@ type tracker interface {
 	Listing(ctx context.Context, scope string) ([]workfile.Listing, error)
 	Detail(ctx context.Context, key string) (workfile.Detail, error)
 	Image(ctx context.Context, attachment string) ([]byte, error)
-	// Activity reads what happened on these tickets after since, for wf inbox.
+	// Activity reads what happened on these tickets after since, for wf tracker --view inbox.
 	Activity(ctx context.Context, keys []string, since time.Time) ([]workfile.Activity, error)
 }
 ```
@@ -143,7 +143,7 @@ type codeHost interface {
 	connection
 	// Records returns the code changes linked to each ticket, by Ticket.Key.
 	Records(ctx context.Context, tickets []workfile.Ticket, keys workfile.Keys, searchBranches bool) (map[string][]workfile.Record, error)
-	// Activity reads what happened on these PRs since each cursor, for wf inbox.
+	// Activity reads what happened on these PRs since each cursor, for wf tracker --view inbox.
 	Activity(ctx context.Context, prs []workfile.PRCursor) (workfile.ActivityResult, error)
 	// Mine finds open PRs the person wrote or was asked to review, in listed repos.
 	Mine(ctx context.Context) ([]workfile.Record, error)
@@ -159,7 +159,7 @@ outside the connection's repositories without a request.
 
 `keys` is the tracker's, so a code host works with any tracker.
 
-**Activity is for polling, so keep it cheap.** `wf inbox` calls `Activity` every
+**Activity is for polling, so keep it cheap.** `wf tracker --view inbox` calls `Activity` every
 few minutes while it is open. Ask first which PRs changed at all, in as few
 requests as the service allows, and read details only for those. A poll where
 nothing changed should cost one request. An adapter that supplies no activity

@@ -158,7 +158,7 @@ func TestGitHubMineFiltersRepos(t *testing.T) {
 		}
 		return 200, `{"data":{"search":{"issueCount":2,"pageInfo":{"hasNextPage":false},"nodes":[` + node("app", 1) + `,` + node("example-other", 2) + `]}}}`
 	})
-	records, err := hostOf(t, c, "github").Mine(context.Background())
+	records, err := hostOf(t, c, "github").InboxPRs(context.Background(), true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

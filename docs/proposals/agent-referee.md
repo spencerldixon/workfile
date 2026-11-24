@@ -4,7 +4,7 @@
 CLI no longer runs them, and `prove` is now `lint`. See the [vision](../vision.md).
 The text below is kept as written.
 
-**Status:** `wf prove` (now `wf lint`) is built (see [Lint](../usage.md#lint-is-the-policy-sound)).
+**Status:** Policy validation is available as `wf policy --lint` (see [Lint](../usage.md#policy-how-does-this-project-ship)).
 The rest is an idea. It builds on [the roadmap](roadmap.md) and
 Automations.
 

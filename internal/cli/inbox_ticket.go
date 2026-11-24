@@ -93,13 +93,19 @@ func (m *inboxModel) ticketPane() workfilePane {
 	}
 }
 
+func (m *inboxModel) closeTicket() {
+	if m.ticket.read != nil {
+		m.ticket.read.cancel()
+	}
+	m.ticket = nil
+	m.workflow.clear()
+}
+
 func (m *inboxModel) ticketKey(msg tea.KeyPressMsg) tea.Cmd {
 	t := m.ticket
 	switch msg.String() {
 	case "esc":
-		t.read.cancel()
-		m.ticket = nil
-		m.workflow.clear()
+		m.closeTicket()
 		return nil
 	case "q", "ctrl+c":
 		t.read.cancel()
@@ -143,7 +149,7 @@ func (m *inboxModel) ticketHeading() []string {
 
 func (m *inboxModel) ticketFooter(p workfilePane) []string {
 	t := m.ticket
-	keys := "esc inbox · ↑↓ scroll · r refresh"
+	keys := "esc inbox · ↑↓ scroll · r refresh · [/] view"
 	if trackerWebURL(firstOf(t.row.PRURL, t.item.URL)) {
 		keys += " · o open"
 	}
@@ -185,11 +191,6 @@ func (m *inboxModel) fillTicket() {
 	blocks = append(blocks, preview.ticketBody(t.read)...)
 	t.heading, t.footer = m.ticketHeading(), m.ticketFooter(pane)
 	t.body.SetWidth(width)
-	t.body.SetHeight(max(1, m.height-len(t.heading)-len(t.footer)))
+	t.body.SetHeight(max(1, m.bodyHeight(len(t.footer))-len(t.heading)))
 	t.body.SetContent(strings.TrimPrefix(preview.sections(blocks, width), "\n"))
-}
-
-func (m *inboxModel) renderTicket() string {
-	t := m.ticket
-	return strings.Join(t.heading, "\n") + "\n" + t.body.View() + "\n" + strings.Join(t.footer, "\n")
 }

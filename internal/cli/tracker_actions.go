@@ -219,10 +219,10 @@ func (m *trackerModel) refreshAttentionSample() tea.Cmd {
 	return tea.Batch(m.showTickets(), m.actionIdentity())
 }
 
-func trackerActionText(key string, result workfile.NextActions) string {
-	icon := attentionIcon(result.State)
+func trackerActionText(key string, result workfile.NextActions, colour bool) string {
+	icon := trackerAttentionIcon(result.State, colour)
 	if result.Summary == "Checking…" || result.Summary == "Identifying action owner…" {
-		icon = "…"
+		icon = trackerAttentionIcon(workfile.Waiting, colour)
 	}
 	summary := result.Summary
 	for _, action := range result.Actions {

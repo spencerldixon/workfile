@@ -157,18 +157,16 @@ func (c *Client) Activity(ctx context.Context, q workfile.ActivityQuery, tracker
 	return result, errors.Join(errs...)
 }
 
-// MyPRs finds open PRs the person wrote or was asked to review, from every
-// code host, in its listed repos. Like Activity, one failing host keeps the
-// others.
-func (c *Client) MyPRs(ctx context.Context) (map[string][]workfile.Record, error) {
+// InboxPRs reads personal PRs and explicitly watched repositories within each connection.
+func (c *Client) InboxPRs(ctx context.Context, settings workfile.InboxSettings) (map[string][]workfile.Record, error) {
 	out := map[string][]workfile.Record{}
+	reviews := settings.ReviewRequests != nil && *settings.ReviewRequests
 	err := c.eachHost(func(name string, host codeHost) error {
-		records, err := host.Mine(ctx)
-		if err != nil {
-			return err
+		records, err := host.InboxPRs(ctx, reviews, settings.Repositories[name])
+		if err == nil {
+			out[name] = records
 		}
-		out[name] = records
-		return nil
+		return err
 	})
 	return out, err
 }

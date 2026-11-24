@@ -50,7 +50,7 @@ func TestTrackerBoardArrowNavigationAndHighlight(t *testing.T) {
 	if d.m.shownView().board() {
 		t.Fatal("could not switch to list")
 	}
-	d.wants("Title", "Ticket preview")
+	d.wants("Title", "↑↓ move")
 	d.refuses("All projects")
 	d.press("[")
 	if !d.m.shownView().board() {
@@ -130,8 +130,8 @@ func TestTrackerBoardNarrowPlainResizeSearchAndPreview(t *testing.T) {
 			t.Fatal("enter did not open preview")
 		}
 		lines := strings.Split(d.screen(), "\n")
-		if !strings.Contains(lines[4], "Ticket · reading") {
-			t.Fatalf("board detail should start below the tabs:\n%s", strings.Join(lines[:5], "\n"))
+		if !strings.Contains(lines[trackerHeaderRows+1], d.m.current) {
+			t.Fatalf("ticket identity should start below the tabs:\n%s", strings.Join(lines[:5], "\n"))
 		}
 		d.press("esc")
 		if d.m.onTicket {

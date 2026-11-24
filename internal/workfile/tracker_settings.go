@@ -167,7 +167,7 @@ func validateTrackerLayer(s TrackerSettings) error {
 }
 
 func validateTrackerViews(s TrackerSettings, p Policy) error {
-	ids := map[string]bool{"all": true, "me": true}
+	ids := map[string]bool{"all": true, "me": true, "inbox": true}
 	for _, state := range p.States {
 		ids[strings.ToLower(state)] = true
 	}
@@ -184,7 +184,7 @@ func validateTrackerViews(s TrackerSettings, p Policy) error {
 	}
 	available := ids
 	if s.Views != nil {
-		available = map[string]bool{}
+		available = map[string]bool{"inbox": true}
 		for _, view := range s.Views {
 			available[view.ID] = true
 		}

@@ -13,7 +13,7 @@ func TestInboxSettingsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Poll.Duration != 2*time.Minute || s.Snooze.Duration != time.Hour || s.Agent != "" || s.RefreshEvery != 5 || s.FullEvery != 15 {
+	if s.Poll.Duration != 30*time.Second || s.Snooze.Duration != time.Hour || s.Agent != "" || s.RefreshEvery != 5 || s.FullEvery != 15 {
 		t.Fatalf("unexpected defaults: %+v", s)
 	}
 	if len(s.Prompts) != len(PromptKinds) {

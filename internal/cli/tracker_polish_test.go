@@ -34,7 +34,7 @@ func TestTrackerColumnHeadingsFollowTheRows(t *testing.T) {
 	}
 }
 
-func TestTrackerPreviewHeadingShowsFocusAndStaysVisible(t *testing.T) {
+func TestTrackerHelpFollowsListAndReaderFocus(t *testing.T) {
 	for _, width := range []int{40, 60, 120} {
 		t.Run(strconv.Itoa(width), func(t *testing.T) {
 			f := trackerSource()
@@ -42,12 +42,12 @@ func TestTrackerPreviewHeadingShowsFocusAndStaysVisible(t *testing.T) {
 			detail.Body = para(strings.Repeat("A long description. ", 200))
 			f.details["APP-1"] = detail
 			d := driveTracker(t, f, width, 30)
-			d.wants("workfile", "/ tracker", "Ticket preview", "enter to read", "↑↓ move")
+			d.wants("↑↓ move")
 			d.press("enter", "down", "down")
-			d.wants("Ticket · reading", "tab to list", "↑↓ scroll")
-			d.refuses("enter to read")
+			d.wants("↑↓ scroll")
+			d.refuses("Ticket · reading", "tab to list", "enter to read")
 			d.press("tab")
-			d.wants("Ticket preview", "enter to read")
+			d.wants("↑↓ move", "APP-2")
 			d.refuses("Ticket · reading")
 		})
 	}
@@ -57,7 +57,7 @@ func TestTrackerPolishedLayoutWithoutColourOrBackground(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	for _, width := range []int{40, 60} {
 		d := driveTracker(t, trackerSource(), width, 40)
-		d.wants("[All", "▸ APP-1")
+		d.wants("▸ All", "▸ APP-1")
 		if !strings.Contains(d.pane(), "Description") {
 			t.Fatal("ticket has no description heading")
 		}
@@ -77,7 +77,7 @@ func TestTrackerPolishedLayoutWithoutColourOrBackground(t *testing.T) {
 func TestTrackerDocsMatchScreen(t *testing.T) {
 	d := driveWithSettings(t, trackerSource(), 100, 34, graphics{}, options{}, workfile.TrackerSettings{Columns: []string{"key", "title", "status", "assignee"}})
 	syncClock(d)
-	lines := strings.Split(d.screen(), "\n")[:d.m.topRows()+d.m.listRows()+2]
+	lines := strings.Split(d.screen(), "\n")[:d.m.topRows()+d.m.listRows()+1]
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], " ")
 	}

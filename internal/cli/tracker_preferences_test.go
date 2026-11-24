@@ -194,7 +194,7 @@ func TestTrackerCommandReadsSharedAndPrivateConfiguration(t *testing.T) {
 			t.Fatal("plain configuration caused extra provider reads")
 		}
 	}
-	if code, _, errOut := invoke(t, trackerSource(), "tracker", "--dir", root, "--view", "all"); code != 2 || !strings.Contains(errOut, "choose review-queue, all-work, my-work") {
+	if code, _, errOut := invoke(t, trackerSource(), "tracker", "--dir", root, "--view", "all"); code != 2 || !strings.Contains(errOut, "choose inbox, review-queue, all-work, my-work") {
 		t.Fatalf("unconfigured built-in tab was selectable: %d %s", code, errOut)
 	}
 	write(private, "tracker:\n  default_view: missing\n")
@@ -204,7 +204,7 @@ func TestTrackerCommandReadsSharedAndPrivateConfiguration(t *testing.T) {
 		t.Fatalf("invalid settings were not rejected before reading tickets: %d %s", code, errOut)
 	}
 	// Presentation settings do not alter lint's policy checks.
-	if code, _, errOut := invoke(t, trackerSource(), "lint", "--dir", root); code == 2 {
+	if code, _, errOut := invoke(t, trackerSource(), "policy", "--lint", "--dir", root); code == 2 {
 		t.Fatalf("tracker preferences broke lint: %s", errOut)
 	}
 }

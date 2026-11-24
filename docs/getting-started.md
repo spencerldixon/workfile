@@ -19,11 +19,11 @@ command uses its own access.
 ```sh
 wf setup            # connect your tools, pick projects and repos
 wf status --me      # see your work
-wf lint             # check the policy itself
+wf policy --lint             # check the policy itself
 ```
 
 Then change `.workfile/policy.yml` until it matches how your team really works.
-Use `wf tracker` to browse tickets and `wf inbox` for activity that needs you.
+Use `wf tracker` to browse tickets and `wf tracker --view inbox` for activity that needs you.
 Optional `.workfile/config.yml` sets tracker and inbox preferences; see
 [Configuration](configuration.md) and the [example config](../example/.workfile/config.yml).
 
@@ -147,7 +147,7 @@ computer. It reads saved snapshots, so it adds no requests.
 6. **Add your team's gates** to `policy.yml`. The starter has none, so every
    forward move is allowed unless evidence is unavailable. Terminal-stage tickets
    are done, and unmapped statuses still cannot be checked.
-7. **Run `wf lint`.** It catches policy mistakes and flags paths that can skip
+7. **Run `wf policy --lint`.** It catches policy mistakes and flags paths that can skip
    gates. Gaps are advisory; invalid policy fails. Run it in CI.
 8. **Let agents ask first.** `wf check APP-42 --to done` says whether a move is
    allowed. Exit code `0` means yes.

@@ -53,7 +53,7 @@ func TestWorkfilePaneListsEachPRInItsOwnStatusBox(t *testing.T) {
 		before[i].Destinations = slices.Clone(before[i].Destinations)
 	}
 	text := paneText(p)
-	order := []string{"Where it is", "Ticket actions", "Pull requests", "▎  api#42", "▎  worker#9", "▎  web#7", "▎  docs#3", "Checked at"}
+	order := []string{"[Review]", "Ticket actions", "Pull requests", "▎  api#42", "▎  worker#9", "▎  web#7", "▎  docs#3", "Checked at"}
 	last := -1
 	for _, heading := range order {
 		at := strings.Index(text, heading)
@@ -182,7 +182,7 @@ func TestWorkfilePaneLoadingErrorsAndUnknownOwnersNeverLookReady(t *testing.T) {
 		if strings.Contains(text, "Ready to move") || strings.Contains(text, "PR needs you") {
 			t.Fatalf("%s falsely assigned readiness or actions", mode)
 		}
-		if !strings.Contains(text, "Where it is") || !strings.Contains(text, "Next action") {
+		if strings.Contains(text, "Where it is") || !strings.Contains(text, "Next action") {
 			t.Fatal("pane lost stable headings")
 		}
 	}
@@ -220,18 +220,44 @@ func TestTrackerWorkfileChecklistScrollsPastShortTicketDescription(t *testing.T)
 		records = append(records, r)
 	}
 	f.records["APP-1"] = map[string][]workfile.Record{"github": records}
-	d := driveWithSettings(t, f, 160, 40, graphics{}, options{}, boardSettings())
-	enableInbox(d)
-	d.press("enter", "w")
-	for i := 0; i < 8; i++ {
-		d.press("down")
-	}
-	if d.m.side.YOffset() == 0 {
-		t.Fatal("long checklist could not scroll independently of a short description")
-	}
-	before := d.m.side.YOffset()
-	d.send(tea.WindowSizeMsg{Width: 160, Height: 40})
-	if d.m.side.YOffset() != before {
-		t.Fatal("redrawing reset the checklist scroll position")
+	for _, view := range []string{"flow", "tickets"} {
+		for _, input := range []string{"wheel", "keyboard"} {
+			t.Run(view+"/"+input, func(t *testing.T) {
+				d := driveWithSettings(t, f, 160, 40, graphics{}, options{view: view}, boardSettings())
+				enableInbox(d)
+				left, _ := d.m.columns()
+				wheel := tea.MouseWheelMsg{X: left + 2, Y: 20, Button: tea.MouseWheelDown}
+				if view == "tickets" && input == "wheel" {
+					d.send(wheel)
+					if d.m.side.AtTop() || !d.m.pane.AtTop() {
+						t.Fatal("scrolling the preview must move only the pane under the pointer")
+					}
+				}
+				d.press("enter")
+				if d.m.View().MouseMode == tea.MouseModeNone {
+					t.Fatal("reader must request wheel events from the terminal")
+				}
+				d.refuses("Checked at", "Where it is")
+				for range d.m.side.TotalLineCount() {
+					if d.m.side.AtBottom() {
+						break
+					}
+					if input == "wheel" {
+						d.send(wheel)
+					} else {
+						d.press("f")
+					}
+				}
+				if !d.m.side.AtBottom() {
+					t.Fatalf("%s did not reach the end of the PR list", input)
+				}
+				d.wants("Checked at")
+				before := d.m.side.YOffset()
+				d.send(tea.WindowSizeMsg{Width: 160, Height: 40})
+				if d.m.side.YOffset() != before {
+					t.Fatal("redrawing reset the checklist scroll position")
+				}
+			})
+		}
 	}
 }

@@ -25,10 +25,9 @@ Usage: wf <command> [options]
 
   setup                       Connect your tools and write .workfile/
   tracker                     Your tracker, scoped to the team: browse and read tickets
-  inbox                       What happened to your work, and what wants you now
   status [TICKET ...]         Where work is, and what it needs
   check TICKET --to STAGE     May this ticket move now? (exit 0 yes, 1 no, 2 cannot tell)
-  lint                        Is the policy sound? Which gates guard each stage
+  policy                      Show the workflow, gates and provider mappings
 
 Options for status:
   --me                        Your work: assigned to you, or PRs you opened or must review
@@ -42,11 +41,14 @@ Options for status:
   --evidence                  Show the evidence for each requirement
 
 Options for tracker:
-  --view VIEW                 Start on all, me, a stage or a saved view
+  --view VIEW                 Start on inbox, all, me, a stage or a saved view
+
+Options for policy:
+  --lint                      Validate the policy and report warnings and gaps
 
 Options:
   --test [NAME ...]           setup: test your connections, or the named ones
-  --json                      Machine-readable output (status, check, lint)
+  --json                      Machine-readable output (status, check, policy)
   --dir DIR                   Find .workfile/ from DIR or its parents (default .)
   --version                   Print the installed version
   -h, --help                  Show this help
@@ -82,6 +84,8 @@ type options struct {
 	view string
 	// setup
 	test bool
+	// policy
+	lint, legacyProve bool
 	// note is printed to errOut when an old command name was used.
 	note string
 }
@@ -101,7 +105,7 @@ type source interface {
 	Detail(context.Context, string) (workfile.Detail, error)
 	Image(context.Context, string) ([]byte, error)
 	Activity(context.Context, workfile.ActivityQuery, time.Time) (workfile.ActivityResult, error)
-	MyPRs(context.Context) (map[string][]workfile.Record, error)
+	InboxPRs(context.Context, workfile.InboxSettings) (map[string][]workfile.Record, error)
 	FailedChecks(ctx context.Context, connection string, record workfile.Record) ([]workfile.FailedCheck, error)
 }
 
@@ -117,12 +121,13 @@ type command struct {
 // env is what a command works with. w and client are nil for a noWorkspace
 // command.
 type env struct {
-	view    view
-	w       *workfile.Workspace
-	client  source
-	o       options
-	errOut  io.Writer
-	tracker workfile.TrackerSettings
+	view          view
+	w             *workfile.Workspace
+	client        source
+	o             options
+	errOut        io.Writer
+	tracker       workfile.TrackerSettings
+	inboxSettings workfile.InboxSettings
 	// connect opens the providers of a workspace. A noWorkspace command that
 	// reads tickets, such as setup --test, calls it after loading one itself.
 	connect func(*workfile.Workspace) source
@@ -133,10 +138,9 @@ type env struct {
 var commands = map[string]command{
 	"setup":   setupCommand,
 	"tracker": trackerCommand,
-	"inbox":   inboxCommand,
 	"status":  statusCommand,
 	"check":   checkCommand,
-	"lint":    lintCommand,
+	"policy":  policyCommand,
 }
 
 // alias keeps an old command name working for one release.
@@ -149,7 +153,7 @@ type alias struct {
 var aliases = map[string]alias{
 	"health":  {to: "status", note: "health is now status"},
 	"test":    {to: "setup", set: func(o *options) { o.test = true }, note: "test is now setup --test"},
-	"prove":   {to: "lint", note: "prove is now lint"},
+	"prove":   {to: "policy", set: func(o *options) { o.lint, o.legacyProve = true, true }, note: "prove is now policy --lint"},
 	"tickets": {to: "tracker", note: "tickets is now tracker"},
 }
 
@@ -231,6 +235,7 @@ func parse(args []string) (options, error) {
 	fs.StringVar(&o.to, "to", "", "")
 	fs.StringVar(&o.view, "view", "", "")
 	fs.BoolVar(&o.test, "test", false, "")
+	fs.BoolVar(&o.lint, "lint", false, "")
 	// The standard flag package stops at positional arguments; collect options first.
 	var flags, positionals []string
 	for i := 0; i < len(args); i++ {
@@ -285,6 +290,7 @@ func parse(args []string) (options, error) {
 			return o, err
 		}
 	}
+	invoked := o.command
 	if a, ok := aliases[o.command]; ok {
 		o.command, o.note = a.to, a.note
 		if a.set != nil {
@@ -302,7 +308,7 @@ func parse(args []string) (options, error) {
 		}
 	})
 	if invalid != "" {
-		return o, fmt.Errorf("--%s is not an option for wf %s", invalid, o.command)
+		return o, fmt.Errorf("--%s is not an option for wf %s", invalid, invoked)
 	}
 	if c.args != nil {
 		return o, c.args(o)
