@@ -94,7 +94,7 @@ func (o options) limited() bool {
 
 type source interface {
 	Tickets(context.Context, []string, int) ([]workfile.Ticket, error)
-	Records(context.Context, []workfile.Ticket) ([]workfile.Ticket, []string, error)
+	Records(context.Context, []workfile.Ticket, bool) ([]workfile.Ticket, []string, error)
 	Identity(context.Context, string) (string, error)
 	Test(context.Context, string) (string, error)
 	Listing(context.Context, string) ([]workfile.Listing, error)

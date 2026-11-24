@@ -69,6 +69,11 @@ Old names still work for one release, with a notice: `health` is `status`,
 
 ## Browse your work
 
+`wf status APP-42` shows linked PRs, failing checks, and open review threads.
+Use the ticket key in the PR title or link to the ticket in the description.
+When you look up a ticket directly, Workfile also searches branch names that
+start with its key. See [how Workfile links PRs](docs/providers/github.md#how-prs-are-found).
+
 Tracker opens a list with a ticket preview. Enter opens the reader; `w` switches
 to Workfile's checks and PR actions. Use `/` to search, `s` to choose a project,
 `p` to open linked PRs, and `r` to refresh. Configured board views group cards

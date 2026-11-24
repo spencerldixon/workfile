@@ -106,7 +106,7 @@ func TestBodyLinkedPRIsFetchedAndDeduplicated(t *testing.T) {
 	p := c.Workspace.Providers[c.Workspace.Policy.Tracker]
 	p.Site = "example-team.atlassian.net"
 	c.Workspace.Providers[c.Workspace.Policy.Tracker] = p
-	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-42"}})
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-42"}}, false)
 	if err != nil || calls != 1 || len(items[0].Records["github"]) != 1 {
 		t.Fatalf("calls %d, items %+v, err %v", calls, items, err)
 	}

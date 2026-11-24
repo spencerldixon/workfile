@@ -36,6 +36,7 @@ type NextActions struct {
 // Missing ownership or evidence stays unknown, not ready or waiting.
 func (w *Workspace) NextActions(a Assessment, who map[string]string) NextActions {
 	result := NextActions{State: AttentionUnknown, Summary: "No next action established"}
+	var approvalWaits []WorkAction
 	seen := map[string]int{}
 	add := func(action WorkAction, identity string) {
 		if at, ok := seen[identity]; ok {
@@ -102,6 +103,9 @@ func (w *Workspace) NextActions(a Assessment, who map[string]string) NextActions
 			if mergeable, _ := record.Facts["mergeable"].(string); mergeable == "conflicting" && record.Unavailable["mergeable"] == "" {
 				addSignal("mergeable", "Resolve merge conflicts", need)
 			}
+			if record.UnresolvedReviewThreads {
+				addSignal("review_threads", ResolveReviewThreads, need)
+			}
 			checks, known := record.Facts["checks"].(string)
 			if record.Unavailable["checks"] != "" {
 				known = false
@@ -123,7 +127,7 @@ func (w *Workspace) NextActions(a Assessment, who map[string]string) NextActions
 			if mine && requestsKnown && len(requests) > 0 && len(changes) == 0 {
 				approvals, approvalsKnown := record.Facts["approvals"].([]Actor)
 				if approvalsKnown && len(approvals) == 0 && record.Unavailable["approvals"] == "" {
-					addSignal("approvals", "Waiting for approval", Waiting)
+					approvalWaits = append(approvalWaits, WorkAction{State: Waiting, Target: record.ID, URL: record.URL, Text: "Waiting for approval", Fact: "approvals"})
 				}
 			}
 		}
@@ -183,13 +187,17 @@ func (w *Workspace) NextActions(a Assessment, who map[string]string) NextActions
 						if fact == "approvals" || fact == "fresh_approvals" {
 							requests, known := record.Facts["review_requests"].([]string)
 							known = known && record.Unavailable["review_requests"] == ""
+							reviewers := w.reviewers(Rule{By: check.By})
 							switch {
 							case !known:
 								state, text = AttentionUnknown, "Approval needed; review requests unavailable"
 							case requestedReview(w, check, reason.Provider, requests):
 								state, text = Waiting, "Waiting for approval"
+								if reviewers != "" {
+									text += " from " + reviewers
+								}
 							case len(check.By) > 0:
-								text = "Request the required review"
+								text = "Request review from " + reviewers
 							default:
 								text = "Request a review"
 							}
@@ -208,6 +216,13 @@ func (w *Workspace) NextActions(a Assessment, who map[string]string) NextActions
 				action.Destinations = []string{requirement.destination}
 			}
 			add(action, identity)
+		}
+	}
+	for _, wait := range approvalWaits {
+		if !slices.ContainsFunc(result.Actions, func(action WorkAction) bool {
+			return action.URL == wait.URL && action.Target == wait.Target && (action.Fact == "approvals" || action.Fact == "fresh_approvals")
+		}) {
+			result.Actions = append(result.Actions, wait)
 		}
 	}
 	// Never call a ticket ready while linked evidence is unavailable.
@@ -246,6 +261,8 @@ func (w *Workspace) NextActions(a Assessment, who map[string]string) NextActions
 	}
 	return result
 }
+
+const ResolveReviewThreads = "Resolve open review threads"
 
 func requestedReview(w *Workspace, check Check, provider string, requests []string) bool {
 	if len(requests) == 0 {

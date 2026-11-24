@@ -179,7 +179,7 @@ func readPolicy(ctx context.Context, e env, ticket string) (workfile.Assessment,
 	if len(found) == 0 {
 		return workfile.Assessment{}, errors.New(ticket + " is not visible to your account")
 	}
-	found, _, err = e.client.Records(ctx, found[:1])
+	found, _, err = e.client.Records(ctx, found[:1], true)
 	if err != nil {
 		return workfile.Assessment{}, err
 	}

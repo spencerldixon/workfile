@@ -138,7 +138,7 @@ ticket preview.
 | Jira query rejected | Try your JQL in Jira, and check the project and status names. |
 | No Jira cloud ID | Check `site`. Only Jira Cloud is supported. |
 | Unmapped Jira status | Add it to the right stage under `statuses`, or list it under `skip_statuses` on purpose. |
-| A PR you expected is missing | Check its title or branch for the ticket key, its last update date, whether you can see the repository, and whether it is archived. |
+| A PR you expected is missing | Run `wf status APP-42` to search branches too. See [how Workfile links PRs](github.md#how-prs-are-found). |
 | A ticket you expected is missing | Check your scope, your `--me` or `--user` filter, the limit, and your account's access. |
 
 Requests time out after 30 seconds. If a request is rate limited or the gateway

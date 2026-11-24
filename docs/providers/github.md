@@ -51,24 +51,24 @@ narrow list means fewer requests.
 
 ### How PRs are found
 
-Workfile searches your organisation for PRs that mention the tickets being
-checked, six tickets per search, with up to six searches at once. The number of
-searches follows the number of tickets, not the number of repositories, so
-`wf status APP-42` makes one search. PRs of any age are found. It includes open
-and merged PRs in repositories that are not archived. PRs closed without
-merging are left out. Workfile then reads labels, reviews, draft status, merge
-queue membership and current-commit check status only for linked PRs, with up
-to six PRs read at once.
+If the tracker supplies direct PR references, Workfile reads those PRs by
+repository and number. Otherwise it searches GitHub across your organisation.
 
-A PR is linked to a ticket when the PR **title** contains the ticket key. Case
-does not matter, and the whole key must match, so `APP-12` does not match
-`APP-123`. An explicit `https://example-team.atlassian.net/browse/APP-42` link
-in the PR description also links the ticket, but only when the host is your
-configured Jira site. Bare ticket mentions in descriptions do not link work.
-GitHub search does not read branch names, so a PR that names the ticket only in
-its branch is not found: put the key in the title. Commit messages and Jira's
-development panel are not used. One PR can link to several tickets, and
-repeated links do not duplicate it.
+- A **PR title** can contain the full ticket key, such as `APP-42`.
+- A **PR description** can contain an explicit ticket URL, such as
+  `https://example-team.atlassian.net/browse/APP-42` on your configured Jira
+  site. Use a URL when the description is the only place that names the ticket.
+- A **PR branch** can start with the ticket key, such as `APP-42-fix-login`.
+  Workfile searches branch prefixes when you name a ticket in `wf status` or
+  `wf check`, or open its workflow in Tracker. Board-wide reads and Inbox polls
+  search titles and bodies in batches of up to six ticket keys. Use a title key
+  or ticket URL for links that should also appear in those views.
+
+Workfile searches text and branch prefixes in parallel for a named lookup.
+It verifies the whole key on the returned PR, so `APP-12` does not match
+`APP-123`. It keeps open and merged PRs in configured, non-archived repositories
+and reads review and CI details once per matched PR. A PR can link to several
+tickets. Commit messages and Jira's development panel are outside this search.
 
 ### PR attributes
 
@@ -325,11 +325,9 @@ A PR links to an issue when GitHub itself links them: for example `Resolves
 these links in the same query as the issue. PRs closed without merging are left
 out. Open PRs and drafts are included.
 
-Workfile also links a PR when GitHub's search finds the full key, such as
-`app#42`, in its title or description, or when its description has the issue's
-address. A key only in the branch name is not found. A bare `#42` in a
-title does not link, because it matches too loosely. A PR that only mentions an
-issue does not link.
+When the issue has no direct references, the same search rules apply with the
+full issue key, such as `app#42`, or the issue's URL. The repository name is
+required for a key in a PR title or branch.
 
 ### Issue text and images
 
@@ -354,7 +352,7 @@ your token to another host.
 | No Jira cloud ID | Check `site`. Only Jira Cloud is supported. |
 | Unmapped GitHub status | Add the name to the right stage under `statuses`. |
 | Unmapped Jira status | Add it to the right stage under `statuses`, or list it under `skip_statuses` on purpose. |
-| A PR you expected is missing | Check its title or branch for the ticket key, its last update date, whether you can see the repository, and whether it is archived. |
+| A PR you expected is missing | Run `wf status APP-42` to search branches too. Check that the PR matches a [linking rule](#how-prs-are-found) and that the token can read the configured repository. |
 | A ticket you expected is missing | Check your scope, your `--me` or `--user` filter, the limit, and your account's access. |
 
 Requests time out after 30 seconds. If a request is rate limited or the gateway

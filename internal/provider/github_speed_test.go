@@ -53,7 +53,7 @@ func TestLinkedPRDetailsUseOneBoundedPool(t *testing.T) {
 		mu.Unlock()
 		return 200, fmt.Sprintf(`{"data":{"node":{"id":%q,"number":%s,"title":"APP-1 APP-2","state":"OPEN","repository":{"name":"api"},"labels":{"nodes":[]},"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]}}}}`, id, id)
 	})
-	items, _, err := c.Records(ctx, []workfile.Ticket{{Key: "APP-1"}, {Key: "APP-2"}})
+	items, _, err := c.Records(ctx, []workfile.Ticket{{Key: "APP-1"}, {Key: "APP-2"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestUnrelatedPRsNeedNoDetails(t *testing.T) {
 		t.Error("unrelated PR triggered a detail request")
 		return 400, `{}`
 	})
-	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-12"}})
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-12"}}, false)
 	if err != nil || len(items[0].Records["github"]) != 0 {
 		t.Fatalf("items %v, error %v", items, err)
 	}

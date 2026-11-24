@@ -142,7 +142,7 @@ file in `internal/workfile`, as `github_keys.go` shows. `Keys` is pure: no netwo
 type codeHost interface {
 	connection
 	// Records returns the code changes linked to each ticket, by Ticket.Key.
-	Records(ctx context.Context, tickets []workfile.Ticket, keys workfile.Keys) (map[string][]workfile.Record, error)
+	Records(ctx context.Context, tickets []workfile.Ticket, keys workfile.Keys, searchBranches bool) (map[string][]workfile.Record, error)
 	// Activity reads what happened on these PRs since each cursor, for wf inbox.
 	Activity(ctx context.Context, prs []workfile.PRCursor) (workfile.ActivityResult, error)
 	// Mine finds open PRs the person wrote or was asked to review, in listed repos.
@@ -169,6 +169,9 @@ returns nothing, with no request, and lists none in `Role.Activity`.
 
 1. Read every PR in `Ticket.LinkedPRs` directly.
 2. For the rest, search for `keys.Search(key)`, a few tickets per request.
+   When the caller requests branch discovery, also search by branch prefix
+   where the code host supports it. Named-ticket reads request this search.
+   Bulk board reads and Inbox polls use the batched text search.
 3. Search matches loosely, so keep a result only if `keys.Mentions` finds the key
    in its title or branch, or `keys.Links` finds it in its body.
 

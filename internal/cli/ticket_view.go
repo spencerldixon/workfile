@@ -185,8 +185,8 @@ func unmet(checks []workfile.Check) int {
 
 // attentionItem is one fix, and where it applies.
 type attentionItem struct {
-	target, link, action, gate string
-	to                         []string
+	target, link, action, gate, fact string
+	to                               []string
 }
 
 // blockers lists each unmet fix once, under the ticket or PR it applies to.
@@ -227,11 +227,25 @@ func (m *ticketModel) blockers() []attentionItem {
 					return i.target == target && i.link == link && i.action == action && i.gate == check.Gate
 				})
 				if at < 0 {
-					items = append(items, attentionItem{target: target, link: link, action: action, gate: check.Gate})
+					items = append(items, attentionItem{target: target, link: link, action: action, gate: check.Gate, fact: check.Condition.Fact})
 					at = len(items) - 1
 				}
 				if s.label != "" && !slices.Contains(items[at].to, s.label) {
 					items[at].to = append(items[at].to, s.label)
+				}
+			}
+		}
+	}
+	if m.to == "" {
+		for _, provider := range workfile.SortedKeys(a.Ticket.Records) {
+			for _, pr := range a.Ticket.Records[provider] {
+				if pr.UnresolvedReviewThreads {
+					items = append(items, attentionItem{target: pr.ID, link: pr.URL, action: workfile.ResolveReviewThreads})
+				}
+				if pr.Facts["state"] == "open" && pr.Facts["checks"] == "failure" && pr.Unavailable["checks"] == "" && !slices.ContainsFunc(items, func(item attentionItem) bool {
+					return item.link == pr.URL && item.target == pr.ID && item.fact == "checks"
+				}) {
+					items = append(items, attentionItem{target: pr.ID, link: pr.URL, action: "Fix failing checks", fact: "checks"})
 				}
 			}
 		}
@@ -279,7 +293,11 @@ func (m *ticketModel) fixes(items []attentionItem) []string {
 		n++
 		prefix := fmt.Sprintf("  %d. ", n)
 		lead := strings.Repeat(" ", runewidth.StringWidth(prefix))
-		text := item.action + " — " + human(item.gate) + "."
+		text := item.action
+		if item.gate != "" {
+			text += " - " + human(item.gate)
+		}
+		text += "."
 		for i, line := range wrapped(text, max(1, m.width()-runewidth.StringWidth(prefix))) {
 			if i == 0 {
 				lines = append(lines, m.t.bad(prefix)+line)
@@ -300,7 +318,7 @@ func (m *ticketModel) pullRequests() []string {
 	entries := prEntries(m.a)
 	lines := []string{m.heading("Pull requests")}
 	if len(entries) == 0 {
-		message := "No linked PRs. A PR links when its title names the ticket, or its description links to it."
+		message := "No linked PRs. Include the ticket key in the PR title, start its branch with the key, or link to the ticket in the description."
 		if len(m.w.Providers) == 1 {
 			message = "No GitHub provider configured."
 		}

@@ -94,8 +94,13 @@ func TestNextActionsRequiredReviewerCannotBeHiddenByAnotherRequest(t *testing.T)
 	a.Routes[0].Checks[0].By = []string{"alice"}
 	a.Ticket.Records["code"][0].Facts["review_requests"] = []string{"example-someone-else"}
 	got := w.NextActions(a, who)
-	if got.State != NeedsMe || got.Summary != "Request the required review" {
+	if got.State != NeedsMe || got.Summary != "Request review from alice" {
 		t.Fatalf("wrong reviewer counted as waiting: %+v", got)
+	}
+	a.Ticket.Records["code"][0].Facts["review_requests"] = []string{"example-reviewer"}
+	got = w.NextActions(a, who)
+	if got.State != Waiting || got.Summary != "Waiting for approval from alice" || len(got.Actions) != 1 {
+		t.Fatalf("named approval wait should replace the generic wait: %+v", got)
 	}
 }
 

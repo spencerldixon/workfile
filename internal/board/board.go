@@ -15,7 +15,7 @@ import (
 // Source is what board needs to read tickets and their records.
 type Source interface {
 	Tickets(ctx context.Context, keys []string, limit int) ([]workfile.Ticket, error)
-	Records(ctx context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error)
+	Records(ctx context.Context, tickets []workfile.Ticket, searchBranches bool) ([]workfile.Ticket, []string, error)
 }
 
 // Query says which tickets to read. Limit 0 reads every ticket in scope.
@@ -48,7 +48,7 @@ func Read(ctx context.Context, w *workfile.Workspace, src Source, q Query) (Resu
 			r.Missing = append(r.Missing, key)
 		}
 	}
-	tickets, r.Warnings, err = src.Records(ctx, tickets)
+	tickets, r.Warnings, err = src.Records(ctx, tickets, len(q.Keys) > 0)
 	if err != nil {
 		return r, err
 	}

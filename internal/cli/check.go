@@ -43,7 +43,7 @@ func checkMove(ctx context.Context, e env) (int, error) {
 	if len(tickets) == 0 {
 		return 2, fmt.Errorf("%s is not visible to your %s token: check the key, or ask for access", o.keys[0], w.TrackerLabel())
 	}
-	tickets, warnings, err := client.Records(ctx, tickets[:1])
+	tickets, warnings, err := client.Records(ctx, tickets[:1], true)
 	finish()
 	if err != nil {
 		return 2, err

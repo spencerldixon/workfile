@@ -38,6 +38,20 @@ func TestTicketScreenSaysWhenNothingNeedsAttention(t *testing.T) {
 	}
 }
 
+func TestTicketScreenShowsOpenReviewThreadsAndFailedChecksWithoutAGate(t *testing.T) {
+	ticket := fixtureTicket("APP-42", "todo", strings.Repeat("x", 120))
+	ticket.Records = map[string][]workfile.Record{"github": {{
+		ID: "app#7", URL: "https://example.com/app/pull/7",
+		Facts: workfile.Facts{"state": "open", "checks": "failure"}, UnresolvedReviewThreads: true,
+	}}}
+	out := ticketScreen(t, 80, ticket)
+	for _, want := range []string{"Resolve open review threads.", "Fix failing checks."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestTicketScreenExplainsTicketsOutsideTheBoardSearch(t *testing.T) {
 	tk := fixtureTicket("APP-42", "todo", strings.Repeat("x", 120))
 	tk.OutOfScope = true

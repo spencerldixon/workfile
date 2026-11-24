@@ -220,7 +220,7 @@ func TestGitHubPaginationLinkingAndApprovals(t *testing.T) {
 		t.Errorf("unexpected query %s", query)
 		return 400, `{}`
 	})
-	items, notes, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-12"}})
+	items, notes, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-12"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,7 +267,7 @@ func TestGitHubSearchesByKeyInBatches(t *testing.T) {
 	for i := 1; i <= 7; i++ {
 		tickets = append(tickets, workfile.Ticket{Key: fmt.Sprintf("APP-%d", i)})
 	}
-	items, _, err := c.Records(context.Background(), tickets)
+	items, _, err := c.Records(context.Background(), tickets, false)
 	if err != nil {
 		t.Fatal(err)
 	}

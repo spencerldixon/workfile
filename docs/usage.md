@@ -173,8 +173,9 @@ the initial search through scope.
 
 - **Where it is:** the configured workflow, with the current stage highlighted
   or in brackets in plain text. Branches and returns match `wf lint`.
-- **Needs attention:** unmet requirements, grouped by ticket and PR, numbered
-  across the report. Each fix names the destinations it unblocks.
+- **Needs attention:** unmet requirements, open review threads, and failing
+  checks, grouped by ticket and PR and numbered across the report. Policy fixes
+  name the destinations they unblock.
 - **Pull requests:** linked PRs and current evidence. Queued PRs say
   **Queued for merge** and **Wait for merge**; queue membership is not a pass
   or a merge.
@@ -183,6 +184,10 @@ the initial search through scope.
 For `github.checks == success`, checks must pass on every linked PR's current
 commit. Next steps distinguish waiting, failing checks and CI that has not run.
 Missing required evidence is **cannot check**, not an empty result or a pass.
+
+Named-ticket lookups can find PRs whose branch starts with the ticket key.
+Put the key in the title or include the ticket URL in the PR description to
+link PRs in bulk board reads as well. See [how PRs are found](providers/github.md#how-prs-are-found).
 
 ### Since: what changed?
 

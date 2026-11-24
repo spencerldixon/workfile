@@ -471,7 +471,7 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 	records := func(t *testing.T, tickets []workfile.Ticket) (map[string][]workfile.Record, *recorder) {
 		t.Helper()
 		c, h, rec := fresh(t)
-		got, err := h.Records(ctx, tickets, keysOf(c))
+		got, err := h.Records(ctx, tickets, keysOf(c), false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -486,7 +486,7 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 		if message, err := h.Test(ctx); err != nil || message == "" {
 			t.Errorf("test %q: %v", message, err)
 		}
-		if _, err := h.Records(ctx, f.Tickets, keysOf(c)); err != nil {
+		if _, err := h.Records(ctx, f.Tickets, keysOf(c), false); err != nil {
 			t.Error(err)
 		}
 	})
@@ -495,7 +495,7 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 		c, h, rec := fresh(t)
 		rec.failAll = true
 		tokens := secrets(t, c, f.Provider)
-		_, err := h.Records(ctx, f.Tickets, keysOf(c))
+		_, err := h.Records(ctx, f.Tickets, keysOf(c), false)
 		noLeak(t, "Records", err, tokens)
 		_, err = h.Identity(ctx)
 		noLeak(t, "Identity", err, tokens)
@@ -569,7 +569,7 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 			t.Fatal("the fixture needs a ticket with LinkedPRs")
 		}
 		c, h, rec := fresh(t)
-		got, err := h.Records(ctx, linked, keysOf(c))
+		got, err := h.Records(ctx, linked, keysOf(c), false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -598,7 +598,7 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 		}
 		c, h, _ := fresh(t)
 		keys := keysOf(c)
-		got, err := h.Records(ctx, searched, keys)
+		got, err := h.Records(ctx, searched, keys, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -681,7 +681,7 @@ func conformCodeHost(t *testing.T, f hostFixture) {
 		for n := 1; n <= total; n++ {
 			c, h, rec := fresh(t)
 			rec.failAt = n
-			_, err := h.Records(ctx, f.Tickets, keysOf(c))
+			_, err := h.Records(ctx, f.Tickets, keysOf(c), false)
 			noLeak(t, fmt.Sprintf("request %d of %d failing", n, total), err, secrets(t, c, f.Provider))
 		}
 	})

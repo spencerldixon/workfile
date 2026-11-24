@@ -14,7 +14,7 @@ func TestCodeHostDropsPRsFromUnlistedRepos(t *testing.T) {
 	p := c.Workspace.Providers["github"]
 	p.Repos = workfile.Names{"api"}
 	c.Workspace.Providers["github"] = p
-	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}}})
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestCodeHostDropsSearchedPRsFromUnlistedReposAfterReading(t *testing.T) {
 	p := c.Workspace.Providers["github"]
 	p.Repos = workfile.Names{"api"}
 	c.Workspace.Providers["github"] = p
-	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-2"}})
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-2"}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func TestCodeHostKeepsListedAndAllRepos(t *testing.T) {
 		p := c.Workspace.Providers["github"]
 		p.Repos = repos
 		c.Workspace.Providers["github"] = p
-		items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}}})
+		items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}}}, false)
 		if err != nil || len(items[0].Records["github"]) != 1 {
 			t.Fatalf("%v: %+v, %v", repos, items[0].Records, err)
 		}

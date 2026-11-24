@@ -19,7 +19,7 @@ type connection interface {
 // codeHost is where pull requests live. Records links them to tickets.
 type codeHost interface {
 	connection
-	Records(ctx context.Context, tickets []workfile.Ticket, keys workfile.Keys) (map[string][]workfile.Record, error)
+	Records(ctx context.Context, tickets []workfile.Ticket, keys workfile.Keys, searchBranches bool) (map[string][]workfile.Record, error)
 	// Activity reads what happened on these PRs since each cursor, for the
 	// inbox, asking first which changed at all. Kinds are in Role.Activity.
 	Activity(ctx context.Context, prs []workfile.PRCursor) (workfile.ActivityResult, error)

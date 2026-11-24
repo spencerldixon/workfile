@@ -67,7 +67,7 @@ func TestJSONErrorsEmptyAndMissingTickets(t *testing.T) {
 
 type failingRead struct{ fakeSource }
 
-func (*failingRead) Records(context.Context, []workfile.Ticket) ([]workfile.Ticket, []string, error) {
+func (*failingRead) Records(context.Context, []workfile.Ticket, bool) ([]workfile.Ticket, []string, error) {
 	return nil, nil, errors.New("provider unavailable")
 }
 func TestJSONProviderFailureCannotProduceReadiness(t *testing.T) {

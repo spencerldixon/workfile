@@ -171,7 +171,7 @@ func readWork(ctx context.Context, e env, who map[string]string, work []workfile
 		warn(err)
 		return
 	}
-	tickets, _, err = e.client.Records(ctx, tickets)
+	tickets, _, err = e.client.Records(ctx, tickets, false)
 	if err != nil {
 		warn(err)
 	}

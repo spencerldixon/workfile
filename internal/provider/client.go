@@ -177,7 +177,7 @@ func graphData(data json.RawMessage, target any) error {
 	return nil
 }
 
-func (c *Client) Records(ctx context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error) {
+func (c *Client) Records(ctx context.Context, tickets []workfile.Ticket, searchBranches bool) ([]workfile.Ticket, []string, error) {
 	if len(tickets) == 0 {
 		return tickets, nil, nil
 	}
@@ -194,7 +194,7 @@ func (c *Client) Records(ctx context.Context, tickets []workfile.Ticket) ([]work
 		if !ok {
 			return nil, nil, fmt.Errorf("%s: not a code host", name)
 		}
-		linked, err := host.Records(ctx, tickets, keys)
+		linked, err := host.Records(ctx, tickets, keys, searchBranches)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", name, err)
 		}

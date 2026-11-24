@@ -167,11 +167,12 @@ type Record struct {
 	ID, URL, Title, Summary string
 	ChecksURL               string // optional direct link to this code host's check results
 	// Head is the latest commit, so a check can tell whether a PR changed.
-	Head        string
-	Repository  string
-	People      []string
-	Facts       Facts
-	Unavailable map[string]string
+	Head                    string
+	Repository              string
+	People                  []string
+	Facts                   Facts
+	Unavailable             map[string]string
+	UnresolvedReviewThreads bool
 }
 
 type Reason struct {

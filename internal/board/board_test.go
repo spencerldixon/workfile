@@ -29,7 +29,7 @@ func (f *fake) Tickets(_ context.Context, keys []string, limit int) ([]workfile.
 	return out, nil
 }
 
-func (f *fake) Records(_ context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error) {
+func (f *fake) Records(_ context.Context, tickets []workfile.Ticket, _ bool) ([]workfile.Ticket, []string, error) {
 	return tickets, f.warnings, nil
 }
 

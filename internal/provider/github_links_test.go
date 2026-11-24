@@ -2,14 +2,55 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"workfile/internal/workfile"
 )
+
+func TestNamedTicketUnionsTextAndBranchSearches(t *testing.T) {
+	var mu sync.Mutex
+	var searches, reads []string
+	c := client(t, func(r *http.Request) (int, string) {
+		body := requestBody(t, r)
+		vars := body["variables"].(map[string]any)
+		mu.Lock()
+		defer mu.Unlock()
+		if q, ok := vars["q"].(string); ok {
+			searches = append(searches, q)
+			if strings.Contains(q, `head:"APP-12"`) {
+				return 200, `{"data":{"search":{"issueCount":3,"nodes":[
+					{"id":"1","title":"Fix form","headRefName":"APP-12-form","state":"OPEN"},
+					{"id":"2","title":"Fix preview","headRefName":"APP-12-preview","state":"OPEN"},
+					{"id":"3","title":"Other ticket","headRefName":"APP-123-preview","state":"OPEN"}
+				]}}}`
+			}
+			return 200, `{"data":{"search":{"issueCount":1,"nodes":[
+				{"id":"1","title":"Fix form","body":"https://example-team.atlassian.net/browse/APP-12","state":"OPEN"}
+			]}}}`
+		}
+		id := vars["id"].(string)
+		reads = append(reads, id)
+		return 200, fmt.Sprintf(`{"data":{"node":{"id":%q,"number":%s,"state":"OPEN","repository":{"name":"app"},"labels":{"nodes":[]},"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]},"reviewThreads":{"nodes":[{"isResolved":%t}]}}}}`, id, id, id == "1")
+	})
+	tickets, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-12"}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(searches)
+	slices.Sort(reads)
+	if len(searches) != 2 || !strings.Contains(searches[0], `head:"APP-12"`) || !strings.Contains(searches[1], `in:title,body "APP-12"`) || !slices.Equal(reads, []string{"1", "2"}) || len(tickets[0].Records["github"]) != 2 {
+		t.Fatalf("searches %v, detail reads %v, tickets %+v", searches, reads, tickets)
+	}
+	if records := tickets[0].Records["github"]; records[0].UnresolvedReviewThreads || !records[1].UnresolvedReviewThreads {
+		t.Fatalf("review threads %+v", records)
+	}
+}
 
 const refPR = `{"data":{"repository":{"pullRequest":{"id":"pr7","number":7,"title":"Change","state":"OPEN","url":"https://github.com/example-team/app/pull/7","repository":{"name":"app"},"author":{"login":"bob"},"labels":{"nodes":[]},"latestOpinionatedReviews":{"nodes":[]},"reviewRequests":{"nodes":[]}}}}}`
 
@@ -47,7 +88,7 @@ func searches(queries []string) int {
 
 func TestLinkedPRsAreReadWithNoSearch(t *testing.T) {
 	c, queries := linkServer(t, `{"data":{"search":{"issueCount":0,"nodes":[]}}}`)
-	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}}})
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +106,7 @@ func TestTicketsWithoutLinksStillSearch(t *testing.T) {
 	items, _, err := c.Records(context.Background(), []workfile.Ticket{
 		{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}},
 		{Key: "APP-2"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +126,7 @@ func TestTicketsWithoutLinksStillSearch(t *testing.T) {
 
 func TestLinkFromAnotherOrgIsIgnored(t *testing.T) {
 	c, queries := linkServer(t, `{"data":{"search":{"issueCount":0,"nodes":[]}}}`)
-	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"other-org/app#7"}}})
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"other-org/app#7"}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +137,7 @@ func TestLinkFromAnotherOrgIsIgnored(t *testing.T) {
 
 func TestLinkIgnoresTheCaseOfTheOrg(t *testing.T) {
 	c, queries := linkServer(t, `{"data":{"search":{"issueCount":0,"nodes":[]}}}`)
-	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"Example-Team/App#7"}}})
+	items, _, err := c.Records(context.Background(), []workfile.Ticket{{Key: "APP-1", LinkedPRs: []string{"Example-Team/App#7"}}}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +151,7 @@ func TestChangeLinkedToTwoTicketsAppearsUnderBoth(t *testing.T) {
 	items, _, err := c.Records(context.Background(), []workfile.Ticket{
 		{Key: "APP-1", LinkedPRs: []string{"example-team/app#7"}},
 		{Key: "APP-2", LinkedPRs: []string{"example-team/app#7"}},
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +178,7 @@ func (hashKeys) Links(body string) []string                  { return hashKey.Fi
 func TestKeysAreMatchedAsGiven(t *testing.T) {
 	c, _ := linkServer(t, `{"data":{"search":{"issueCount":1,"nodes":[{"id":"pr1","title":"fix app#42","state":"OPEN"}]}}}`)
 	host := githubCodeHost{Client: c, name: "github"}
-	got, err := host.Records(context.Background(), []workfile.Ticket{{Key: "app#42"}, {Key: "app#43"}}, hashKeys{})
+	got, err := host.Records(context.Background(), []workfile.Ticket{{Key: "app#42"}, {Key: "app#43"}}, hashKeys{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

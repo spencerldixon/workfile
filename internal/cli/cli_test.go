@@ -114,7 +114,7 @@ func (f *fakeSource) Tickets(_ context.Context, keys []string, limit int) ([]wor
 	}
 	return result, nil
 }
-func (f *fakeSource) Records(_ context.Context, tickets []workfile.Ticket) ([]workfile.Ticket, []string, error) {
+func (f *fakeSource) Records(_ context.Context, tickets []workfile.Ticket, _ bool) ([]workfile.Ticket, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	result := slices.Clone(tickets)

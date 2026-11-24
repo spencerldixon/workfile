@@ -218,6 +218,9 @@ func buildRow(in InboxInput, st InboxState, item inboxItem) (InboxRow, bool) {
 					add(RowComments, text, comments[len(comments)-1].Key(), r)
 					row := &cands[len(cands)-1].row
 					row.Who, row.Count, row.Since = who, len(comments), comments[0].At
+				} else if r.UnresolvedReviewThreads {
+					add(RowNeedsWork, ResolveReviewThreads+" on "+label, r.Head+"|review_threads", r)
+					cands[len(cands)-1].row.Fix = ResolveReviewThreads
 				}
 			}
 		}

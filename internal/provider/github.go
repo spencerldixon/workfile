@@ -46,6 +46,7 @@ type pullRequest struct {
 	Labels                             graphConnection[label]
 	LatestOpinionatedReviews           graphConnection[review]
 	ReviewRequests                     graphConnection[reviewRequest]
+	ReviewThreads                      graphConnection[struct{ IsResolved *bool }]
 }
 
 const repositoryQuery = `query($org: String!, $after: String) {
@@ -66,6 +67,7 @@ const prFields = `
   labels(first: 100) { nodes { name } pageInfo { hasNextPage endCursor } }
   latestOpinionatedReviews(first: 100) { nodes { state author { login } commit { oid } } pageInfo { hasNextPage endCursor } }
   reviewRequests(first: 100) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } pageInfo { hasNextPage endCursor } }
+  reviewThreads(first: 100) { nodes { isResolved } pageInfo { hasNextPage endCursor } }
 `
 
 // Discovery only needs the fields used to link a PR to a ticket. Fetch expensive
@@ -259,7 +261,7 @@ func parallel[T any](ctx context.Context, count int, run func(context.Context, i
 	return results, nil
 }
 
-func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, tk workfile.Keys) (map[string][]workfile.Record, error) {
+func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, tk workfile.Keys, searchBranches bool) (map[string][]workfile.Record, error) {
 	name := c.name
 	p := c.Workspace.Providers[name]
 	token, err := c.Credentials.Get(p.Auth["token"])
@@ -293,6 +295,11 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 		}
 	}
 	queries := keySearches(p.Org, searchTerms)
+	if searchBranches {
+		for _, term := range searchTerms {
+			queries = append(queries, fmt.Sprintf("org:%s is:pr archived:false head:%s", p.Org, strconv.Quote(term)))
+		}
+	}
 	results, err := parallel(ctx, len(queries), func(ctx context.Context, i int) ([]pullRequest, error) {
 		return c.searchPRs(ctx, token, queries[i], false)
 	})
@@ -423,18 +430,26 @@ func (c *Client) completePR(ctx context.Context, token string, pr *pullRequest) 
 	if pr.Labels.Nodes == nil || pr.LatestOpinionatedReviews.Nodes == nil || pr.ReviewRequests.Nodes == nil {
 		return errors.New("GitHub returned incomplete facts for a linked PR")
 	}
-	// Large PRs need further pages for labels, reviews, or review requests.
-	const query = `query($id: ID!, $labels: String, $reviews: String, $requests: String) {
+	// We only need to know whether at least one review thread is unresolved.
+	const query = `query($id: ID!, $labels: String, $reviews: String, $requests: String, $threads: String, $readThreads: Boolean!) {
       node(id: $id) { ... on PullRequest {
         labels(first: 100, after: $labels) { nodes { name } pageInfo { hasNextPage endCursor } }
         latestOpinionatedReviews(first: 100, after: $reviews) { nodes { state author { login } commit { oid } } pageInfo { hasNextPage endCursor } }
         reviewRequests(first: 100, after: $requests) { nodes { requestedReviewer { ... on User { login } ... on Team { slug } } } pageInfo { hasNextPage endCursor } }
+        reviewThreads(first: 100, after: $threads) @include(if: $readThreads) { nodes { isResolved } pageInfo { hasNextPage endCursor } }
       } }
     }`
-	seen := map[string]map[string]bool{"labels": {}, "reviews": {}, "requests": {}}
-	for pr.Labels.PageInfo.HasNextPage || pr.LatestOpinionatedReviews.PageInfo.HasNextPage || pr.ReviewRequests.PageInfo.HasNextPage {
-		variables := map[string]any{"id": pr.ID}
+	seen := map[string]map[string]bool{"labels": {}, "reviews": {}, "requests": {}, "threads": {}}
+	for {
+		readThreads := pr.State == "OPEN" && pr.ReviewThreads.PageInfo.HasNextPage && !pr.hasUnresolvedReviewThreads()
+		if !pr.Labels.PageInfo.HasNextPage && !pr.LatestOpinionatedReviews.PageInfo.HasNextPage && !pr.ReviewRequests.PageInfo.HasNextPage && !readThreads {
+			break
+		}
+		variables := map[string]any{"id": pr.ID, "readThreads": readThreads}
 		infos := map[string]pageInfo{"labels": pr.Labels.PageInfo, "reviews": pr.LatestOpinionatedReviews.PageInfo, "requests": pr.ReviewRequests.PageInfo}
+		if readThreads {
+			infos["threads"] = pr.ReviewThreads.PageInfo
+		}
 		for name, info := range infos {
 			cursor, err := nextCursor(info, seen[name])
 			if err != nil {
@@ -467,8 +482,24 @@ func (c *Client) completePR(ctx context.Context, token string, pr *pullRequest) 
 			pr.ReviewRequests.Nodes = append(pr.ReviewRequests.Nodes, next.ReviewRequests.Nodes...)
 			pr.ReviewRequests.PageInfo = next.ReviewRequests.PageInfo
 		}
+		if readThreads {
+			if next.ReviewThreads.Nodes == nil {
+				return errors.New("GitHub returned an incomplete review thread page")
+			}
+			pr.ReviewThreads.Nodes = append(pr.ReviewThreads.Nodes, next.ReviewThreads.Nodes...)
+			pr.ReviewThreads.PageInfo = next.ReviewThreads.PageInfo
+		}
 	}
 	return nil
+}
+
+func (p pullRequest) hasUnresolvedReviewThreads() bool {
+	for _, thread := range p.ReviewThreads.Nodes {
+		if thread.IsResolved != nil && !*thread.IsResolved {
+			return true
+		}
+	}
+	return false
 }
 
 func (p pullRequest) record() workfile.Record {
@@ -571,5 +602,6 @@ func (p pullRequest) record() workfile.Record {
 		ID: fmt.Sprintf("%s#%d", p.Repository.Name, p.Number), URL: p.URL, ChecksURL: checksURL, Title: p.Title, Summary: strings.Join(parts, " · "), Head: p.HeadRefOID,
 		People: append([]string{p.Author.Login}, reviewers...),
 		Facts:  facts, Unavailable: unavailable,
+		UnresolvedReviewThreads: state == "open" && p.hasUnresolvedReviewThreads(),
 	}
 }
