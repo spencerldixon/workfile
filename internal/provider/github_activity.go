@@ -215,7 +215,8 @@ func (c githubCodeHost) InboxPRs(ctx context.Context, reviews bool, repos []stri
 	if err != nil {
 		return nil, err
 	}
-	search := strings.Replace(searchQuery, discoveryFields, prFields, 1)
+	search := strings.Replace(searchQuery, discoveryFields, prFields+" body", 1)
+	keys := c.Workspace.TrackerKeys()
 	var records []workfile.Record
 	seen := map[string]bool{}
 	scopes := []string{fmt.Sprintf("author:@me org:%s", p.Org)}
@@ -251,6 +252,7 @@ func (c githubCodeHost) InboxPRs(ctx context.Context, reviews bool, repos []stri
 			}
 			r := pr.record()
 			r.Repository = p.Org + "/" + pr.Repository.Name
+			r.TicketKeys = pr.ticketKeys(keys)
 			seen[id] = true
 			records = append(records, r)
 		}

@@ -323,11 +323,7 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 				continue
 			}
 			seen[pr.ID] = true
-			found := tk.Mentions(pr.Title + " " + pr.HeadRefName)
-			found = append(found, tk.Links(pr.Body)...)
-			slices.Sort(found)
-			found = slices.Compact(found)
-			found = slices.DeleteFunc(found, func(key string) bool { return !wanted[key] })
+			found := slices.DeleteFunc(pr.ticketKeys(tk), func(key string) bool { return !wanted[key] })
 			if len(found) > 0 {
 				matched = append(matched, linkedPR{id: pr.ID, keys: found})
 			}
@@ -363,6 +359,13 @@ func (c githubCodeHost) Records(ctx context.Context, tickets []workfile.Ticket, 
 		}
 	}
 	return linked, nil
+}
+
+func (p pullRequest) ticketKeys(keys workfile.Keys) []string {
+	found := keys.Mentions(p.Title + " " + p.HeadRefName)
+	found = append(found, keys.Links(p.Body)...)
+	slices.Sort(found)
+	return slices.Compact(found)
 }
 
 // splitRef reads "org/repo#42". It reports false for a PR in another

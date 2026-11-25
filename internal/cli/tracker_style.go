@@ -5,7 +5,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"workfile/internal/workfile"
 )
 
 func (t theme) roundedTag(body string, fill, ink lipgloss.ANSIColor) string {
@@ -25,47 +24,4 @@ func alignPair(left, right string, width int) string {
 	}
 	left = ansi.Truncate(left, room, "…")
 	return left + strings.Repeat(" ", max(0, width-ansi.StringWidth(left)-ansi.StringWidth(right))) + right
-}
-
-func attentionIcon(state workfile.AttentionState) string {
-	switch state {
-	case workfile.NeedsMe:
-		return "✗"
-	case workfile.ReadyToMove:
-		return "✓"
-	case workfile.Waiting:
-		return "…"
-	case workfile.AttentionDone:
-		return "·"
-	default:
-		return "!"
-	}
-}
-
-func trackerAttentionIcon(state workfile.AttentionState, colour bool) string {
-	switch state {
-	case workfile.NeedsMe:
-		return setupIcon(colour, attentionIcon(state), "󰅖")
-	case workfile.ReadyToMove:
-		return setupIcon(colour, attentionIcon(state), "󰄬")
-	case workfile.Waiting:
-		return setupIcon(colour, attentionIcon(state), "󰔛")
-	case workfile.AttentionUnknown:
-		return setupIcon(colour, attentionIcon(state), "󰋼")
-	default:
-		return attentionIcon(state)
-	}
-}
-
-func attentionStyle(state workfile.AttentionState, neutral lipgloss.Style) lipgloss.Style {
-	switch state {
-	case workfile.NeedsMe:
-		return lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(1))
-	case workfile.ReadyToMove:
-		return lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(2))
-	case workfile.Waiting, workfile.AttentionUnknown:
-		return lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(3))
-	default:
-		return neutral
-	}
 }

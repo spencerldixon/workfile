@@ -123,7 +123,10 @@ func workflowCase(tone string) (workfile.Policy, workfile.Assessment) {
 }
 
 func TestWorkfileDiagramColoursCurrentStageAndSaysWhy(t *testing.T) {
-	for tone, caption := range map[string]string{green: "✓ Can move on", red: "✗ Blocked"} {
+	for tone, captions := range map[string][2]string{
+		green: {"󰄬 Can move on", "✓ Can move on"},
+		red:   {"󰅖 Blocked", "✗ Blocked"},
+	} {
 		policy, assessment := workflowCase(tone)
 		pane := workfilePane{policy: policy, assessment: &assessment, width: 60, t: newTheme(true, ""), v: view{color: true}}
 		text := strings.Join(pane.where(), "\n")
@@ -133,8 +136,12 @@ func TestWorkfileDiagramColoursCurrentStageAndSaysWhy(t *testing.T) {
 		if strings.Contains(text, "[Doing]") {
 			t.Fatal("coloured output kept the plain marker")
 		}
-		if !strings.Contains(ansi.Strip(text), caption) {
-			t.Fatalf("colour needs words too, missing %q", caption)
+		if !strings.Contains(ansi.Strip(text), captions[0]) {
+			t.Fatalf("missing the shared status icon and caption %q", captions[0])
+		}
+		pane.t, pane.v.color = newTheme(false, ""), false
+		if plain := strings.Join(pane.where(), "\n"); !strings.Contains(plain, captions[1]) || strings.Contains(plain, "\x1b") {
+			t.Fatalf("missing the plain status icon and caption %q:\n%s", captions[1], plain)
 		}
 	}
 }

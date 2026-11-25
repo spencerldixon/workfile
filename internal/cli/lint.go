@@ -82,9 +82,9 @@ func (m *lintModel) render() string {
 	}
 	return m.renderSections(
 		m.summary(),
-		m.findings("Problems", m.problems, m.t.bad("✗ ")),
+		m.findings("Problems", m.problems, m.t.mark(workfile.NeedsMe)+" "),
 		m.gapList(),
-		m.findings("Warnings", m.warnings, m.t.warn("! ")),
+		m.findings("Warnings", m.warnings, m.t.mark(workfile.AttentionUnknown)+" "),
 		m.flow(),
 	)
 }
@@ -135,13 +135,13 @@ func (m *lintModel) summary() []string {
 	lines := []string{m.t.accent(m.invocation), ""}
 	switch {
 	case len(m.problems) > 0:
-		lines = append(lines, m.t.bad("✗ ")+m.t.bold("Fail")+m.t.dim("  "+quantity(len(m.problems), "problem", "problems")+" in .workfile/"))
+		lines = append(lines, m.t.mark(workfile.NeedsMe)+" "+m.t.bold("Fail")+m.t.dim("  "+quantity(len(m.problems), "problem", "problems")+" in .workfile/"))
 		return append(lines, m.wrap("The policy can't be used until these are fixed. Then run "+m.invocation+" again.", "  ", m.t.dim)...)
 	case len(m.gaps) > 0:
-		lines = append(lines, m.t.warn("! ")+m.t.bold("Pass")+m.t.dim("  "+quantity(len(m.gaps), "gate", "gates")+" can be skipped"))
+		lines = append(lines, m.t.mark(workfile.AttentionUnknown)+" "+m.t.bold("Pass")+m.t.dim("  "+quantity(len(m.gaps), "gate", "gates")+" can be skipped"))
 		return append(lines, m.wrap("The policy is valid, but a ticket can reach some stages without passing every gate asked for on the way in.", "  ", m.t.dim)...)
 	}
-	lines = append(lines, m.t.good("✓ ")+m.t.bold("Pass"))
+	lines = append(lines, m.t.mark(workfile.ReadyToMove)+" "+m.t.bold("Pass"))
 	return append(lines, m.wrap("Nothing can slip through: every route into a stage passes every gate asked for on the way in.", "  ", m.t.dim)...)
 }
 
@@ -158,7 +158,7 @@ func (m *lintModel) gapList() []string {
 		text := gap.Stage + ": " + human(gap.Gate) + " is skipped by " + joinMoves(gap.Open)
 		for i, line := range wrapped(text, max(4, m.width()-2)) {
 			if i == 0 {
-				lines = append(lines, m.t.warn("! ")+line)
+				lines = append(lines, m.t.mark(workfile.AttentionUnknown)+" "+line)
 			} else {
 				lines = append(lines, "  "+line)
 			}

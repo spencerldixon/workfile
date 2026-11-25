@@ -104,7 +104,7 @@ func (p ticketPreview) ticketBody(r *ticketRead) []ticketBlock {
 	case r == nil || !r.detailDone():
 		return []ticketBlock{{lines: []string{p.t.dim("Reading the ticket…")}}}
 	case r.detailErr != nil:
-		return []ticketBlock{{lines: fit(p.t.bad("! Cannot read this ticket: "+clean(r.detailErr.Error())), "", "", p.textWidth())}}
+		return []ticketBlock{{lines: fit(p.t.mark(workfile.AttentionUnknown)+" Cannot read this ticket: "+clean(r.detailErr.Error()), "", "", p.textWidth())}}
 	}
 	body := []string{p.t.bold("Description"), ""}
 	if len(r.detail.Body) == 0 {

@@ -185,11 +185,11 @@ func (v view) evidenceReport(all []workfile.Assessment, o options) {
 			icon, color := "—", muted
 			switch c.Outcome {
 			case "pass":
-				icon, color = "✓", green
+				icon, color = attentionIcon(workfile.ReadyToMove, v.color), green
 			case "fail":
-				icon, color = "✗", red
+				icon, color = attentionIcon(workfile.NeedsMe, v.color), red
 			case "unknown":
-				icon, color = "!", red
+				icon, color = attentionIcon(workfile.AttentionUnknown, v.color), amber
 			}
 			rows = append(rows, textRows(icon+" "+c.Requirement, "", color, "", v.innerWidth())...)
 			if len(c.Results) == 0 {

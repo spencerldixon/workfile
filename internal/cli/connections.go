@@ -31,11 +31,11 @@ func testConnections(ctx context.Context, e env) (int, error) {
 	for _, name := range names {
 		detail, err := client.Test(ctx, name)
 		if err != nil {
-			v.line("  " + v.paint("31", "✗ "+name))
+			v.line("  " + v.paint(red, attentionIcon(workfile.NeedsMe, v.color)+" "+name))
 			v.wrap(err.Error(), "    ")
 			code = 1
 		} else {
-			v.line("  " + v.paint("32", "✓ "+name))
+			v.line("  " + v.paint(green, attentionIcon(workfile.ReadyToMove, v.color)+" "+name))
 			v.wrap(detail, "    ")
 		}
 		v.line("")

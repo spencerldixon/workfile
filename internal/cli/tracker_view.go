@@ -19,7 +19,7 @@ const trackerFooterRows = 3 // blank line, divider and command hints
 
 func (m *trackerModel) render() string {
 	content := m.renderContent()
-	if m.pickingProject || m.pickingPR {
+	if m.pickingPicker() {
 		return m.renderProjectPicker(content)
 	}
 	return content
@@ -84,7 +84,7 @@ func (m *trackerModel) footer() string {
 	room := max(0, m.width-2*len(ticketIndent))
 	left := ansi.Truncate(m.help.ShortHelpView(m.helpKeys()), room, "")
 	if m.notice != "" {
-		left = ansi.Truncate(m.t.bad("! "+clean(m.notice)), room, "…")
+		left = ansi.Truncate(m.t.mark(workfile.AttentionUnknown)+" "+clean(m.notice), room, "…")
 	}
 	return m.t.onPanel(ticketIndent+left, m.width)
 }
@@ -267,33 +267,31 @@ func (m *trackerModel) row(item ticketItem, selected bool, matches []int) string
 // statusSignal annotates the tracker stage, never inferring readiness from its
 // name. Unread tickets stay neutral. Cached assessments need no extra reads.
 func (m *trackerModel) statusSignal(item ticketItem, neutral lipgloss.Style) (string, lipgloss.Style) {
-	bad := lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(1))
-	good := lipgloss.NewStyle().Foreground(lipgloss.ANSIColor(2))
 	if r := m.ticketReads.byKey[item.Key]; r != nil {
 		if m.overview && r.policyDone() {
 			state := m.nextActions(item.Key).State
-			return trackerAttentionIcon(state, m.t.color), attentionStyle(state, neutral)
+			return attentionIcon(state, m.t.color), attentionStyle(state, neutral)
 		}
 		switch {
 		case r.policyErr != nil:
-			return trackerAttentionIcon(workfile.AttentionUnknown, m.t.color), attentionStyle(workfile.AttentionUnknown, neutral)
+			return attentionIcon(workfile.AttentionUnknown, m.t.color), attentionStyle(workfile.AttentionUnknown, neutral)
 		case r.policy != nil:
 			switch r.policy.Standing() {
 			case workfile.CannotCheck:
-				return trackerAttentionIcon(workfile.AttentionUnknown, m.t.color), attentionStyle(workfile.AttentionUnknown, neutral)
+				return attentionIcon(workfile.AttentionUnknown, m.t.color), attentionStyle(workfile.AttentionUnknown, neutral)
 			case workfile.OutOfPolicy:
-				return setupIcon(m.t.color, "‼", "󰀦"), bad
+				return outOfPolicyIcon(m.t.color), attentionStyle(workfile.NeedsMe, neutral)
 			case workfile.Blocked:
-				return trackerAttentionIcon(workfile.NeedsMe, m.t.color), bad
+				return attentionIcon(workfile.NeedsMe, m.t.color), attentionStyle(workfile.NeedsMe, neutral)
 			case workfile.NeedsWork:
-				return trackerAttentionIcon(workfile.ReadyToMove, m.t.color), good
+				return attentionIcon(workfile.ReadyToMove, m.t.color), attentionStyle(workfile.ReadyToMove, neutral)
 			case workfile.Done:
-				return "·", neutral
+				return attentionIcon(workfile.AttentionDone, m.t.color), neutral
 			}
 		}
 	}
 	if m.e.w.Policy.Transitions[item.State].End {
-		return "·", neutral
+		return attentionIcon(workfile.AttentionDone, m.t.color), neutral
 	}
 	return "→", neutral
 }

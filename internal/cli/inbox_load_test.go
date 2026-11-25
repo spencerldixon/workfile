@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -52,9 +53,201 @@ func TestLoadInboxOnlyInFlight(t *testing.T) {
 		t.Fatalf("activity asked for the wrong PRs: %+v", prs)
 	}
 	rows := inboxRows(d, workfile.NewInboxState())
-	if len(rows) != 1 || rows[0].ID != "APP-1" || !rows[0].Action() {
-		t.Fatalf("want one action row for APP-1: %+v", rows)
+	if len(rows) != 2 || slices.ContainsFunc(rows, func(row workfile.InboxRow) bool { return row.ID != "APP-1" || !row.Action() }) {
+		t.Fatalf("want only action rows for APP-1: %+v", rows)
 	}
+}
+
+func TestLoadInboxLinksDiscoveredPRToTicketAcrossPolls(t *testing.T) {
+	f := inboxSourceFixture()
+	pr := inboxPRRecord("app#85", "example-bob", workfile.Facts{"checks": "failure"})
+	pr.Title = "Fix validation"
+	pr.TicketKeys = []string{"APP-1"}
+	pr.UnresolvedReviewThreads = true
+	f.myPRs = map[string][]workfile.Record{"github": {pr}}
+	e := inboxEnv(t, f)
+	st := workfile.NewInboxState()
+
+	assertLinked := func(d inboxData) {
+		t.Helper()
+		rows := inboxRows(d, st)
+		if len(d.loose["github"]) != 0 || !slices.ContainsFunc(rows, func(row workfile.InboxRow) bool { return row.ID == "APP-1" && row.PR == "#85" }) {
+			t.Fatalf("want a ticket row with the discovered PR: %+v", rows)
+		}
+		if !slices.ContainsFunc(d.work[0].PRs["github"], func(r workfile.Record) bool {
+			return r.ID == pr.ID && r.UnresolvedReviewThreads && r.Facts["checks"] == "failure"
+		}) {
+			t.Fatalf("missing linked PR with its review and CI state: %+v", d.work[0].PRs)
+		}
+	}
+	first := loadInbox(context.Background(), e, st, nil, loadNow, pollFull)
+	assertLinked(first)
+
+	f.updated = map[string]time.Time{pr.ID: loadNow}
+	f.keys = nil
+	quick := loadInbox(context.Background(), e, st, &first, loadNow.Add(time.Minute), pollQuick)
+	if !slices.Equal(f.keys, []string{"APP-1"}) {
+		t.Fatalf("want the ticket re-read after its PR changed, got %v", f.keys)
+	}
+	assertLinked(quick)
+}
+
+func TestLoadInboxAssessesPRsFromBothReads(t *testing.T) {
+	f := inboxSourceFixture()
+	f.tickets[0].Facts["description"] = "Update account settings validation so an empty display name produces a clear message and keeps the previous value."
+	prFacts := workfile.Facts{
+		"labels":    []string{"low-risk"},
+		"approvals": []workfile.Actor{{Value: "example-alice"}},
+	}
+	other := inboxPRRecord("app#84", "example-charlie", prFacts)
+	discovered := inboxPRRecord("app#85", "example-bob", prFacts)
+	discovered.TicketKeys = []string{"APP-1"}
+	discovered.Facts["checks"] = "failure"
+	f.records["APP-1"]["github"] = []workfile.Record{other}
+	f.myPRs = map[string][]workfile.Record{"github": {discovered}}
+	e := inboxEnv(t, f)
+	st := workfile.NewInboxState()
+
+	assertVerdict := func(d inboxData, allowed bool, ids ...string) {
+		t.Helper()
+		a := d.work[0].Assessment
+		var got []string
+		for _, pr := range a.Ticket.Records["github"] {
+			got = append(got, pr.ID)
+		}
+		if !slices.Equal(got, ids) {
+			t.Fatalf("policy evidence = %v, want %v", got, ids)
+		}
+		v := judgeMove(*a, "done")
+		if v.allowed != allowed {
+			t.Fatalf("move allowed = %v, want %v: %+v", v.allowed, allowed, v.unmet)
+		}
+		if !allowed && !slices.ContainsFunc(v.unmet, func(reason workfile.Reason) bool {
+			return reason.Provider == "github" && reason.Record == discovered.ID
+		}) {
+			t.Fatalf("want the Inbox PR reported as a blocker: %+v", v.unmet)
+		}
+		if ready := d.work[0].Next.State == workfile.ReadyToMove; ready != allowed {
+			t.Fatalf("Inbox ready = %v, want %v: %+v", ready, allowed, d.work[0].Next)
+		}
+	}
+	full := loadInbox(context.Background(), e, st, nil, loadNow, pollFull)
+	assertVerdict(full, false, other.ID, discovered.ID)
+
+	passed := inboxPRRecord(discovered.ID, "example-bob", prFacts)
+	passed.TicketKeys = discovered.TicketKeys
+	f.myPRs["github"] = []workfile.Record{passed}
+	f.keys = nil
+	quick := loadInbox(context.Background(), e, st, &full, loadNow.Add(time.Minute), pollQuick)
+	assertVerdict(quick, true, other.ID, discovered.ID)
+	if got := quick.work[0].ReadyReason; got != "CI requirement met" {
+		t.Fatalf("ready reason = %q, want the cleared CI requirement", got)
+	}
+	if len(f.keys) != 0 {
+		t.Fatalf("updated Inbox evidence should need no ticket read, got %v", f.keys)
+	}
+
+	f.records["APP-1"] = map[string][]workfile.Record{"github": {other, discovered}}
+	refresh := loadInbox(context.Background(), e, st, &quick, loadNow.Add(2*time.Minute), pollRefresh)
+	assertVerdict(refresh, true, other.ID, discovered.ID)
+	if got := refresh.work[0].ReadyReason; got != "CI requirement met" {
+		t.Fatalf("quiet refresh lost the ready reason: %q", got)
+	}
+
+	f.myPRs["github"] = nil
+	quick = loadInbox(context.Background(), e, st, &full, loadNow.Add(3*time.Minute), pollQuick)
+	assertVerdict(quick, true, other.ID)
+	if got := quick.work[0].ReadyReason; got != "" {
+		t.Fatalf("a PR disappearing is not a passing check: %q", got)
+	}
+}
+
+func TestLoadInboxExplainsReadyAfterRequiredApproval(t *testing.T) {
+	f := inboxSourceFixture()
+	f.tickets[0].Facts["description"] = "Update account settings validation so an empty display name produces a clear message and keeps the previous value."
+	pr := inboxPRRecord("app#84", "example-bob", workfile.Facts{
+		"labels": []string{"low-risk"}, "approvals": []workfile.Actor{},
+	})
+	f.records["APP-1"]["github"] = []workfile.Record{pr}
+	e := inboxEnv(t, f)
+	st := workfile.NewInboxState()
+	blocked := loadInbox(context.Background(), e, st, nil, loadNow, pollFull)
+
+	approved := pr
+	approved.Facts = maps.Clone(pr.Facts)
+	approved.Facts["approvals"] = []workfile.Actor{{Value: "example-alice"}}
+	f.myPRs = map[string][]workfile.Record{"github": {approved}}
+	ready := loadInbox(context.Background(), e, st, &blocked, loadNow.Add(time.Minute), pollQuick)
+	rows := inboxRows(ready, st)
+	if len(rows) != 1 || rows[0].Kind != workfile.RowReady || rows[0].ReadyReason != "Approval requirement met" {
+		t.Fatalf("want one ready alert with the approval reason: %+v", rows)
+	}
+
+	d := driveInbox(t, workfile.InboxSettings{})
+	d.send(inboxLoadedMsg(ready))
+	d.selectID("APP-1")
+	d.press("enter")
+	if screen := inboxScreen(d); !strings.Contains(screen, "Approval requirement met") || !strings.Contains(screen, "Move to done") {
+		t.Fatalf("ready preview is missing its reason or next step:\n%s", screen)
+	}
+}
+
+func TestLoadInboxSharedPRBlocksBothTicketsWithOneActivityAlert(t *testing.T) {
+	f := inboxSourceFixture()
+	description := "Update account settings validation so an empty display name produces a clear message and keeps the previous value."
+	f.listing[1] = workfile.Listing{Key: "APP-2", State: "review", AssigneeID: "example-bob"}
+	f.tickets = []workfile.Ticket{
+		fixtureTicket("APP-1", "review", description),
+		fixtureTicket("APP-2", "review", description),
+	}
+	passing := inboxPRRecord("app#85", "example-bob", workfile.Facts{
+		"labels":    []string{"low-risk"},
+		"approvals": []workfile.Actor{{Value: "example-alice"}},
+	})
+	failing := passing
+	failing.TicketKeys = []string{"APP-1", "APP-2"}
+	failing.Facts = maps.Clone(passing.Facts)
+	failing.Facts["checks"] = "failure"
+	f.records = nil
+	f.myPRs = map[string][]workfile.Record{"github": {failing}}
+	f.activity = []workfile.Activity{
+		{Connection: "github", PR: failing.ID, Kind: workfile.ActivityComment, WhoID: "example-alice", At: loadNow},
+	}
+	e := inboxEnv(t, f)
+	st := workfile.NewInboxState()
+
+	assertPoll := func(d inboxData, query workfile.ActivityQuery) {
+		t.Helper()
+		if len(d.work) != 2 {
+			t.Fatalf("want two linked tickets, got %d", len(d.work))
+		}
+		for _, w := range d.work {
+			v := judgeMove(*w.Assessment, "done")
+			if v.allowed || len(v.unmet) != 1 || v.unmet[0].Record != failing.ID {
+				t.Errorf("%s should be blocked by %s: %+v", w.Listing.Key, failing.ID, v)
+			}
+		}
+		if len(query.PRs) != 1 || query.PRs[0].ID != failing.ID {
+			t.Errorf("want one activity cursor for the shared PR: %+v", query.PRs)
+		}
+		events := 0
+		for _, row := range inboxRows(d, st) {
+			events += len(row.Events)
+		}
+		if events != 1 {
+			t.Errorf("want one shared PR comment in Inbox, got %d", events)
+		}
+	}
+
+	full := loadInbox(context.Background(), e, st, nil, loadNow, pollFull)
+	assertPoll(full, f.activityQueries[0])
+
+	f.records = map[string]map[string][]workfile.Record{
+		"APP-1": {"github": {passing}},
+		"APP-2": {"github": {passing}},
+	}
+	refresh := loadInbox(context.Background(), e, st, &full, loadNow.Add(time.Minute), pollRefresh)
+	assertPoll(refresh, f.activityQueries[1])
 }
 
 func TestLoadInboxOnlyIncludesRelatedPRs(t *testing.T) {
@@ -76,7 +269,11 @@ func TestLoadInboxOnlyIncludesRelatedPRs(t *testing.T) {
 		t.Fatalf("activity must only poll authored and review-requested PRs: %+v", prs)
 	}
 	rows := inboxRows(d, st)
-	if len(rows) != 1 || len(rows[0].Events) != 1 || rows[0].Events[0] != f.activity[2] {
+	var activity []workfile.Activity
+	for _, row := range rows {
+		activity = append(activity, row.Events...)
+	}
+	if !slices.Equal(activity, []workfile.Activity{f.activity[2]}) {
 		t.Fatalf("want only activity from the related PR on the configured connection: %+v", rows)
 	}
 }
@@ -111,7 +308,7 @@ func TestLoadInboxProviderDown(t *testing.T) {
 	if cannot == nil || !strings.Contains(cannot.Text, "github") {
 		t.Fatalf("a failing provider shows one ! row naming it: %+v", rows)
 	}
-	if len(rows) != 2 {
+	if len(rows) != 3 {
 		t.Fatalf("other rows still built: %+v", rows)
 	}
 }

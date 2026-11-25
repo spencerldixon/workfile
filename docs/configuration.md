@@ -151,10 +151,12 @@ These settings apply to the Inbox tab in `wf tracker`.
 | `poll` | `30s` | Poll interval, at least `30s`. |
 | `review_requests` | `false` | Include PRs awaiting your review. |
 | `repositories` | Unset | Map code-host connection names to repository names within provider scope. Watch CI even on PRs you did not author. |
-| `signals` | All | List the alert types to show. `[]` hides activity rows. |
+| `signals` | All | List the Inbox alert types to show in either scope. `[]` hides activity rows. |
+| `default_scope` | `needs_attention` | Starting Inbox scope. Choose `needs_attention` or `all`. |
+| `attention_signals` | Alerts that need action or evidence | Override the alert types shown under Needs attention. All signals still includes the other configured alerts. |
 | `refresh_every` | `5` | Polls between rereads of known tickets. |
 | `full_every` | `15` | Polls between board reads that find newly assigned tickets. |
-| `snooze` | `1h` | How long `s` hides a row, unless a new blocker appears. |
+| `snooze` | `1h` | How long `z` hides a row, unless a new blocker appears. |
 | `agent` | Unset | Your private command for `a`. Cannot be set in repo config. |
 | `prompts` | Built-in prompts below | Prompt text by row kind; keys merge individually across layers. |
 
@@ -176,7 +178,9 @@ inbox:
   review_requests: false
   repositories:
     example-code-host: [example-api]
-  signals: [checks_failed, checks_passed, ready, out_of_policy]
+  default_scope: needs_attention
+  signals: [checks_failed, checks_passed, ready, out_of_policy, comments]
+  attention_signals: [checks_failed, ready, out_of_policy, comments]
   snooze: 1h
 ```
 
@@ -192,8 +196,9 @@ inbox:
 
 This example requires Rex and Claude to be installed. Use your own launcher.
 It must open its own tab or window: Workfile does not give it the inbox terminal.
-Leaving `agent` unset hides `a`. Pressing `a` starts the command but does not
-clear the row. The launched command or agent can change work with its own access.
+Leaving `agent` unset hides `a`. Press `a` to preview the filled prompt, then Enter
+to launch. The row stays in Inbox until you resolve it. The agent can change
+work with its own access.
 
 Workfile splits the command into arguments before filling placeholders. Quotes
 and backslash escapes group arguments; no shell runs, and shell operators,
@@ -202,7 +207,8 @@ inside its original argument. Missing required placeholder values show a message
 instead of launching the command.
 
 The supported placeholders are `{key}`, `{pr}`, `{url}`, `{stage}`, `{to}`,
-`{who}`, `{count}`, `{fix}` and `{prompt}`. `{prompt}` is the row's filled prompt.
+`{who}`, `{count}`, `{fix}` and `{prompt}`. `{prompt}` includes the filled prompt followed by Workfile context, such as the
+title, links, workflow stage and next action when available.
 
 ### Prompts
 
@@ -212,7 +218,7 @@ any config layer:
 ```yaml
 inbox:
   prompts:
-    default: "Get {pr} past {stage} for {key}"
+    default: "Explain what is blocking {key} and suggest the next step"
     changes_requested: "Address {who}'s review on {pr} for {key}"
     comments: "Answer the {count} new comments on {pr} for {key}"
     review_requested: "Review {pr} for {who}"

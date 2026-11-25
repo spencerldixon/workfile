@@ -133,7 +133,7 @@ func (m *trackerModel) boardCard(item ticketItem, selected bool, width int) []st
 	result := m.nextActions(item.Key)
 	head := m.t.bold(m.v.link(clean(item.Key), clean(item.URL)))
 	if showAttention {
-		head = m.boardPaint(result.State, attentionIcon(result.State)) + " " + head
+		head = m.boardPaint(result.State, attentionIcon(result.State, m.t.color)) + " " + head
 	}
 	if selected {
 		head += m.t.dim(" selected")
@@ -144,7 +144,7 @@ func (m *trackerModel) boardCard(item ticketItem, selected bool, width int) []st
 		ticketActions := 0
 		for _, action := range result.Actions {
 			if action.Target == item.Key {
-				lines = append(lines, fit(m.boardPaint(action.State, attentionIcon(action.State)+" "+clean(action.Text)), "  ", "  ", width-2)...)
+				lines = append(lines, fit(m.boardPaint(action.State, attentionIcon(action.State, m.t.color)+" "+clean(action.Text)), "  ", "  ", width-2)...)
 				ticketActions++
 			}
 		}
@@ -153,7 +153,7 @@ func (m *trackerModel) boardCard(item ticketItem, selected bool, width int) []st
 			if len(result.Actions) > 0 {
 				label = map[workfile.AttentionState]string{workfile.NeedsMe: "Needs you", workfile.Waiting: "Waiting", workfile.ReadyToMove: "Ready to move", workfile.AttentionUnknown: "Cannot establish next action", workfile.AttentionDone: "Done"}[result.State]
 			}
-			lines = append(lines, fit(m.boardPaint(result.State, attentionIcon(result.State)+" "+clean(label)), "  ", "  ", width-2)...)
+			lines = append(lines, fit(m.boardPaint(result.State, attentionIcon(result.State, m.t.color)+" "+clean(label)), "  ", "  ", width-2)...)
 		}
 	}
 	r := m.ticketReads.byKey[item.Key]
@@ -168,7 +168,7 @@ func (m *trackerModel) boardCard(item ticketItem, selected bool, width int) []st
 				if showAttention {
 					for _, action := range result.Actions {
 						if action.Target == record.ID && (action.URL == "" || action.URL == record.URL) {
-							lines = append(lines, fit(m.boardPaint(action.State, attentionIcon(action.State)+" "+clean(action.Text)), "    ", "    ", width-2)...)
+							lines = append(lines, fit(m.boardPaint(action.State, attentionIcon(action.State, m.t.color)+" "+clean(action.Text)), "    ", "    ", width-2)...)
 						}
 					}
 				}

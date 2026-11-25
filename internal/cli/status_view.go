@@ -174,19 +174,18 @@ func (s statusScreen) summary(list []workfile.Assessment, width int, notes []str
 	}
 	items := []struct {
 		icon string
-		mark func(string) string
 		text string
 		n    int
 	}{
-		{"!", s.t.bad, "cannot check", t.cannot},
-		{"‼", s.t.bad, "out of policy", t.out},
-		{"✗", s.t.bad, "need work", t.needs},
-		{"✓", s.t.good, "ready", t.ready},
-		{"·", s.t.dim, "done", t.done},
+		{s.t.mark(workfile.AttentionUnknown), "cannot check", t.cannot},
+		{s.t.bad(outOfPolicyIcon(s.t.color)), "out of policy", t.out},
+		{s.t.mark(workfile.NeedsMe), "need work", t.needs},
+		{s.t.mark(workfile.ReadyToMove), "ready", t.ready},
+		{s.t.mark(workfile.AttentionDone), "done", t.done},
 	}
 	legend, used := "", 0
 	for _, item := range items {
-		if item.n == 0 && item.icon == "!" {
+		if item.n == 0 && item.icon == s.t.mark(workfile.AttentionUnknown) {
 			continue
 		}
 		text := fmt.Sprintf("%d %s", item.n, item.text)
@@ -199,7 +198,7 @@ func (s statusScreen) summary(list []workfile.Assessment, width int, notes []str
 			legend += "   "
 			used += 3
 		}
-		legend += item.mark(item.icon) + " " + s.t.dim(text)
+		legend += item.icon + " " + s.t.dim(text)
 		used += w
 	}
 	lines = append(lines, legend)
@@ -245,15 +244,15 @@ func moveTag(a workfile.Assessment) string {
 func (s statusScreen) statusIcon(a workfile.Assessment) string {
 	switch group(a) {
 	case 0:
-		return s.t.bad("!")
+		return s.t.mark(workfile.AttentionUnknown)
 	case 1:
-		return s.t.bad("‼")
+		return s.t.bad(outOfPolicyIcon(s.t.color))
 	case 2:
-		return s.t.bad("✗")
+		return s.t.mark(workfile.NeedsMe)
 	case 3:
-		return s.t.good("✓")
+		return s.t.mark(workfile.ReadyToMove)
 	}
-	return s.t.dim("·")
+	return s.t.mark(workfile.AttentionDone)
 }
 
 // ticketRow is an icon, the linked key and the title, with a tag at the right

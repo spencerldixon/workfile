@@ -53,19 +53,13 @@ func (s screen) tagged(left, tag string, styleLeft, styleTag func(string) string
 
 func (s screen) title(text string) string { return s.t.dim(strings.ToUpper(text)) }
 func (s screen) verdict(text string, ok bool) string {
-	if ok {
-		return s.t.good("✓ ") + s.t.bold(strings.ToUpper(text))
-	}
-	return s.t.bad("✗ ") + s.t.bold(strings.ToUpper(text))
+	return s.t.verdictMark(ok) + " " + s.t.bold(strings.ToUpper(text))
 }
 
 // mark is a sentence-case title with an icon, for blocks about one thing,
 // such as one check that finished.
 func (s screen) mark(text string, ok bool) string {
-	if ok {
-		return s.t.good("✓ ") + s.t.bold(text)
-	}
-	return s.t.bad("✗ ") + s.t.bold(text)
+	return s.t.verdictMark(ok) + " " + s.t.bold(text)
 }
 
 func plainText(s string) string { return s }

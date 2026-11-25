@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"workfile/internal/board"
 	"workfile/internal/workfile"
 )
 
@@ -172,16 +173,12 @@ func (t *trackerReads) receivedPolicy(msg ticketPolicyMsg, now time.Time) bool {
 
 // readPolicy checks one ticket as `wf status TICKET` does.
 func readPolicy(ctx context.Context, e env, ticket string) (workfile.Assessment, error) {
-	found, err := e.client.Tickets(ctx, []string{ticket}, 0)
+	read, err := board.Read(ctx, e.w, e.client, board.Query{Keys: []string{ticket}})
 	if err != nil {
 		return workfile.Assessment{}, err
 	}
-	if len(found) == 0 {
+	if len(read.Missing) > 0 {
 		return workfile.Assessment{}, errors.New(ticket + " is not visible to your account")
 	}
-	found, _, err = e.client.Records(ctx, found[:1], true)
-	if err != nil {
-		return workfile.Assessment{}, err
-	}
-	return e.w.Assess(found[0]), nil
+	return read.Assessments[0], nil
 }

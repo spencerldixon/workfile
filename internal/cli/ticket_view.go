@@ -89,10 +89,7 @@ func (m *ticketModel) heading(text string) string {
 	return m.t.dim(strings.ToUpper(text))
 }
 func (m *ticketModel) verdictHeading(text string, ok bool) string {
-	if ok {
-		return m.t.good("✓ ") + m.t.bold(strings.ToUpper(text))
-	}
-	return m.t.bad("✗ ") + m.t.bold(strings.ToUpper(text))
+	return m.t.verdictMark(ok) + " " + m.t.bold(strings.ToUpper(text))
 }
 
 func (m *ticketModel) header() []string {
@@ -378,9 +375,9 @@ func (m *ticketModel) nextMoves() []string {
 		if route.Backward {
 			arrow = "↩ "
 		}
-		label, note, colour := "✓ "+arrow+route.To, "ready now", m.t.good
+		label, note, colour := attentionIcon(workfile.ReadyToMove, m.t.color)+" "+arrow+route.To, "ready now", m.t.good
 		if !route.Available() {
-			label, note, colour = "✗ "+arrow+route.To, quantity(unmet(route.Checks), "requirement", "requirements")+" not met", m.t.bad
+			label, note, colour = attentionIcon(workfile.NeedsMe, m.t.color)+" "+arrow+route.To, quantity(unmet(route.Checks), "requirement", "requirements")+" not met", m.t.bad
 		}
 		if labelWidth+2+runewidth.StringWidth(note) > m.width() {
 			// Too narrow for one line: the note goes under its destination.

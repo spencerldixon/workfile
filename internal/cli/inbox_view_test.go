@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -17,6 +18,19 @@ func inboxScreen(d *inboxDriver) string {
 	return tracker.render()
 }
 
+func TestInboxAgeSwitchesToDaysAt24Hours(t *testing.T) {
+	for age, want := range map[time.Duration]string{
+		23*time.Hour + 59*time.Minute: "23h",
+		24 * time.Hour:                "1d",
+		45 * time.Hour:                "1d",
+		48 * time.Hour:                "2d",
+	} {
+		if got := shortAge(loadNow.Add(-age), loadNow); got != want {
+			t.Errorf("age %s displayed as %q, want %q", age, got, want)
+		}
+	}
+}
+
 func TestInboxViewWidths(t *testing.T) {
 	for _, color := range []bool{false, true} {
 		for _, width := range []int{40, 60, 120} {
@@ -24,7 +38,7 @@ func TestInboxViewWidths(t *testing.T) {
 			d.m.e.view.color = color
 			d.send(tea.WindowSizeMsg{Width: width, Height: 30})
 			for _, screen := range []string{inboxScreen(d), func() string {
-				d.press("enter")
+				d.press("a")
 				return inboxScreen(d)
 			}(), func() string { d.press("esc", "e"); return inboxScreen(d) }()} {
 				for i, line := range strings.Split(screen, "\n") {
@@ -43,7 +57,7 @@ func TestInboxViewPlain(t *testing.T) {
 	if strings.Contains(screen, "\x1b") {
 		t.Fatalf("plain screen has escapes:\n%q", screen)
 	}
-	for _, want := range []string{"✗", "●", "○", "Alice requested changes on #84", "Alice commented on #90", "Charlie approved #95"} {
+	for _, want := range []string{"✗", "!", "·", "Address Alice's review on #84", "Read Alice's comment on #90", "Charlie approved #95"} {
 		if !strings.Contains(screen, want) {
 			t.Errorf("plain screen lacks %q:\n%s", want, screen)
 		}
@@ -54,24 +68,24 @@ func TestInboxViewSymbolsAndColours(t *testing.T) {
 	th := newTheme(true, "")
 	for kind, want := range map[workfile.RowKind]struct{ symbol, icon, sgr string }{
 		workfile.RowChangesRequested: {"✗", "󰅖", "38;5;1m"},
-		workfile.RowChecksFailed:     {"✗", "󰙨", "38;5;1m"},
-		workfile.RowNeedsWork:        {"✗", "󰏫", "38;5;1m"},
+		workfile.RowChecksFailed:     {"✗", "󰅖", "38;5;1m"},
+		workfile.RowNeedsWork:        {"✗", "󰅖", "38;5;1m"},
 		workfile.RowOutOfPolicy:      {"‼", "󰀦", "38;5;1m"},
-		workfile.RowReviewRequested:  {"●", "", "38;5;3m"},
-		workfile.RowComments:         {"●", "󰆉", "38;5;3m"},
+		workfile.RowReviewRequested:  {"…", "󰆉", "38;5;3m"},
+		workfile.RowComments:         {"!", "󰍩", "38;5;3m"},
 		workfile.RowReady:            {"✓", "󰄬", "38;5;2m"},
 		workfile.RowCannotCheck:      {"!", "󰋼", "38;5;3m"},
-		workfile.RowInfo:             {"○", "󰋽", "2"},
+		workfile.RowInfo:             {"·", "·", "2"},
 	} {
 		if got := inboxSymbol(kind); got != want.symbol {
 			t.Errorf("%s symbol %q, want %q", kind, got, want.symbol)
 		}
-		painted := paintSymbol(th, kind)
+		painted := paintInboxSignal(th, kind)
 		if !strings.Contains(painted, want.icon) || !strings.Contains(painted, want.sgr) {
 			t.Errorf("%s painted %q, want SGR %s", kind, painted, want.sgr)
 		}
 	}
-	if painted := paintSymbol(th, workfile.RowOutOfPolicy); !strings.Contains(painted, "1;") && !strings.Contains(painted, ";1") && !strings.Contains(painted, "[1m") {
+	if painted := paintInboxSignal(th, workfile.RowOutOfPolicy); !strings.Contains(painted, "1;") && !strings.Contains(painted, ";1") && !strings.Contains(painted, "[1m") {
 		t.Errorf("out of policy is bold: %q", painted)
 	}
 }
@@ -101,7 +115,7 @@ func TestInboxEmptyState(t *testing.T) {
 func TestInboxFooterPerRow(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "claude {prompt}"})
 	d.selectID("APP-1")
-	if screen := inboxScreen(d); !strings.Contains(screen, "a agent") || !strings.Contains(screen, "o open #84") {
+	if screen := inboxScreen(d); !strings.Contains(screen, "a agent") || !strings.Contains(screen, "o open PR") {
 		t.Fatalf("action row footer:\n%s", screen)
 	}
 	d.selectID("APP-4")
@@ -114,21 +128,18 @@ func TestInboxFooterPerRow(t *testing.T) {
 	}
 }
 
-func TestInboxShowsQueueThenDetail(t *testing.T) {
+func TestInboxShowsTitlesAndActionsWithoutExpanding(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
-	d.selectID("APP-1")
 	for _, width := range []int{40, 60, 120} {
 		d.send(tea.WindowSizeMsg{Width: width, Height: 30})
-		if screen := inboxScreen(d); strings.Contains(screen, "Next step") || !strings.Contains(screen, "enter details") {
-			t.Fatalf("width %d: inbox opens as a queue:\n%s", width, screen)
+		before := inboxScreen(d)
+		if !strings.Contains(before, "Fix login") || !strings.Contains(before, "Cache") {
+			t.Fatalf("width %d: titles should be visible before selection:\n%s", width, before)
 		}
-		d.press("enter")
-		if screen := inboxScreen(d); !strings.Contains(screen, "Next step") || !strings.Contains(screen, "esc list") {
-			t.Fatalf("width %d: enter opens the preview:\n%s", width, screen)
-		}
-		d.press("esc")
-		if strings.Contains(inboxScreen(d), "Next step") {
-			t.Fatalf("width %d: esc returns to the queue", width)
+		d.selectID("APP-1")
+		after := inboxScreen(d)
+		if strings.Contains(after, "enter details") || strings.Count(before, "\n") != strings.Count(after, "\n") {
+			t.Fatalf("width %d: moving should keep the same queue layout:\n%s", width, after)
 		}
 	}
 }
@@ -140,7 +151,7 @@ func TestInboxNarrowFooterKeepsActions(t *testing.T) {
 	lines := strings.Split(inboxScreen(d), "\n")
 	footerLines := len(d.m.footer(d.m.theme(), 50))
 	footer := strings.Join(lines[len(lines)-footerLines:], "\n")
-	for _, want := range []string{"enter details", "t ticket", "e resolve", "a agent"} {
+	for _, want := range []string{"s scope", "t open ticket", "e resolve", "a agent"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("narrow footer lacks %q: %q", want, footer)
 		}
@@ -189,8 +200,8 @@ func TestInboxOpensTicketAndReturnsToAlert(t *testing.T) {
 		t.Fatal("Page Down should scroll the ticket")
 	}
 	d.press("e", "esc")
-	if m.ticket != nil || m.selected().ID != row.ID || !m.detail || d.saves != saves {
-		t.Fatal("closing the ticket should restore the alert preview without clearing it")
+	if m.ticket != nil || m.selected().ID != row.ID || d.saves != saves {
+		t.Fatal("closing the ticket should restore the queue selection without clearing it")
 	}
 	d.send(load()) // A reply that arrived after closing must leave the inbox visible.
 	if m.ticket != nil {
@@ -222,32 +233,48 @@ func TestInboxTicketUsesTheSharedKittyDiagram(t *testing.T) {
 	}
 }
 
-func TestInboxNextWordsAnAction(t *testing.T) {
+func TestInboxOpenPRUsesCommentThreadWhenAvailable(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
-	d.selectID("APP-1")
-	d.press("enter")
-	screen := inboxScreen(d)
-	action := strings.Index(screen, "1. Address Alice's review on #84")
-	activity := strings.Index(screen, "Latest activity")
-	if action < 0 || activity < action {
-		t.Fatalf("next step is worded as an action:\n%s", screen)
+	data := inboxFixtureData()
+	thread := data.work[1].PRs["github"][0].URL + "#issuecomment-10"
+	data.events[1].URL = thread
+	d.m.st.Events = nil
+	d.send(inboxLoadedMsg(data))
+	d.selectID("APP-4")
+	var opened string
+	d.m.open = func(url string) error { opened = url; return nil }
+	d.press("o")
+	if opened != thread || d.m.selected().ID != "APP-4" {
+		t.Fatalf("opening the thread should leave the row selected, got %q", opened)
 	}
 }
 
-func TestInboxDetailScrollsToLatestActivity(t *testing.T) {
-	d := driveInbox(t, workfile.InboxSettings{})
-	d.selectID("APP-1")
-	d.send(tea.WindowSizeMsg{Width: 40, Height: 11})
-	d.press("enter")
-	if screen := inboxScreen(d); !strings.Contains(screen, "Fix login") || strings.Contains(screen, "Latest activity") {
-		t.Fatalf("detail starts at the ticket on a short screen:\n%s", screen)
-	}
-	d.press("pgdown", "pgdown", "pgdown")
-	if screen := inboxScreen(d); !strings.Contains(screen, "Latest activity") {
-		t.Fatalf("page down reaches recent activity:\n%s", screen)
-	}
-	d.press("pgup")
-	if screen := inboxScreen(d); strings.Contains(screen, "Latest activity") {
-		t.Fatalf("page up scrolls back after reaching the end:\n%s", screen)
+func TestInboxScopeReusesTrackerPicker(t *testing.T) {
+	d := driveInbox(t, workfile.InboxSettings{DefaultScope: workfile.InboxScopeAttention})
+	for _, width := range []int{40, 60} {
+		tracker := trackerModel{e: d.m.e, t: d.m.theme(), inbox: d.m, width: width, height: 24, now: d.m.now}
+		tracker.view = len(tracker.views()) - 1
+		d.m.scope = workfile.InboxScopeAttention
+		d.m.rebuild()
+		tracker.openInboxScope()
+		if got := tracker.projectPicker.Index(); got != 1 {
+			t.Fatalf("picker should select the current scope, got %d", got)
+		}
+		screen := tracker.render()
+		for _, want := range []string{"Choose Inbox scope", "All signals", "Needs attention"} {
+			if !strings.Contains(screen, want) {
+				t.Fatalf("scope lacks %q:\n%s", want, screen)
+			}
+		}
+		for _, line := range strings.Split(screen, "\n") {
+			if lipgloss.Width(line) > width || strings.Contains(line, "\x1b") {
+				t.Fatalf("unexpected plain scope line: %q", line)
+			}
+		}
+		tracker.projectPicker.Select(0)
+		tracker.projectKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if tracker.pickingPicker() || len(d.m.rows) != 3 {
+			t.Fatalf("selecting all should reveal the update, got %v", d.ids())
+		}
 	}
 }

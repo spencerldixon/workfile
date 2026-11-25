@@ -11,18 +11,27 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+type InboxScope string
+
+const (
+	InboxScopeAll       InboxScope = "all"
+	InboxScopeAttention InboxScope = "needs_attention"
+)
+
 // InboxSettings are the person's choices for the Tracker inbox. Zero values inherit
 // defaults. They never change policy.
 type InboxSettings struct {
-	Repositories   map[string][]string `yaml:"repositories"`
-	ReviewRequests *bool               `yaml:"review_requests"`
-	Signals        []RowKind           `yaml:"signals"`
-	RefreshEvery   int                 `yaml:"refresh_every"`
-	FullEvery      int                 `yaml:"full_every"`
-	Poll           Duration            `yaml:"poll"`
-	Snooze         Duration            `yaml:"snooze"`
-	Agent          string              `yaml:"agent"`
-	Prompts        map[string]string   `yaml:"prompts"`
+	Repositories     map[string][]string `yaml:"repositories"`
+	ReviewRequests   *bool               `yaml:"review_requests"`
+	Signals          []RowKind           `yaml:"signals"`
+	AttentionSignals []RowKind           `yaml:"attention_signals"`
+	DefaultScope     InboxScope          `yaml:"default_scope"`
+	RefreshEvery     int                 `yaml:"refresh_every"`
+	FullEvery        int                 `yaml:"full_every"`
+	Poll             Duration            `yaml:"poll"`
+	Snooze           Duration            `yaml:"snooze"`
+	Agent            string              `yaml:"agent"`
+	Prompts          map[string]string   `yaml:"prompts"`
 }
 
 // Duration reads "2m" or "1h" from YAML.
@@ -55,12 +64,13 @@ func defaultInboxSettings() InboxSettings {
 	reviewRequests := false
 	return InboxSettings{
 		ReviewRequests: &reviewRequests,
+		DefaultScope:   InboxScopeAttention,
 		Poll:           Duration{30 * time.Second},
 		RefreshEvery:   5,
 		FullEvery:      15,
 		Snooze:         Duration{time.Hour},
 		Prompts: map[string]string{
-			"default":           "Get {pr} past {stage} for {key}",
+			"default":           "Explain what is blocking {key} and suggest the next step",
 			"changes_requested": "Address {who}'s review on {pr} for {key}",
 			"comments":          "Answer the {count} new comments on {pr} for {key}",
 			"review_requested":  "Review {pr} for {who}",
@@ -115,6 +125,12 @@ func mergeInboxSettings(base, override InboxSettings) InboxSettings {
 	if override.Signals != nil {
 		base.Signals = override.Signals
 	}
+	if override.DefaultScope != "" {
+		base.DefaultScope = override.DefaultScope
+	}
+	if override.AttentionSignals != nil {
+		base.AttentionSignals = override.AttentionSignals
+	}
 	if override.Poll.Duration != 0 {
 		base.Poll = override.Poll
 	}
@@ -141,6 +157,19 @@ func mergeInboxSettings(base, override InboxSettings) InboxSettings {
 	return base
 }
 
+// ScopedRows applies the view scope after the poll has observed all signals.
+func (s InboxSettings) ScopedRows(rows []InboxRow, scope InboxScope) []InboxRow {
+	if scope != InboxScopeAttention {
+		return rows
+	}
+	return slices.DeleteFunc(slices.Clone(rows), func(row InboxRow) bool {
+		if s.AttentionSignals != nil {
+			return !slices.Contains(s.AttentionSignals, row.Kind)
+		}
+		return !row.Action()
+	})
+}
+
 func (s InboxSettings) WatchesRepository(connection, repository string) bool {
 	if _, name, qualified := strings.Cut(repository, "/"); qualified {
 		repository = name
@@ -160,9 +189,17 @@ func validateInboxLayer(s InboxSettings) error {
 			}
 		}
 	}
-	for _, signal := range s.Signals {
-		if !slices.Contains(rowRank, signal) {
-			return fmt.Errorf("signals: unknown signal %q", signal)
+	if s.DefaultScope != "" && s.DefaultScope != InboxScopeAll && s.DefaultScope != InboxScopeAttention {
+		return fmt.Errorf("default_scope: %q must be all or needs_attention", s.DefaultScope)
+	}
+	for _, setting := range []struct {
+		name  string
+		kinds []RowKind
+	}{{"signals", s.Signals}, {"attention_signals", s.AttentionSignals}} {
+		for _, kind := range setting.kinds {
+			if !slices.Contains(rowRank, kind) {
+				return fmt.Errorf("%s: unknown signal %q", setting.name, kind)
+			}
 		}
 	}
 	if s.Poll.Duration != 0 && s.Poll.Duration < minimumPoll {

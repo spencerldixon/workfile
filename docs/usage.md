@@ -18,7 +18,7 @@ for help.
 | [`wf check`](#check-may-this-ticket-move-now) | Ask whether one ticket may move now. |
 | [`wf policy`](#policy-how-does-this-project-ship) | Inspect the workflow offline, or validate it with `--lint`. |
 
-Old names work for one release and print a notice on stderr:
+These older names still work and print a notice on stderr:
 `health` → `status`, `test` → `setup --test`, `tickets` → `tracker`.
 
 ## How the output looks
@@ -408,34 +408,41 @@ board views, filters, preview settings and merge rules. No config file is requir
 wf tracker --view inbox
 ```
 
-Inbox follows unfinished tickets assigned to you and PRs you authored in the
-configured code hosts. Opt in to review requests or watch named repositories
-in `config.yml`. Each row groups a ticket and its PRs. A PR without a ticket
-gets its own row. Alerts appear newest first. Repeated events fold together. CI recovery updates the same
-row, and a ticket that clears its policy gates shows where it can move.
+Inbox follows unfinished tickets assigned to you and PRs you authored. Opt in
+to review requests or watch named repositories in `config.yml`. A PR can appear
+without a ticket.
 
-Tracker uses red Nerd Font symbols for failures and blockers, amber for
-requests, pending work and unavailable evidence, and green for passing checks
-or a ready move. Plain output uses standard symbols and words.
+Each row shows the ticket or PR number, title and next action or update.
+Alerts appear newest first. New comments on the same PR share one row. Comments
+and failing checks on a PR can be resolved or snoozed independently. When Inbox
+sees a required approval or CI check pass, a ready alert explains what changed.
+
+Inbox starts with **Needs attention**. Press `s` to choose **All signals** and
+include updates such as passing checks. Set the starting scope and alert kinds
+for Needs attention in `config.yml`.
+
+Inbox uses the same status symbols and colours as Tracker, policy checks and
+status reports. Red marks failures and blockers, amber marks requests, pending
+work and unavailable evidence, and green marks passing checks or a ready move.
+Plain output uses standard symbols and words.
 
 | Key | Action |
 | --- | --- |
 | `j` / `k`, Down / Up | Select a row. |
-| Enter | Show next steps and recent activity. |
-| Page Up / Page Down | Scroll activity details. |
 | `t` | Read the linked ticket, workflow and numbered fixes. |
 | Esc | Return to the queue. |
 | `e` | Resolve the alert locally, hiding it until new activity or evidence changes it. |
-| `s` | Snooze locally, for one hour by default or until a new blocker appears. |
-| `a` | Launch your configured agent command; hidden when none is set. |
-| `o` | Open the PR or ticket in your browser. |
+| `s` | Choose the Inbox scope. |
+| `z` | Snooze locally, for one hour by default or until a new blocker appears. |
+| `a` | Preview the configured agent prompt and Workfile context. Press Enter to launch. |
+| `o` | Open the PR. Open the comment thread when the alert has a thread link. |
 | `r` | Refresh the Inbox now. |
 | `[` / `]` | Switch Tracker views. |
 | `q` | Quit. |
 
-Opening details, following a link or launching an agent does not clear a row.
-Press `e` to resolve the alert. In the ticket reader, arrows scroll and a fix's number opens
-its link. Esc returns to the same inbox row.
+Following a link or launching an agent leaves the alert in Inbox. Press `e` to
+resolve it. In the ticket reader, arrows scroll and a fix's number opens its
+link. Esc returns to the same Inbox row.
 
 Resolve, snooze and activity cursors are local.
 An agent launched with `a` is your own command and may make changes with its own
@@ -463,15 +470,15 @@ while List or Board is selected:
 
 Noninteractive inbox reads once and prints newest alerts first, with symbols and web
 addresses. It does not write inbox state, so scripts cannot clear new activity.
-The number after `Inbox` counts all alerts. This example enables review
-requests:
+The number after `Inbox` counts alerts in the configured default scope. This
+example enables review requests:
 
 ```text
 Inbox 2
 
-‼ APP-1  Out of policy: Fix failing checks  now
+‼ APP-1  Fix login  Out of policy: Add a release note  now
   https://example-team.atlassian.net/browse/APP-1
-● #7  Alice asked you to review #7  now
+… #7  Update the lint runner  Review #7  1d
   https://github.example.com/example-team/api/pull/7
 ```
 

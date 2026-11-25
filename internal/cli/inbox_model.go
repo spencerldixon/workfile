@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -21,14 +21,17 @@ type inboxModel struct {
 	s   workfile.InboxSettings
 	st  workfile.InboxState
 
-	data    *inboxData
-	rows    []workfile.InboxRow
-	sel     int
-	loading bool
-	polls   int
+	data         *inboxData
+	rows         []workfile.InboxRow
+	scope        workfile.InboxScope
+	prepared     *inboxAgent
+	prepareErr   error
+	agentPreview *inboxAgent
+	sel          int
+	loading      bool
+	polls        int
 
 	width, height int
-	detail        bool
 	detailOffset  int
 	ticket        *inboxTicket
 	workflow      workflowPreview
@@ -45,13 +48,12 @@ type inboxModel struct {
 type agentDoneMsg struct {
 	row    workfile.InboxRow
 	prompt string
-	argv   []string
 	err    error
 }
 
 func newInboxModel(ctx context.Context, e env, s workfile.InboxSettings, st workfile.InboxState) *inboxModel {
 	return &inboxModel{
-		ctx: ctx, e: e, s: s, st: st,
+		ctx: ctx, e: e, s: s, st: st, scope: s.DefaultScope,
 		now:   time.Now,
 		start: runner.Start,
 		open:  func(target string) error { return openBrowser(ctx, target) },
@@ -131,8 +133,9 @@ func (m *inboxModel) Update(msg tea.Msg) tea.Cmd {
 		m.data = &d
 		applyPoll(&m.st, d)
 		m.st.Observe(inboxInput(d, m.st), nil)
-		m.rebuild()
-		m.st.Observe(inboxInput(d, m.st), m.rows)
+		rows := inboxRows(d, m.st)
+		m.st.Observe(inboxInput(d, m.st), rows)
+		m.setRows(rows)
 		m.st.Prune(d.at, d.tracksActivity)
 		m.persist()
 	case inboxTickMsg:
@@ -143,9 +146,9 @@ func (m *inboxModel) Update(msg tea.Msg) tea.Cmd {
 			m.say("Couldn't start agent: "+agentReason(msg.err), true)
 			return nil
 		}
-		m.st.Agents = append(m.st.Agents, workfile.AgentNote{Row: msg.row.ID, Ticket: msg.row.Ticket, PR: msg.row.PR, Kind: string(msg.row.Kind), Prompt: msg.prompt, At: m.now()})
+		m.st.Agents = append(m.st.Agents, workfile.AgentNote{Row: msg.row.StateKey(), Ticket: msg.row.Ticket, PR: msg.row.PR, Kind: string(msg.row.Kind), Prompt: msg.prompt, At: m.now()})
 		m.persist()
-		m.say("⚙ started: "+strings.Join(msg.argv, " "), false)
+		m.say("Agent started", false)
 	case tea.KeyPressMsg:
 		if m.ticket != nil {
 			return m.ticketKey(msg)
@@ -156,6 +159,21 @@ func (m *inboxModel) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
+	if m.agentPreview != nil {
+		switch msg.String() {
+		case "esc":
+			m.agentPreview = nil
+		case "enter":
+			prepared := m.agentPreview
+			m.agentPreview = nil
+			return m.launchAgent(prepared)
+		case "up", "k":
+			m.detailOffset = max(0, m.detailOffset-1)
+		case "down", "j":
+			m.detailOffset++
+		}
+		return nil
+	}
 	switch msg.String() {
 	case "ctrl+c", "q":
 		return tea.Quit
@@ -163,27 +181,6 @@ func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.move(1)
 	case "k", "up":
 		m.move(-1)
-	case "enter":
-		if _, ok := m.current(); ok {
-			m.detail = true
-		}
-	case "esc":
-		m.detail, m.detailOffset = false, 0
-	case "pgup", "pgdown":
-		if m.detail && len(m.rows) > 0 {
-			t, width := m.theme(), m.renderWidth()
-			room := m.bodyHeight(len(m.footer(t, width)))
-			if m.toast != "" {
-				room = max(1, room-1)
-			}
-			pane := m.activityViewport(t, width, room)
-			if msg.String() == "pgup" {
-				pane.PageUp()
-			} else {
-				pane.PageDown()
-			}
-			m.detailOffset = pane.YOffset()
-		}
 	case "r":
 		return m.load(pollFull)
 	}
@@ -197,16 +194,13 @@ func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
 			return m.openTicket(row)
 		}
 	case "e":
-		m.done(row.ID)
-	case "s":
-		m.st.Snoozed[row.ID] = row.Snooze(m.now().Add(m.s.Snooze.Duration))
+		m.done(row)
+	case "z":
+		m.st.Snoozed[row.StateKey()] = row.Snooze(m.now().Add(m.s.Snooze.Duration))
 		m.rebuild()
 		m.persist()
 	case "o":
-		target := row.PRURL
-		if target == "" {
-			target = row.URL
-		}
+		target := inboxPRTarget(row)
 		if target == "" {
 			return nil
 		}
@@ -214,55 +208,61 @@ func (m *inboxModel) key(msg tea.KeyPressMsg) tea.Cmd {
 			m.say("Couldn't open the browser", true)
 		}
 	case "a":
-		return m.agent(row)
+		if m.prepareErr != nil {
+			m.say("Couldn't prepare agent: "+agentReason(m.prepareErr), true)
+		}
+		m.agentPreview = m.prepared
+		if m.agentPreview != nil {
+			m.detailOffset = 0
+		}
 	}
 	return nil
 }
 
 // done clears a row until something new happens: its events are seen, and
 // what remains is remembered by fingerprint.
-func (m *inboxModel) done(id string) {
-	at := m.sel
-	for _, r := range m.rows {
-		if r.ID == id {
-			m.markSeen(r)
-		}
+func (m *inboxModel) done(row workfile.InboxRow) {
+	m.markSeen(row)
+	m.st.Done[row.StateKey()] = row.Fingerprint
+	if m.data != nil {
+		rows := inboxRows(*m.data, m.st)
+		rows = slices.DeleteFunc(rows, func(next workfile.InboxRow) bool {
+			if next.StateKey() != row.StateKey() {
+				return false
+			}
+			// Consuming the activity can leave the same current-state alert.
+			m.st.Done[row.StateKey()] = next.Fingerprint
+			return true
+		})
+		m.setRows(rows)
 	}
-	m.rebuild()
-	for _, r := range m.rows {
-		if r.ID == id {
-			m.st.Done[id] = r.Fingerprint
-		}
-	}
-	m.rebuild()
-	// The next row moves up into the cleared one's place, as in a mail inbox.
-	m.sel = max(0, min(at, len(m.rows)-1))
-	m.detailOffset = 0
 	m.persist()
 }
 
-// canAgent reports whether a has something to do on this row: an agent is
-// set, the row needs the person, and its prompt has every value it uses.
-func (m *inboxModel) canAgent(row workfile.InboxRow) bool {
-	if m.s.Agent == "" || !row.Action() || row.Kind == workfile.RowCannotCheck {
-		return false
-	}
-	_, _, err := agentCommand(m.s, row)
-	return err == nil
+type inboxAgent struct {
+	row    workfile.InboxRow
+	prompt string
+	argv   []string
 }
 
-func (m *inboxModel) agent(row workfile.InboxRow) tea.Cmd {
-	if m.s.Agent == "" || !row.Action() || row.Kind == workfile.RowCannotCheck {
-		return nil
+func (m *inboxModel) refreshAgent() {
+	m.prepared, m.prepareErr = nil, nil
+	row, ok := m.current()
+	if !ok || m.s.Agent == "" || !row.Action() || row.Kind == workfile.RowCannotCheck {
+		return
 	}
 	prompt, argv, err := agentCommand(m.s, row)
 	if err != nil {
-		m.say("Couldn't start agent: "+agentReason(err), true)
-		return nil
+		m.prepareErr = err
+		return
 	}
+	m.prepared = &inboxAgent{row: row, prompt: prompt, argv: argv}
+}
+
+func (m *inboxModel) launchAgent(prepared *inboxAgent) tea.Cmd {
 	ctx, start := m.ctx, m.start
 	return func() tea.Msg {
-		return agentDoneMsg{row: row, prompt: prompt, argv: argv, err: start(ctx, argv)}
+		return agentDoneMsg{row: prepared.row, prompt: prepared.prompt, err: start(ctx, prepared.argv)}
 	}
 }
 
@@ -283,13 +283,24 @@ func agentCommand(s workfile.InboxSettings, row workfile.InboxRow) (string, []st
 	if err != nil {
 		return "", nil, err
 	}
-	values["prompt"] = filled[0]
+	prompt := filled[0] + "\n\nWorkfile context"
+	for _, detail := range [][2]string{
+		{"Title", row.Title}, {"Ticket", row.Ticket}, {"Ticket URL", row.URL},
+		{"PR", row.PR}, {"PR URL", row.PRURL}, {"Thread", row.ThreadURL}, {"Checks", row.ChecksURL},
+		{"Current stage", row.Stage}, {"Next stage", row.To}, {"Signal", string(row.Kind)},
+		{"Next action", row.Text}, {"Why now", row.ReadyReason}, {"New comments", values["count"]},
+	} {
+		if value := clean(detail[1]); value != "" {
+			prompt += "\n" + detail[0] + ": " + value
+		}
+	}
+	values["prompt"] = prompt
 	words, err := runner.Split(s.Agent)
 	if err != nil {
 		return "", nil, err
 	}
 	argv, err := runner.Fill(words, values)
-	return filled[0], argv, err
+	return prompt, argv, err
 }
 
 func agentReason(err error) string {
@@ -310,6 +321,7 @@ func (m *inboxModel) move(by int) {
 	}
 	m.sel = max(0, min(len(m.rows)-1, m.sel+by))
 	m.detailOffset = 0
+	m.refreshAgent()
 }
 
 func (m *inboxModel) markSeen(row workfile.InboxRow) {
@@ -319,25 +331,26 @@ func (m *inboxModel) markSeen(row workfile.InboxRow) {
 }
 
 func (m *inboxModel) rebuild() {
-	if m.data == nil {
-		return
+	if m.data != nil {
+		m.setRows(inboxRows(*m.data, m.st))
 	}
+}
+
+func (m *inboxModel) setRows(rows []workfile.InboxRow) {
+	defer m.refreshAgent()
 	id := ""
 	if row, ok := m.current(); ok {
-		id = row.ID
+		id = row.StateKey()
 	}
-	m.rows = inboxRows(*m.data, m.st)
+	m.rows = m.s.ScopedRows(rows, m.scope)
 	m.sel = min(m.sel, max(0, len(m.rows)-1))
 	for i, r := range m.rows {
-		if r.ID == id {
+		if r.StateKey() == id {
 			m.sel = i
 			return
 		}
 	}
 	m.detailOffset = 0
-	if len(m.rows) == 0 {
-		m.detail = false
-	}
 }
 
 func (m *inboxModel) current() (workfile.InboxRow, bool) {
@@ -367,18 +380,44 @@ func (m *inboxModel) footerKeys() [][2]string {
 	row, ok := m.current()
 	if ok {
 		if row.Ticket != "" {
-			keys = append(keys, [2]string{"t", "ticket"})
+			keys = append(keys, [2]string{"t", "open ticket"})
 		}
-		keys = append(keys, [2]string{"e", "resolve"}, [2]string{"s", "snooze"})
-		if m.canAgent(row) {
+		keys = append(keys, [2]string{"e", "resolve"}, [2]string{"z", "snooze"})
+		if m.prepared != nil {
 			keys = append(keys, [2]string{"a", "agent"})
 		}
-		if target := firstOf(row.PR, row.Ticket); (row.PRURL != "" || row.URL != "") && target != "" {
-			keys = append(keys, [2]string{"o", "open " + target})
+		if inboxPRTarget(row) != "" {
+			keys = append(keys, [2]string{"o", "open PR"})
 		}
 	}
-	keys = append(keys, [2]string{"[/]", "view"})
+	scope := "all signals"
+	if m.scope == workfile.InboxScopeAttention {
+		scope = "needs attention"
+	}
+	keys = append(keys, [2]string{"s", "scope: " + scope}, [2]string{"[/]", "view"})
 	return append(keys, [2]string{"r", "refresh"}, [2]string{"q", "quit"})
+}
+
+func inboxPRTarget(row workfile.InboxRow) string {
+	for _, url := range []string{row.ThreadURL, row.PRURL} {
+		if trackerWebURL(url) {
+			return url
+		}
+	}
+	return ""
+}
+
+func inboxOpenTarget(row workfile.InboxRow) (url, label string) {
+	if row.Kind == workfile.RowChecksFailed && trackerWebURL(row.ChecksURL) {
+		return row.ChecksURL, "checks " + clean(row.PR)
+	}
+	if trackerWebURL(row.PRURL) {
+		return row.PRURL, "open " + clean(row.PR)
+	}
+	if trackerWebURL(row.URL) {
+		return row.URL, "open " + clean(row.Ticket)
+	}
+	return "", ""
 }
 
 func firstOf(values ...string) string {

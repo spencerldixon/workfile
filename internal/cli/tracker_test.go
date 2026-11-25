@@ -942,7 +942,7 @@ func TestTrackerInboxUpdatesInAnotherView(t *testing.T) {
 				t.Fatal("background Inbox update must preserve the current Tracker view")
 			}
 			d.press("[")
-			d.wants("Inbox (1)", "Checks failing on #7")
+			d.wants("Inbox (1)", "Inspect failing checks on #7")
 			d.refuses("need you", "Needs you", "Updates")
 			d.checkInboxFrame()
 			if strings.Contains(d.screen(), "\x1b") {
@@ -951,9 +951,9 @@ func TestTrackerInboxUpdatesInAnotherView(t *testing.T) {
 			d.press("enter")
 			d.checkInboxFrame()
 			d.press("esc")
-			d.wants("Checks failing on #7")
+			d.wants("Inspect failing checks on #7")
 			d.press("e")
-			d.refuses("Checks failing on #7")
+			d.refuses("Inspect failing checks on #7")
 			d.press("]")
 			if d.m.shownView() != view {
 				t.Fatal("switching back must restore the previous Tracker view")

@@ -194,9 +194,9 @@ func (p workfilePane) where() []string {
 func (p workfilePane) stageCaption() string {
 	switch flowTone(*p.assessment) {
 	case green:
-		return p.t.good("✓ Can move on")
+		return p.t.mark(workfile.ReadyToMove) + " Can move on"
 	case red:
-		return p.t.bad("✗ Blocked")
+		return p.t.mark(workfile.NeedsMe) + " Blocked"
 	}
 	return ""
 }
@@ -207,16 +207,15 @@ func (p workfilePane) summary() []string {
 	case p.pending:
 		return append(lines, p.t.dim("Checking…"))
 	case p.err != nil || p.assessment == nil:
-		return append(lines, fit(p.t.dim("! Cannot check this ticket. Press r to retry."), "", "", p.width)...)
+		return append(lines, fit(p.t.mark(workfile.AttentionUnknown)+" Cannot check this ticket. Press r to retry.", "", "", p.width)...)
 	case p.ownersPending:
 		return append(lines, fit(p.t.dim("Identifying action owner…"), "", "", p.width)...)
 	}
-	label, paint := p.actions.Summary, p.t.dim
+	label := p.actions.Summary
 	switch p.actions.State {
 	case workfile.NeedsMe:
 		lines = nil // Personal actions are visible in the ticket and PR panels.
 	case workfile.ReadyToMove:
-		paint = p.t.good
 		if strings.HasPrefix(label, "Move to ") {
 			label = "Move to " + boardStateTitle(strings.TrimPrefix(label, "Move to "))
 		}
@@ -226,7 +225,7 @@ func (p workfilePane) summary() []string {
 		label = "Done. No next action."
 	}
 	if len(lines) > 0 {
-		lines = append(lines, fit(paint(attentionIcon(p.actions.State)+" "+clean(label)), "", "", p.width)...)
+		lines = append(lines, fit(p.t.attention(p.actions.State, attentionIcon(p.actions.State, p.t.color)+" "+clean(label)), "", "", p.width)...)
 	}
 	if len(p.actions.Actions) > 0 && p.actions.State != workfile.ReadyToMove && p.actions.State != workfile.AttentionDone {
 		var allowed []string
@@ -358,13 +357,13 @@ func (p workfilePane) actionRows(group paneActionGroup, number *int, width int) 
 			group.state == workfile.NeedsMe && len(action.Destinations) == 0 {
 			continue
 		}
-		prefix, paint := attentionIcon(action.State)+" ", p.t.dim
+		prefix := attentionIcon(action.State, p.t.color) + " "
 		if action.State == workfile.NeedsMe {
 			(*number)++
-			prefix, paint = fmt.Sprintf("%d. ", *number), p.t.bad
+			prefix = fmt.Sprintf("%d. ", *number)
 		}
 		text := p.actionText(action, group.record)
-		lines = append(lines, fit(paint(prefix+text), "", "", width)...)
+		lines = append(lines, fit(p.t.attention(action.State, prefix+text), "", "", width)...)
 		if len(action.Destinations) > 1 {
 			var names []string
 			for _, to := range action.Destinations {

@@ -6,6 +6,7 @@ import (
 
 	bubblehelp "charm.land/bubbles/v2/help"
 	"charm.land/lipgloss/v2"
+	"workfile/internal/workfile"
 )
 
 // theme holds the look of the Bubble Tea screens: 16 ANSI colours so the
@@ -57,13 +58,19 @@ func (t theme) dim(s string) string {
 	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Faint(true) })
 }
 func (t theme) good(s string) string {
-	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Foreground(lipgloss.ANSIColor(2)) })
+	return t.attention(workfile.ReadyToMove, s)
 }
 func (t theme) bad(s string) string {
-	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Foreground(lipgloss.ANSIColor(1)) })
+	return t.attention(workfile.NeedsMe, s)
 }
 func (t theme) warn(s string) string {
-	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Foreground(lipgloss.ANSIColor(3)) })
+	return t.attention(workfile.Waiting, s)
+}
+func (t theme) attention(state workfile.AttentionState, s string) string {
+	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return attentionStyle(state, st.Faint(true)) })
+}
+func (t theme) mark(state workfile.AttentionState) string {
+	return t.attention(state, attentionIcon(state, t.color))
 }
 func (t theme) accent(s string) string {
 	return t.render(s, func(st lipgloss.Style) lipgloss.Style { return st.Bold(true).Foreground(lipgloss.ANSIColor(6)) })

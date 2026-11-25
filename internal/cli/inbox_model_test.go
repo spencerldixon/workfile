@@ -63,6 +63,11 @@ func driveInbox(t *testing.T, s workfile.InboxSettings) *inboxDriver {
 			t.Fatal(err)
 		}
 		def.Agent = s.Agent
+		def.DefaultScope = workfile.InboxScopeAll
+		if s.DefaultScope != "" {
+			def.DefaultScope = s.DefaultScope
+		}
+		def.AttentionSignals = s.AttentionSignals
 		for k, v := range s.Prompts {
 			def.Prompts[k] = v
 		}
@@ -159,11 +164,12 @@ func TestInboxFixtureRows(t *testing.T) {
 func TestInboxDoneHidesRow(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
 	d.selectID("APP-1")
+	key := d.m.selected().StateKey()
 	d.press("e")
 	if slices.Contains(d.ids(), "APP-1") {
 		t.Fatalf("done row still shown: %v", d.ids())
 	}
-	if d.m.st.Done["APP-1"] == "" || d.saves == 0 {
+	if d.m.st.Done[key] == "" || d.saves == 0 {
 		t.Fatalf("done must be remembered and saved: %v saves=%d", d.m.st.Done, d.saves)
 	}
 	d.send(inboxLoadedMsg(inboxFixtureData()))
@@ -175,8 +181,9 @@ func TestInboxDoneHidesRow(t *testing.T) {
 func TestInboxSnoozeWritesUntil(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{})
 	d.selectID("APP-1")
-	d.press("s")
-	if s := d.m.st.Snoozed["APP-1"]; !s.Until.Equal(loadNow.Add(time.Hour)) || s.Fingerprint == "" {
+	key := d.m.selected().StateKey()
+	d.press("z")
+	if s := d.m.st.Snoozed[key]; !s.Until.Equal(loadNow.Add(time.Hour)) || s.Fingerprint == "" {
 		t.Fatalf("snooze for the configured hour: %+v", s)
 	}
 	if slices.Contains(d.ids(), "APP-1") {
@@ -187,18 +194,18 @@ func TestInboxSnoozeWritesUntil(t *testing.T) {
 func TestInboxAgentRunsOneArgPrompt(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "rex tab -- claude {prompt}"})
 	d.selectID("APP-1")
-	d.press("a")
+	d.press("a", "enter")
 	if len(d.argv) != 1 {
 		t.Fatalf("agent not started: %v", d.argv)
 	}
 	argv := d.argv[0]
-	if len(argv) != 5 || argv[4] != "Address Alice's review on #84 for APP-1" {
+	if len(argv) != 5 || !strings.HasPrefix(argv[4], "Address Alice's review on #84 for APP-1\n\nWorkfile context") || !strings.Contains(argv[4], "Next action: Address Alice") {
 		t.Fatalf("prompt must be one argument: %q", argv)
 	}
 	if !slices.Contains(d.ids(), "APP-1") {
 		t.Fatal("row stays after a successful launch")
 	}
-	if len(d.m.st.Agents) != 1 || d.m.st.Agents[0].Row != "APP-1" || d.m.st.Agents[0].Prompt != argv[4] {
+	if len(d.m.st.Agents) != 1 || d.m.st.Agents[0].Row != d.m.selected().StateKey() || d.m.st.Agents[0].Prompt != argv[4] {
 		t.Fatalf("launch must be noted: %+v", d.m.st.Agents)
 	}
 }
@@ -219,7 +226,7 @@ func TestInboxAgentNotFound(t *testing.T) {
 	d := driveInbox(t, workfile.InboxSettings{Agent: "example-missing {prompt}"})
 	d.startFn = func([]string) error { return errors.New(`exec: "example-missing": executable file not found in $PATH`) }
 	d.selectID("APP-1")
-	d.press("a")
+	d.press("a", "enter")
 	if !strings.Contains(d.m.toast, "Couldn't start agent") || !slices.Contains(d.ids(), "APP-1") || len(d.m.st.Agents) != 0 {
 		t.Fatalf("a failed start keeps the row: %q %v", d.m.toast, d.ids())
 	}
@@ -248,7 +255,7 @@ func TestInboxOpeningKeepsRowsUntilDone(t *testing.T) {
 				return nil
 			}
 			target := d.m.selected().PRURL
-			d.press("enter", "o", "esc", "q")
+			d.press("o", "q")
 			if target == "" || opened != target {
 				t.Fatalf("opened %q, want %q", opened, target)
 			}
@@ -348,14 +355,19 @@ func TestInboxAgentOfferedOnlyWhenItCanRun(t *testing.T) {
 		return slices.ContainsFunc(d.m.footerKeys(), func(k [2]string) bool { return k[0] == "a" })
 	}
 	d.selectID("APP-7")
-	if hasA() {
-		t.Fatal("the default prompt needs {pr}; a ticket fix with no PR must not offer a")
+	if !hasA() {
+		t.Fatal("a ticket fix without a PR should use the default prompt")
 	}
+	d.press("a")
+	if d.m.agentPreview == nil || !strings.Contains(d.m.agentPreview.prompt, "Next action: Add acceptance criteria") {
+		t.Fatal("ticket-only preview should contain the policy fix")
+	}
+	d.press("esc")
 	d.selectID("api#7")
 	if !hasA() {
 		t.Fatal("a PR with no ticket fills {key} with the PR, so a is offered")
 	}
-	d.press("a")
+	d.press("a", "enter")
 	if len(d.argv) != 1 || !strings.Contains(d.argv[0][1], "#7") {
 		t.Fatalf("loose PR prompt: %q", d.argv)
 	}

@@ -61,8 +61,9 @@ repository and number. Otherwise it searches GitHub across your organisation.
 - A **PR branch** can start with the ticket key, such as `APP-42-fix-login`.
   Workfile searches branch prefixes when you name a ticket in `wf status` or
   `wf check`, or open its workflow in Tracker. Board-wide reads and Inbox polls
-  search titles and bodies in batches of up to six ticket keys. Use a title key
-  or ticket URL for links that should also appear in those views.
+  search titles and bodies in batches of up to six ticket keys. Inbox also
+  checks branch names on the PRs it already follows. Use a title key or ticket
+  URL for links that should appear in board-wide reads.
 
 Workfile searches text and branch prefixes in parallel for a named lookup.
 It verifies the whole key on the returned PR, so `APP-12` does not match

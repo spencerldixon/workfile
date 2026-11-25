@@ -53,11 +53,10 @@ func (m *trackerModel) boardPRTags(records []workfile.Record, actions []workfile
 			break
 		}
 		if ansi.StringWidth(id) > idRoom {
-			if hash := strings.LastIndex(id, "#"); hash >= 0 {
-				number := id[hash:]
+			if number := workfile.PRLabel(id); number != id {
 				duplicates := 0
 				for _, other := range records {
-					if strings.HasSuffix(other.ID, number) {
+					if workfile.PRLabel(other.ID) == number {
 						duplicates++
 					}
 				}
@@ -103,14 +102,14 @@ func (m *trackerModel) boardTile(item ticketItem, selected bool, width int) []st
 	}
 	lines := []string{"", "  " + ansi.Truncate(head, inner, "…"), "  " + ansi.Truncate(clean(item.Title), inner, "…")}
 	add := func(text string) { lines = append(lines, "  "+ansi.Truncate(text, inner, "…")) }
-	footer, icon := result.Summary, trackerAttentionIcon(result.State, m.t.color)
+	footer, icon := result.Summary, attentionIcon(result.State, m.t.color)
 	var tags string
 	var overflow []string
 	r := m.ticketReads.byKey[item.Key]
 	if r == nil || !r.policyDone() {
 		footer = "PRs not checked"
 		if r != nil && r.policyStarted {
-			footer, icon = "Checking PRs…", trackerAttentionIcon(workfile.Waiting, m.t.color)
+			footer, icon = "Checking PRs…", attentionIcon(workfile.Waiting, m.t.color)
 		}
 	} else if r.policyErr != nil || r.policy == nil {
 		footer = "Cannot check PRs"

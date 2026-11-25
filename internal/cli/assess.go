@@ -42,7 +42,7 @@ func assess(ctx context.Context, e env) (checked, error) {
 	}
 	res, err := board.Read(ctx, w, client, q)
 	for _, key := range res.Missing {
-		fmt.Fprintf(e.errOut, "wf: %s is not visible to your %s token: check the key, or ask for access\n", key, w.TrackerLabel())
+		fmt.Fprintln(e.errOut, "wf:", ticketNotVisible(w, key))
 		r.missing = true
 	}
 	if err != nil {
@@ -54,6 +54,10 @@ func assess(ctx context.Context, e env) (checked, error) {
 	}
 	r.all = res.Assessments
 	return r, nil
+}
+
+func ticketNotVisible(w *workfile.Workspace, key string) error {
+	return fmt.Errorf("%s is not visible to your %s token: check the key, or ask for access", key, w.TrackerLabel())
 }
 
 // exitCode is 2 when anything could not be checked, 1 when a ticket fails, and

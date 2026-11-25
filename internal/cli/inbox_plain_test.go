@@ -66,13 +66,13 @@ func TestInboxPlainOutput(t *testing.T) {
 		t.Fatalf("plain output has escapes:\n%q", out)
 	}
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if lines[0] != "Inbox 2" {
+	if lines[0] != "Inbox 3" {
 		t.Fatalf("first line is the total alert count:\n%s", out)
 	}
 	want := []string{
-		"‼ APP-1  Out of policy: ",
+		"‼ APP-1  Fix login  Out of policy: ",
 		"  https://example-team.atlassian.net/browse/APP-1",
-		"● #7  Alice asked you to review #7  ",
+		"… #7  Review #7  ",
 		"  https://github.example.com/example-team/api/pull/7",
 	}
 	body := strings.Join(lines[2:], "\n")

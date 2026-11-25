@@ -1,12 +1,8 @@
 # Proposal: Workfile as the referee for agents
 
-**Status update (2026-11-13):** automations moved to the hosted product. The
-CLI no longer runs them, and `wf policy --lint` replaced `prove`. See the [vision](../vision.md).
-The text below is kept as written.
-
-**Status:** Policy validation is available as `wf policy --lint` (see [Lint](../usage.md#policy-how-does-this-project-ship)).
-The rest is an idea. It builds on [the roadmap](roadmap.md) and
-Automations.
+**Historical proposal.** Use `wf policy --lint` for offline policy validation.
+See [current usage](../usage.md#policy-how-does-this-project-ship) and the
+[hosted automation direction](../vision.md).
 
 ## The short version
 

@@ -15,7 +15,7 @@ func trackerInboxReport(ctx context.Context, e env) (int, error) {
 	defer e.startProgramWork()()
 	data := loadInbox(ctx, e, st, nil, now, pollFull)
 	st.Observe(inboxInput(data, st), nil)
-	printInbox(e.view, inboxRows(data, st), now)
+	printInbox(e.view, e.inboxSettings.ScopedRows(inboxRows(data, st), e.inboxSettings.DefaultScope), now)
 	return 0, nil
 }
 
@@ -26,17 +26,26 @@ func printInbox(v view, rows []workfile.InboxRow, now time.Time) {
 		fmt.Fprintln(v.out, "No alerts.")
 	}
 	for _, r := range rows {
-		id := firstOf(r.Ticket, r.PR)
+		id := inboxKey(r)
 		line := inboxSymbol(r.Kind) + " "
 		if id != "" && !strings.HasPrefix(r.ID, "!") {
 			line += clean(id) + "  "
 		}
+		if r.Title != "" {
+			line += clean(r.Title) + "  "
+		}
 		line += clean(r.Text)
+		if r.ReadyReason != "" {
+			line += " · " + clean(r.ReadyReason)
+		}
 		if age := shortAge(r.Latest(), now); age != "" {
 			line += "  " + age
 		}
 		fmt.Fprintln(v.out, line)
-		if target := firstOf(r.PRURL, r.URL); target != "" {
+		if r.Ticket != "" && trackerWebURL(r.URL) {
+			fmt.Fprintln(v.out, "  "+clean(r.URL))
+		}
+		if target := inboxPRTarget(r); target != "" && (r.Ticket == "" || target != r.URL) {
 			fmt.Fprintln(v.out, "  "+clean(target))
 		}
 	}

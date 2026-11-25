@@ -4,12 +4,15 @@ import (
 	"strings"
 
 	"github.com/mattn/go-runewidth"
+	"workfile/internal/workfile"
 )
 
-const (
-	green = "32"
-	red   = "31"
-	muted = "2"
+const muted = "2"
+
+var (
+	green = attentionSGR(workfile.ReadyToMove)
+	red   = attentionSGR(workfile.NeedsMe)
+	amber = attentionSGR(workfile.Waiting)
 )
 
 // Layout uses plain text cells. Styling and terminal links are applied last.

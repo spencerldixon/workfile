@@ -105,6 +105,7 @@ type trackerModel struct {
 	projectOrigins                        map[ticketView]string
 	projectPicker                         list.Model
 	pickingProject                        bool
+	pickingInboxScope                     bool
 	pickingPR                             bool
 	prTicket                              string
 	projectGeneration                     int
@@ -354,7 +355,7 @@ func (m *trackerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 	case trackerProjectMsg:
-		if (m.pickingProject || m.pickingPR) && msg.generation == m.projectGeneration {
+		if (m.pickingPicker()) && msg.generation == m.projectGeneration {
 			return m, m.updateProjectPicker(msg.msg)
 		}
 		return m, nil
@@ -491,7 +492,17 @@ func (m *trackerModel) key(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "ctrl+c" {
 		return m.quit()
 	}
+	if m.pickingPicker() {
+		return m.projectKey(msg)
+	}
 	if m.shownView().inbox {
+		if m.inbox.agentPreview != nil {
+			return m.inbox.Update(msg)
+		}
+		if msg.String() == "s" && m.inbox.ticket == nil {
+			m.openInboxScope()
+			return nil
+		}
 		switch msg.String() {
 		case "left", "[", "right", "]":
 			return m.switchView(msg.String() == "left" || msg.String() == "[")
@@ -500,9 +511,6 @@ func (m *trackerModel) key(msg tea.KeyPressMsg) tea.Cmd {
 		default:
 			return m.inbox.Update(msg)
 		}
-	}
-	if m.pickingProject || m.pickingPR {
-		return m.projectKey(msg)
 	}
 	// While searching, every letter belongs to the search.
 	if m.list.SettingFilter() {
@@ -802,7 +810,7 @@ func (m *trackerModel) resizeImages() tea.Cmd {
 // layout gives the list the top half and the ticket the rest, edge to edge. The
 // view tabs, column headings, dividers and help stay outside it.
 func (m *trackerModel) layout() {
-	if m.pickingProject || m.pickingPR {
+	if m.pickingPicker() {
 		m.resizeProjectPicker()
 	}
 	m.list.SetSize(m.width, m.listRows())

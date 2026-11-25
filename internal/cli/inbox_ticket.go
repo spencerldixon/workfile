@@ -113,7 +113,8 @@ func (m *inboxModel) ticketKey(msg tea.KeyPressMsg) tea.Cmd {
 	case "r":
 		return m.readTicket(nil)
 	case "o":
-		return m.openTicketLink(firstOf(t.row.PRURL, t.item.URL))
+		target, _ := inboxOpenTarget(t.row)
+		return m.openTicketLink(firstOf(target, t.item.URL))
 	}
 	if n, ok := fixKey(msg); ok {
 		if fixes := m.ticketPane().numbered(); n <= len(fixes) {
@@ -150,8 +151,10 @@ func (m *inboxModel) ticketHeading() []string {
 func (m *inboxModel) ticketFooter(p workfilePane) []string {
 	t := m.ticket
 	keys := "esc inbox · ↑↓ scroll · r refresh · [/] view"
-	if trackerWebURL(firstOf(t.row.PRURL, t.item.URL)) {
-		keys += " · o open"
+	if _, label := inboxOpenTarget(t.row); label != "" {
+		keys += " · o " + label
+	} else if trackerWebURL(t.item.URL) {
+		keys += " · o open ticket"
 	}
 	n := min(9, len(p.numbered()))
 	switch {

@@ -10,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
+	"workfile/internal/workfile"
 )
 
 func (m *setupModel) View() tea.View {
@@ -39,15 +40,8 @@ func (m *setupModel) render() string {
 	return screen
 }
 
-func setupIcon(nerd bool, fallback, glyph string) string {
-	if nerd {
-		return glyph
-	}
-	return fallback
-}
-
 func (m *setupModel) icon(fallback, glyph string) string {
-	return setupIcon(m.nerd, fallback, glyph)
+	return terminalIcon(m.nerd, fallback, glyph)
 }
 
 func (m *setupModel) header() string {
@@ -74,7 +68,7 @@ func (m *setupModel) header() string {
 		label := icons[i] + " " + name
 		switch {
 		case i < current:
-			parts[i] = m.t.good(m.icon("✓", "\uf00c") + " " + name)
+			parts[i] = m.t.good(attentionIcon(workfile.ReadyToMove, m.nerd) + " " + name)
 		case i == current:
 			if !m.t.color {
 				label = "› " + name
@@ -105,7 +99,7 @@ func (m *setupModel) errView() string {
 	if m.err == "" {
 		return ""
 	}
-	return m.t.bad(m.t.para("✗ "+m.err, m.inner()))
+	return m.t.bad(m.t.para(attentionIcon(workfile.NeedsMe, m.nerd)+" "+m.err, m.inner()))
 }
 
 func (m *setupModel) inputView() string {
@@ -126,7 +120,7 @@ func nonEmpty(s ...string) []string {
 func (m *setupModel) tokenView() string {
 	count := m.t.dim("Nothing pasted yet")
 	if n := len([]rune(m.input.Value())); n > 0 {
-		count = m.t.good(m.icon("✓", "\uf00c")+" ") + fmt.Sprintf("%d characters pasted", n)
+		count = m.t.good(attentionIcon(workfile.ReadyToMove, m.nerd)+" ") + fmt.Sprintf("%d characters pasted", n)
 	}
 	return strings.Join(nonEmpty(m.input.View(), count, m.errView()), "\n\n")
 }
@@ -213,11 +207,11 @@ func (m *setupModel) pickView(title, text string, p *picker, one, many string) s
 	count := m.t.dim("Nothing picked yet")
 	switch n := len(p.chosen()); {
 	case p.picked[pickAll]:
-		count = m.t.good(m.icon("✓", "\uf00c")+" ") + "All picked"
+		count = m.t.good(attentionIcon(workfile.ReadyToMove, m.nerd)+" ") + "All picked"
 	case n == 1:
-		count = m.t.good(m.icon("✓", "\uf00c")+" ") + "1 " + one + " picked"
+		count = m.t.good(attentionIcon(workfile.ReadyToMove, m.nerd)+" ") + "1 " + one + " picked"
 	case n > 1:
-		count = m.t.good(m.icon("✓", "\uf00c")+" ") + fmt.Sprintf("%d %s picked", n, many)
+		count = m.t.good(attentionIcon(workfile.ReadyToMove, m.nerd)+" ") + fmt.Sprintf("%d %s picked", n, many)
 	}
 	return m.screen(title, text, p.list.View(), count, m.errView())
 }
@@ -248,7 +242,7 @@ func (m *setupModel) statusesView() string {
 		name := runewidth.Truncate(clean(m.statuses[it.index]), m.inner()-4, "…")
 		cursor, mark := "  ", m.t.dim(m.icon("○", "\uf10c"))
 		if it.on {
-			mark = m.t.good(m.icon("✓", "\uf00c"))
+			mark = m.t.good(attentionIcon(workfile.ReadyToMove, m.nerd))
 		} else {
 			name = m.t.dim(name)
 		}
@@ -322,7 +316,7 @@ func (m *setupModel) reviewView() string {
 }
 
 func (m *setupModel) doneView() string {
-	return m.screen(m.t.good(m.icon("✓", "\uf00c"))+" Policy applied", "See the tickets in your new workflow.",
+	return m.screen(m.t.good(attentionIcon(workfile.ReadyToMove, m.nerd))+" Policy applied", "See the tickets in your new workflow.",
 		m.t.bold(m.t.para("cd "+strconv.Quote(m.dir), m.inner()))+"\n"+m.t.bold("wf status"),
 		m.t.dim(m.t.para("Add your team’s checks in .workfile/policy.yml before using the policy to decide what is ready.", m.inner())))
 }

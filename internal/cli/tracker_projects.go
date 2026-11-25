@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 
+	"workfile/internal/workfile"
+
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -23,15 +25,24 @@ type trackerProject struct {
 
 func (p trackerProject) FilterValue() string { return p.label }
 
-type trackerProjectRow struct{ t theme }
+type inboxScopeChoice struct {
+	scope workfile.InboxScope
+	label string
+}
 
-func (trackerProjectRow) Height() int                         { return 1 }
-func (trackerProjectRow) Spacing() int                        { return 0 }
-func (trackerProjectRow) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
-func (d trackerProjectRow) Render(w io.Writer, l list.Model, index int, item list.Item) {
-	p := item.(trackerProject)
-	label := clean(p.label)
-	count := fmt.Sprint(p.count)
+func (choice inboxScopeChoice) FilterValue() string { return choice.label }
+
+type trackerScopeRow struct{ t theme }
+
+func (trackerScopeRow) Height() int                         { return 1 }
+func (trackerScopeRow) Spacing() int                        { return 0 }
+func (trackerScopeRow) Update(tea.Msg, *list.Model) tea.Cmd { return nil }
+func (d trackerScopeRow) Render(w io.Writer, l list.Model, index int, item list.Item) {
+	label := clean(item.FilterValue())
+	count := ""
+	if project, ok := item.(trackerProject); ok {
+		count = fmt.Sprint(project.count)
+	}
 	if index == l.Index() {
 		line := alignPair("▌ "+label, count+" ", l.Width())
 		fmt.Fprint(w, d.t.render(line, func(st lipgloss.Style) lipgloss.Style {
@@ -73,7 +84,7 @@ func (m *trackerModel) openProjectPicker() tea.Cmd {
 			at = i
 		}
 	}
-	m.projectPicker = list.New(items, trackerProjectRow{m.t}, 0, 0)
+	m.projectPicker = list.New(items, trackerScopeRow{m.t}, 0, 0)
 	configureTrackerPicker(&m.projectPicker)
 	m.projectPicker.Select(at)
 	m.projectGeneration++
@@ -82,13 +93,38 @@ func (m *trackerModel) openProjectPicker() tea.Cmd {
 	return nil
 }
 
+func (m *trackerModel) pickingPicker() bool {
+	return m.pickingProject || m.pickingPR || m.pickingInboxScope
+}
+
+func (m *trackerModel) openInboxScope() {
+	items := []list.Item{
+		inboxScopeChoice{scope: workfile.InboxScopeAll, label: "All signals"},
+		inboxScopeChoice{scope: workfile.InboxScopeAttention, label: "Needs attention"},
+	}
+	m.projectPicker = list.New(items, trackerScopeRow{m.t}, 0, 0)
+	configureTrackerPicker(&m.projectPicker)
+	m.projectPicker.KeyMap.Filter.SetEnabled(false)
+	if m.inbox.scope == workfile.InboxScopeAttention {
+		m.projectPicker.Select(1)
+	}
+	m.projectGeneration++
+	m.pickingInboxScope = true
+	m.resizeProjectPicker()
+}
+
 func (m *trackerModel) projectKey(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "esc" || msg.String() == "q" && !m.projectPicker.SettingFilter() {
-		m.pickingProject, m.pickingPR = false, false
+		m.pickingProject, m.pickingPR, m.pickingInboxScope = false, false, false
 		return nil
 	}
 	if msg.String() == "enter" {
 		switch p := m.projectPicker.SelectedItem().(type) {
+		case inboxScopeChoice:
+			m.pickingInboxScope = false
+			m.inbox.scope = p.scope
+			m.inbox.rebuild()
+			return nil
 		case trackerProject:
 			m.projectOrigins[m.shownView()] = p.origin
 			m.pickingProject = false
@@ -154,6 +190,9 @@ func (m *trackerModel) renderProjectPicker(screen string) string {
 		title, empty = "Choose a pull request", "No matching PRs."
 		caption = m.t.dim(m.prPickerCaption())
 	}
+	if m.pickingInboxScope {
+		title, caption = "Choose Inbox scope", ""
+	}
 	if m.projectPicker.SettingFilter() || m.projectPicker.FilterValue() != "" {
 		caption = m.t.dim("/ ") + clean(m.projectPicker.FilterValue())
 		if m.projectPicker.SettingFilter() {
@@ -178,7 +217,11 @@ func (m *trackerModel) renderProjectPicker(screen string) string {
 	cancel.SetHelp("esc", "cancel")
 	modalHelp := m.help
 	modalHelp.SetWidth(inner)
-	help := modalHelp.ShortHelpView([]key.Binding{choose, cancel, m.keys.Search, move})
+	bindings := []key.Binding{choose, cancel}
+	if !m.pickingInboxScope {
+		bindings = append(bindings, m.keys.Search)
+	}
+	help := modalHelp.ShortHelpView(append(bindings, move))
 	lines = append(lines, "", "  "+ansi.Truncate(help, inner, ""), "")
 	for i, line := range lines {
 		lines[i] = m.panelTheme.onPanel(ansi.Truncate(line, width, "…"), width)

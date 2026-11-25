@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"workfile/internal/board"
 	"workfile/internal/workfile"
 )
 
@@ -36,27 +37,23 @@ func checkMove(ctx context.Context, e env) (int, error) {
 	}
 	finish := e.startProgramWork()
 	defer finish()
-	tickets, err := client.Tickets(ctx, o.keys, 0)
-	if err != nil {
-		return 2, err
-	}
-	if len(tickets) == 0 {
-		return 2, fmt.Errorf("%s is not visible to your %s token: check the key, or ask for access", o.keys[0], w.TrackerLabel())
-	}
-	tickets, warnings, err := client.Records(ctx, tickets[:1], true)
+	read, err := board.Read(ctx, w, client, board.Query{Keys: o.keys})
 	finish()
 	if err != nil {
 		return 2, err
 	}
+	if len(read.Missing) > 0 {
+		return 2, ticketNotVisible(w, o.keys[0])
+	}
 	if !o.json {
-		for _, warning := range warnings {
+		for _, warning := range read.Warnings {
 			fmt.Fprintln(e.errOut, "wf: "+clean(warning))
 		}
 	}
-	a := w.Assess(tickets[0])
+	a := read.Assessments[0]
 	r := judgeMove(a, o.to)
 	if o.json {
-		return r.code, writeCheck(v.out, w, a, r, warnings)
+		return r.code, writeCheck(v.out, w, a, r, read.Warnings)
 	}
 	fmt.Fprint(v.out, newCheckModel(v, w, a, r).render())
 	return r.code, nil

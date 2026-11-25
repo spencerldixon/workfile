@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
+	"workfile/internal/workfile"
 )
 
 // pickAll is the key of the "everything" row some pickers start with. Picking
@@ -70,22 +71,22 @@ func (d pickDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	}
 	line := runewidth.Truncate(p.label, max(m.Width()-6, 4), "…")
 	active := index == m.Index()
-	mark := d.t.dim(setupIcon(d.nerd, "○", "\uf10c"))
+	mark := d.t.dim(terminalIcon(d.nerd, "○", "\uf10c"))
 	if d.single {
 		if active {
-			mark = d.t.accent(setupIcon(d.nerd, "●", "\uf192"))
+			mark = d.t.accent(terminalIcon(d.nerd, "●", "\uf192"))
 			line = d.t.accent(line)
 		}
 		fmt.Fprint(w, mark+" "+line)
 		return
 	}
 	if d.picked[p.key] {
-		mark = d.t.good(setupIcon(d.nerd, "✓", "\uf00c"))
+		mark = d.t.good(attentionIcon(workfile.ReadyToMove, d.nerd))
 	} else {
 		line = d.t.dim(line)
 	}
 	if active {
-		fmt.Fprint(w, d.t.accent(setupIcon(d.nerd, "›", "\uf054"))+" "+mark+" "+d.t.accent(line))
+		fmt.Fprint(w, d.t.accent(terminalIcon(d.nerd, "›", "\uf054"))+" "+mark+" "+d.t.accent(line))
 		return
 	}
 	fmt.Fprint(w, "  "+mark+" "+line)

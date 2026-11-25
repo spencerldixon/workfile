@@ -37,11 +37,11 @@ func outcome(checks []workfile.Check) string {
 func checkCell(result string) cell {
 	switch result {
 	case "pass":
-		return styled("✓", green)
+		return styled(attentionIcon(workfile.ReadyToMove, false), green)
 	case "fail":
-		return styled("✗", red)
+		return styled(attentionIcon(workfile.NeedsMe, false), red)
 	case "unknown":
-		return styled("!", red)
+		return styled(attentionIcon(workfile.AttentionUnknown, false), amber)
 	default:
 		return styled("—", muted)
 	}

@@ -211,13 +211,13 @@ func (m *sinceModel) describe(c snapshot.Change) (string, func(string) string) {
 	case snapshot.Moved:
 		return clean(c.From) + " → " + clean(c.To), same
 	case snapshot.BecameReady:
-		return "✓ ready for " + clean(c.To), m.t.good
+		return attentionIcon(workfile.ReadyToMove, m.t.color) + " ready for " + clean(c.To), m.t.good
 	case snapshot.NewlyBlocked:
-		return "✗ " + gates("blocked"), m.t.bad
+		return attentionIcon(workfile.NeedsMe, m.t.color) + " " + gates("blocked"), m.t.bad
 	case snapshot.OutOfPolicy:
-		return "‼ " + gates("out of policy"), m.t.bad
+		return outOfPolicyIcon(m.t.color) + " " + gates("out of policy"), m.t.bad
 	case snapshot.BackOnTrack:
-		return "· back on track", m.t.dim
+		return attentionIcon(workfile.AttentionDone, m.t.color) + " back on track", m.t.dim
 	}
 	return "new", same
 }

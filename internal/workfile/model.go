@@ -1,7 +1,10 @@
 // Package workfile reads workflow policies and evaluates provider facts without network I/O.
 package workfile
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 type Policy struct {
 	// Name identifies the workspace across clones and computers. It keys the person's
@@ -167,12 +170,22 @@ type Record struct {
 	ID, URL, Title, Summary string
 	ChecksURL               string // optional direct link to this code host's check results
 	// Head is the latest commit, so a check can tell whether a PR changed.
-	Head                    string
-	Repository              string
+	Head       string
+	Repository string
+	// TicketKeys are tracker keys inferred by the code host for Inbox placement.
+	TicketKeys              []string `json:"-"`
 	People                  []string
 	Facts                   Facts
 	Unavailable             map[string]string
 	UnresolvedReviewThreads bool
+}
+
+// PRLabel shortens "web#84" to "#84".
+func PRLabel(id string) string {
+	if i := strings.LastIndex(id, "#"); i >= 0 {
+		return id[i:]
+	}
+	return id
 }
 
 type Reason struct {

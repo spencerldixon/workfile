@@ -62,20 +62,28 @@ func rowByID(rows []InboxRow, id string) *InboxRow {
 	return nil
 }
 
-func TestInboxOneRowPerTicket(t *testing.T) {
+func TestInboxSignalsHaveIndependentState(t *testing.T) {
 	pr := inboxPR("web#84", "example-alice", withChanges("example-bob"), withChecks("failure"))
-	rows := build(t, InboxInput{
+	in := InboxInput{
 		Work:     []InboxWork{mineWork("ABC-12", pr)},
 		Activity: []Activity{inboxEvent(ActivityComment, "web#84", "example-bob", time.Minute)},
-	}, NewInboxState())
-	if len(rows) != 1 {
-		t.Fatalf("want one row for ABC-12, got %+v", rows)
 	}
-	if rows[0].Kind != RowChangesRequested {
-		t.Fatalf("changes requested outranks failing checks and comments, got %s", rows[0].Kind)
+	st := NewInboxState()
+	rows := build(t, in, st)
+	if len(rows) != 3 {
+		t.Fatalf("expected review, CI and comments, got %+v", rows)
 	}
-	if len(rows[0].Events) != 1 || rows[0].New != 1 {
-		t.Fatalf("other events stay in the row: %+v", rows[0])
+	for _, row := range rows {
+		switch row.Kind {
+		case RowChecksFailed:
+			st.Snoozed[row.StateKey()] = row.Snooze(inboxNow.Add(time.Hour))
+		case RowComments:
+			st.Done[row.StateKey()] = row.Fingerprint
+		}
+	}
+	rows = build(t, in, st)
+	if len(rows) != 1 || rows[0].Kind != RowChangesRequested {
+		t.Fatalf("resolving comments and snoozing CI should keep the review: %+v", rows)
 	}
 }
 
@@ -146,7 +154,7 @@ func TestInboxCommentsOnMyPRAreAction(t *testing.T) {
 	if len(rows) != 1 || rows[0].Kind != RowComments || !rows[0].Action() {
 		t.Fatalf("comments on my PR are an action row: %+v", rows)
 	}
-	if rows[0].Text != "Bob left 2 comments on #84" || rows[0].Count != 2 || rows[0].Who != "Bob" {
+	if rows[0].Text != "Read 2 new comments on #84" || rows[0].Count != 2 || rows[0].Who != "Bob" {
 		t.Fatalf("wrong copy: %+v", rows[0])
 	}
 	if !rows[0].Since.Equal(inboxNow.Add(-5 * time.Minute)) {
@@ -187,7 +195,7 @@ func TestInboxOthersTicketNoPolicyRows(t *testing.T) {
 	if len(rows) != 1 || rows[0].Kind != RowReviewRequested || rows[0].ID != "ABC-21" {
 		t.Fatalf("someone else's ticket shows only the review request, keyed to the ticket: %+v", rows)
 	}
-	if rows[0].Text != "Charlie asked you to review #97" {
+	if rows[0].Text != "Review #97" {
 		t.Fatalf("wrong copy: %q", rows[0].Text)
 	}
 }
@@ -205,7 +213,7 @@ func TestInboxPolicyRows(t *testing.T) {
 		text string
 	}{
 		"ABC-9":  {RowOutOfPolicy, "Out of policy: Get QA sign-off"},
-		"ABC-11": {RowReady, "Ready to move → release"},
+		"ABC-11": {RowReady, "Move to release"},
 		"ABC-5":  {RowCannotCheck, "Couldn't check: Jira did not answer"},
 	}
 	for id, w := range want {
@@ -306,9 +314,9 @@ func TestInboxCopy(t *testing.T) {
 		evs  []Activity
 		want string
 	}{
-		{"changes", inboxPR("web#84", "example-alice", withChanges("example-bob")), nil, "Bob requested changes on #84"},
-		{"checks", inboxPR("web#93", "example-alice", withChecks("failure")), nil, "Checks failing on #93"},
-		{"one comment", inboxPR("web#84", "example-alice"), []Activity{inboxEvent(ActivityComment, "web#84", "example-bob", time.Minute)}, "Bob commented on #84"},
+		{"changes", inboxPR("web#84", "example-alice", withChanges("example-bob")), nil, "Address Bob's review on #84"},
+		{"checks", inboxPR("web#93", "example-alice", withChecks("failure")), nil, "Inspect failing checks on #93"},
+		{"one comment", inboxPR("web#84", "example-alice"), []Activity{inboxEvent(ActivityComment, "web#84", "example-bob", time.Minute)}, "Read Bob's comment on #84"},
 		{"approved", inboxPR("web#91", "example-charlie"), []Activity{inboxEvent(ActivityApproved, "web#91", "example-charlie", time.Minute)}, "Charlie approved #91"},
 		{"pushed", inboxPR("web#84", "example-alice"), []Activity{
 			inboxEvent(ActivityPushed, "web#84", "example-bob", time.Minute),

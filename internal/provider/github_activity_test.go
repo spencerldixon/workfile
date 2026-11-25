@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -151,10 +152,14 @@ func TestGitHubMineFiltersRepos(t *testing.T) {
 	var searches []string
 	c := client(t, func(r *http.Request) (int, string) {
 		body := requestBody(t, r)
+		query := strings.Fields(body["query"].(string))
+		if !slices.Contains(query, "body") || !slices.Contains(query, "headRefName") {
+			t.Errorf("Inbox should read link evidence in its existing PR searches")
+		}
 		q := body["variables"].(map[string]any)["q"].(string)
 		searches = append(searches, q)
 		node := func(repo string, n int) string {
-			return fmt.Sprintf(`{"id":"pr-%s-%d","number":%d,"title":"PR","url":"https://github.example.com/%s/%d","state":"OPEN","isDraft":false,"headRefOid":"h","mergeable":"MERGEABLE","repository":{"name":"%s"},"author":{"login":"example-alice"},"labels":{"nodes":[],"pageInfo":{}},"latestOpinionatedReviews":{"nodes":[],"pageInfo":{}},"reviewRequests":{"nodes":[],"pageInfo":{}},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}`, repo, n, n, repo, n, repo)
+			return fmt.Sprintf(`{"id":"pr-%s-%d","number":%d,"title":"Fix validation","headRefName":"APP-42-fix-validation","body":"See APP-43 and https://example-team.atlassian.net/browse/APP-44","url":"https://github.example.com/%s/%d","state":"OPEN","isDraft":false,"headRefOid":"h","mergeable":"MERGEABLE","repository":{"name":"%s"},"author":{"login":"example-alice"},"labels":{"nodes":[],"pageInfo":{}},"latestOpinionatedReviews":{"nodes":[],"pageInfo":{}},"reviewRequests":{"nodes":[],"pageInfo":{}},"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"SUCCESS"}}}]}}`, repo, n, n, repo, n, repo)
 		}
 		return 200, `{"data":{"search":{"issueCount":2,"pageInfo":{"hasNextPage":false},"nodes":[` + node("app", 1) + `,` + node("example-other", 2) + `]}}}`
 	})
@@ -167,6 +172,9 @@ func TestGitHubMineFiltersRepos(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].ID != "app#1" {
 		t.Fatalf("PRs outside the listed repos must be dropped, and duplicates merged: %+v", records)
+	}
+	if got := records[0].TicketKeys; !slices.Equal(got, []string{"APP-42", "APP-44"}) {
+		t.Fatalf("want ticket keys from the branch and explicit link, got %v", got)
 	}
 }
 

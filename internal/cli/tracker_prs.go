@@ -38,17 +38,12 @@ func (d trackerPRRow) Render(w io.Writer, l list.Model, index int, item list.Ite
 	}
 	label = d.t.bold(ansi.Truncate(label, l.Width(), "…"))
 	detail := clean(p.summary)
-	paint := d.t.dim
 	if len(p.allURLs) == 0 {
-		detail = attentionIcon(p.state) + " " + detail
-		switch p.state {
-		case workfile.NeedsMe:
-			paint = d.t.bad
-		case workfile.ReadyToMove:
-			paint = d.t.good
-		}
+		detail = attentionIcon(p.state, d.t.color) + " " + detail
+		fmt.Fprint(w, label+"\n"+d.t.attention(p.state, ansi.Truncate(detail, l.Width(), "…")))
+		return
 	}
-	fmt.Fprint(w, label+"\n"+paint(ansi.Truncate(detail, l.Width(), "…")))
+	fmt.Fprint(w, label+"\n"+d.t.dim(ansi.Truncate(detail, l.Width(), "…")))
 }
 
 // shortRecordID drops the owner and repo prefix when the rest stays unique
@@ -100,33 +95,37 @@ func pullRequestStatus(record workfile.Record, action workfile.WorkAction) (icon
 	changesNeeded := record.Unavailable["changes_requested"] == "" && slices.ContainsFunc(changes, func(reviewer string) bool {
 		return !slices.ContainsFunc(requests, func(request string) bool { return strings.EqualFold(reviewer, request) })
 	})
+	badge := func(state workfile.AttentionState, text string) (string, string, int) {
+		return attentionIcon(state, true), text, int(markForAttention(state).colour)
+	}
+	failColour := int(markForAttention(workfile.NeedsMe).colour)
 	switch {
 	case is("state", "merged"):
-		return "", "Merged", 2
+		return "", "Merged", int(markForAttention(workfile.ReadyToMove).colour)
 	case is("state", "closed"):
-		return "󰅖", "Closed", 0
+		return attentionIcon(workfile.NeedsMe, true), "Closed", 0
 	case !is("state", "open"):
 		return "?", "Unknown", 0
 	case is("checks", "failure"):
-		return "󰅖", "CI failed", 1
+		return badge(workfile.NeedsMe, "CI failed")
 	case is("mergeable", "conflicting"):
-		return "!", "Conflict", 1
+		return attentionIcon(workfile.AttentionUnknown, false), "Conflict", failColour
 	case changesNeeded:
-		return "󰅖", "Changes", 1
+		return badge(workfile.NeedsMe, "Changes")
 	case action.State == workfile.NeedsMe:
-		return "!", "Action needed", 1
+		return attentionIcon(workfile.AttentionUnknown, false), "Action needed", failColour
 	case is("checks", "pending"):
-		return "󰔛", "CI pending", 3
+		return badge(workfile.Waiting, "CI pending")
 	case is("merge_queue", "queued"):
-		return "󰔛", "Queued", 3
+		return badge(workfile.Waiting, "Queued")
 	case len(requests) > 0:
-		return "󰆉", "Review pending", 3
+		return reviewIcon(true), "Review pending", int(markForAttention(workfile.Waiting).colour)
 	case action.State == workfile.Waiting:
-		return "󰔛", "Waiting", 3
+		return badge(workfile.Waiting, "Waiting")
 	case is("draft", "true"):
 		return "󰏫", "Draft", 0
 	case is("checks", "success"):
-		return "󰄬", "CI passed", 2
+		return badge(workfile.ReadyToMove, "CI passed")
 	default:
 		return "", "Open", 0
 	}

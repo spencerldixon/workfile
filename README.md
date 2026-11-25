@@ -37,8 +37,9 @@ export PATH="$HOME/.local/bin:$PATH"
 ```
 
 On Windows, run `go build -o bin/wf.exe ./cmd/wf` and put `wf.exe` on your PATH.
-The finished binary does not need Go. If your team supplies a release archive,
-extract it and put its `wf` binary on your PATH instead.
+The finished binary runs without Go. You can also download an archive for your
+platform from [GitHub Releases](https://github.com/spencerldixon/workfile/releases),
+extract it, and put `wf` or `wf.exe` on your PATH.
 
 ## Commands
 
@@ -47,7 +48,7 @@ extract it and put its `wf` binary on your PATH instead.
 | `wf setup` | Connect a tracker and optional code host; preview and apply a starter policy. |
 | `wf setup --test [NAME ...]` | Test all connections, or just the named ones. |
 | `wf tracker [--view VIEW]` | Browse tickets in a list or configured board, with descriptions, comments, PRs and next actions. |
-| `wf tracker --view inbox` | Follow policy and PR alerts, including PRs without a ticket. |
+| `wf tracker --view inbox` | See your next actions and PR alerts. Press `s` to switch the Inbox scope. |
 | `wf status [TICKET ...]` | Check the board, or inspect named tickets against the policy. |
 | `wf check TICKET --to STAGE` | Ask whether a ticket may move now: exit `0` yes, `1` no, `2` cannot tell. |
 | `wf policy` | Show workflow stages, moves, gates and provider mappings offline. |
@@ -67,7 +68,7 @@ wf --version
 `status`, `check` and `policy` support `--json`. Run from your project or any
 subfolder; `--dir DIR` starts the search for `.workfile/` elsewhere.
 
-Old names still work for one release, with a notice: `health` is `status`,
+These older names still work, with a notice: `health` is `status`,
 `test` is `setup --test`, and `tickets` is `tracker`.
 
 ## Browse your work
@@ -105,10 +106,14 @@ background checks at once. Unchecked work stays unknown; press `n` to check
 more. Rich descriptions, comments and images load on selection, not for the
 whole board.
 
-Tracker’s Inbox updates in the background. It follows your assigned tickets and
-authored PRs, including PRs without a ticket. Review requests and watched repos
-are opt-in. Enter shows activity, `t` reads a linked ticket, `e` resolves the
-alert locally, and `s` snoozes it.
+Tracker’s Inbox follows your assigned tickets and authored PRs, including PRs
+without a ticket. It links PRs by the ticket key in the title or branch, or by a
+ticket link in the description. Review requests and watched repos are opt-in.
+
+Each alert shows its title and next action. Inbox starts in **Needs attention**.
+Press `s` to choose **All signals**, `t` to read the ticket, or `o` to open the PR
+or comment thread. Resolve an alert with `e` or snooze it with `z`. See
+[Inbox configuration](docs/configuration.md#inbox) to set the default scope.
 
 Piped output, `NO_COLOR` or `TERM=dumb` use noninteractive text. Images have text
 fallbacks. A Nerd Font is recommended for interactive icons.
@@ -125,7 +130,7 @@ See [Using wf](docs/usage.md) for keys, refresh behaviour and output details.
 ```
 
 For example, `.workfile/config.yml` can start tracker on your assigned tickets
-and set the inbox polling interval:
+and set the Inbox scope and polling interval:
 
 ```yaml
 tracker:
@@ -136,6 +141,7 @@ tracker:
     workflow: auto
 
 inbox:
+  default_scope: needs_attention
   poll: 2m
   refresh_every: 5
   full_every: 15
@@ -152,8 +158,9 @@ No `config.yml` is required. Preferences inherit in this order, highest first:
 
 `<workspace>` is `name` in `policy.yml`. Credentials and identity overrides
 stay private. An optional `inbox.agent` command must also be private: pressing
-`a` in the inbox launches the command you chose. That command or agent can
-make changes with its own access; Workfile's provider checks only read.
+`a` previews the selected signal’s configured prompt and Workfile context. Enter
+launches your agent. The agent can make changes with its own access. Workfile
+reads provider data.
 
 See the [configuration reference](docs/configuration.md) for every setting,
 board views, identity, file locations and environment variables. A copyable

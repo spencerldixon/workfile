@@ -31,6 +31,17 @@ type NextActions struct {
 	Actions []WorkAction
 }
 
+func (n NextActions) ReadyDestination() string {
+	if n.State == ReadyToMove {
+		for _, a := range n.Actions {
+			if a.State == ReadyToMove && len(a.Destinations) > 0 {
+				return a.Destinations[0]
+			}
+		}
+	}
+	return ""
+}
+
 // NextActions combines policy fixes with operational PR signals. Identities are
 // keyed by connection, so a Jira assignee is never compared to a GitHub login.
 // Missing ownership or evidence stays unknown, not ready or waiting.
